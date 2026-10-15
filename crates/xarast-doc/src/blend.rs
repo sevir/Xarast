@@ -150,17 +150,38 @@ fn end_of(doc: &Document, node: NodeId, start_point: Option<u32>) -> End {
         stroked: Vec::new(),
         pieces: Vec::new(),
     };
-    for n in ink_nodes(tree, node) {
-        let Some(path) = geometry(doc, n) else {
-            continue;
-        };
+    // An end that is a mould is its moulded copy, as drawn (XARA-T-0334).
+    let moulded: Vec<(Path, Vec<AttrValue>, bool, bool)> = match tree.kind(node) {
+        Some(NodeKind::Live(l))
+            if l.role == LiveRole::Controller && matches!(l.kind, LiveKind::Mould(_)) =>
+        {
+            crate::mould::generate(doc, node)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|g| !g.path.is_empty())
+                .map(|g| {
+                    let mut a = g.attrs.to_vec();
+                    canonical(doc, &mut a, g.filled, g.stroked);
+                    ((*g.path).clone(), a, g.filled, g.stroked)
+                })
+                .collect()
+        }
+        _ => ink_nodes(tree, node)
+            .into_iter()
+            .filter_map(|n| {
+                let path = geometry(doc, n)?;
+                let (f, s) = match tree.kind(n) {
+                    Some(NodeKind::Path(p)) => (p.filled, p.stroked),
+                    _ => (true, true),
+                };
+                let resolved = resolve_uncached(tree, n, &doc.defaults);
+                Some((path, shown_attrs(doc, &resolved, f, s), f, s))
+            })
+            .collect(),
+    };
+    for (path, attrs, f, s) in moulded {
         let object = end.attrs.len();
-        let (f, s) = match tree.kind(n) {
-            Some(NodeKind::Path(p)) => (p.filled, p.stroked),
-            _ => (true, true),
-        };
-        let resolved = resolve_uncached(tree, n, &doc.defaults);
-        end.attrs.push(shown_attrs(doc, &resolved, f, s));
+        end.attrs.push(attrs);
         end.filled.push(f);
         end.stroked.push(s);
         for (sub, outline) in Outline::subpaths(&path).into_iter().enumerate() {
