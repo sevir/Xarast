@@ -520,12 +520,17 @@ impl SceneWalker {
                             walk.control(xarast_doc::Descend::Skip);
                             continue;
                         }
-                        // The renderer draws a shadow from its source
-                        // (`shadow_of`); whatever a file baked under the
-                        // generated node is not drawn twice.
+                        // The renderer draws a shadow or a bevel from its
+                        // source (`shadow_of`, `bevel_of`); whatever a file
+                        // baked under the generated node is not drawn
+                        // twice.
                         NodeKind::Live(l)
                             if l.role == xarast_doc::LiveRole::Generated
-                                && matches!(l.kind, xarast_doc::LiveKind::Shadow(_)) =>
+                                && matches!(
+                                    l.kind,
+                                    xarast_doc::LiveKind::Shadow(_)
+                                        | xarast_doc::LiveKind::Bevel(_)
+                                ) =>
                         {
                             walk.control(xarast_doc::Descend::Skip);
                             continue;
@@ -638,8 +643,22 @@ impl SceneWalker {
                         b.push_effect(effect);
                         self.stats.effects += 1;
                     }
+                    // A bevel controller's bevel, over (inner) or beneath
+                    // (outer) its source, inside its own feather.
+                    let bevel = bevel_of(doc, parent, &attrs);
+                    let bevelled = bevel.is_some();
+                    if let Some((effect, margin)) = bevel {
+                        // An outer bevel reaches beyond its source; an
+                        // inner one reads its source that far in.
+                        if let Some(c) = clip {
+                            outer_clip.get_or_insert(Some(c));
+                            clip = Some(c.inflated(margin));
+                        }
+                        b.push_effect(effect);
+                        self.stats.effects += 1;
+                    }
                     let mut f = self.open(doc, parent, &attrs, &mut b);
-                    f.effects = u8::from(feathered) + u8::from(shadowed);
+                    f.effects = u8::from(feathered) + u8::from(shadowed) + u8::from(bevelled);
                     f.outer_clip = outer_clip;
                     frames.push(f);
                 }
@@ -1087,9 +1106,17 @@ impl SceneWalker {
             return;
         };
         match kind {
-            // A shadow's controller and source are drawn: the source as
-            // what it holds, the shadow by the effect `shadow_of` pushed.
-            NodeKind::Live(l) if matches!(l.kind, xarast_doc::LiveKind::Shadow(_)) => return,
+            // A shadow's or a bevel's controller and source are drawn: the
+            // source as what it holds, the effect by what `shadow_of` or
+            // `bevel_of` pushed.
+            NodeKind::Live(l)
+                if matches!(
+                    l.kind,
+                    xarast_doc::LiveKind::Shadow(_) | xarast_doc::LiveKind::Bevel(_)
+                ) =>
+            {
+                return;
+            }
             NodeKind::Live(_) => {
                 self.stats.live_pending += 1;
                 return;
@@ -2130,6 +2157,76 @@ fn shadow_of(doc: &Document, node: NodeId, attrs: &AttrStack) -> Option<(LayerEf
         colour,
     }));
     Some((effect, margin))
+}
+
+/// The bevel a bevel controller draws, and how far around its source the
+/// walk must reach in document units (an outer bevel paints that far
+/// beyond its source; an inner one reads that far into it).
+///
+/// `None` for anything but a bevel controller with a positive width. An
+/// outer bevel is painted in its own colour, or else in the fill the
+/// controller's attributes give its generated node (its first colour when
+/// that is not flat; nothing when it is "no colour").
+fn bevel_of(doc: &Document, node: NodeId, attrs: &AttrStack) -> Option<(LayerEffect, Mp)> {
+    let Some(NodeKind::Live(l)) = doc.tree.kind(node) else {
+        return None;
+    };
+    let xarast_doc::LiveKind::Bevel(p) = &l.kind else {
+        return None;
+    };
+    if l.role != xarast_doc::LiveRole::Controller || p.indent.raw() <= 0 {
+        return None;
+    }
+    let colour = match &p.colour {
+        Some(c) => c.resolve(&doc.resources.colours).to_rgba8(),
+        None => {
+            // The controller's own fill (an attribute child) stands over
+            // the inherited one.
+            let own = doc
+                .tree
+                .children(node)
+                .filter_map(|c| match doc.tree.kind(c) {
+                    Some(NodeKind::Attr(a)) => match &a.value {
+                        AttrValue::Fill(paint) => Some(paint),
+                        _ => None,
+                    },
+                    _ => None,
+                });
+            let paint = own.last().or(match attrs.get(AttrSlot::FillGeometry) {
+                AttrValue::Fill(paint) => Some(paint),
+                _ => None,
+            });
+            let mut first = None;
+            if let Some(paint) = paint {
+                let mut paint = paint.clone();
+                paint.for_each_value_mut(&mut |c| {
+                    if first.is_none() {
+                        first = Some(c.clone());
+                    }
+                });
+            }
+            first.map_or(
+                xarast_color::Rgba8 {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 0,
+                },
+                |c| c.resolve(&doc.resources.colours).to_rgba8(),
+            )
+        }
+    };
+    let indent = f64::from(p.indent.raw());
+    let effect = LayerEffect::Bevel(Box::new(xarast_render::BevelEffect {
+        style: p.bevel_type,
+        indent,
+        outer: p.outer,
+        light_angle: p.light_angle,
+        light_tilt: p.light_tilt,
+        contrast: p.contrast,
+        colour,
+    }));
+    Some((effect, p.indent))
 }
 
 /// The feather `node` applies to itself and its subtree: its own
