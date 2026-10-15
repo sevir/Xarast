@@ -365,6 +365,29 @@ pub struct ShadowControllerRecord {
     pub width: i32,
 }
 
+/// `TAG_BEVEL` (4052, 24 bytes), field by field
+/// (`docs/research/01-xar-format.md`, record table; `docs/memory/xar-import.md`,
+/// finding 21).
+///
+/// Six `INT32`s; the first five are required, and a 20-byte record keeps
+/// the original's default tilt of 45°.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct BevelRecord {
+    /// The bevel style, 0..=14: flat, round, half round, frame, mesa 1 and
+    /// 2, smooth 1 and 2, point 1, 2a and 2b, ruffle 2a, 2b, 3a and 3b.
+    pub style: i32,
+    /// The bevel's width, in millipoints.
+    pub indent: i32,
+    /// The light's direction, in whole degrees.
+    pub light_angle: i32,
+    /// Non-zero for an outer bevel.
+    pub outer: i32,
+    /// The lighting contrast, 0..=100.
+    pub contrast: i32,
+    /// The light's tilt, in whole degrees.
+    pub tilt: i32,
+}
+
 /// Where a text story sits.
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum TextPlacement {
@@ -500,6 +523,17 @@ pub enum Decoded {
         /// it out.
         darkness: f64,
     },
+    /// `TAG_BEVEL` (4052): a bevel's controller; its children are its
+    /// attributes, the object(s) it bevels and one `TAG_BEVELINK`
+    /// (`research/02 §6.10`).
+    BevelController(BevelRecord),
+    /// `TAG_BEVELINK` (4057): the generated bevel node. Empty; its own
+    /// attribute children are copies of the bevelled object's fill.
+    BevelInk,
+    /// `TAG_BEVATTR_INDENT`, `_LIGHTANGLE`, `_CONTRAST`, `_TYPE`
+    /// (4053..=4056): one `INT32` each, which the original reads and
+    /// discards. None occurs in the corpus.
+    BevelAttribute(i32),
     /// `TAG_SETSENTINEL`.
     SetSentinel,
     /// `TAG_SPREADINFORMATION`.
@@ -767,7 +801,7 @@ pub const fn has_decoder(tag: u32) -> bool {
         | 2100 | 2101 | 2110..=2117 | 2150 | 2151
         | 2200..=2204 | 2206
         | 2900..=2920
-        | 4010 | 4011 | 4050 | 4051 | 4070 | 4075..=4078 | 4084 | 4085 | 4086 | 4087 | 4088
+        | 4010 | 4011 | 4050..=4057 | 4070 | 4075..=4078 | 4084 | 4085 | 4086 | 4087 | 4088
         | 4114 | 4115 | 4116 | 4119 | 4120 | 4121 | 4123 | 4124 | 4129
         | 4030 | 4031 | 4201..=4203)
 }
@@ -997,6 +1031,18 @@ pub fn decode(
             gain: c.opt_f64().unwrap_or(0.0),
             darkness: c.opt_f64().unwrap_or(1.0),
         },
+        // The original fails a record shorter than five `INT32`s and reads
+        // the tilt only from a 24-byte one.
+        4052 => Decoded::BevelController(BevelRecord {
+            style: c.i32()?,
+            indent: c.i32()?,
+            light_angle: c.i32()?,
+            outer: c.i32()?,
+            contrast: c.i32()?,
+            tilt: c.opt_i32().unwrap_or(45),
+        }),
+        4053..=4056 => Decoded::BevelAttribute(c.i32()?),
+        4057 => Decoded::BevelInk,
         4086 => Decoded::Feather {
             size: c.mp()?,
             bias: c.opt_f64().unwrap_or(0.0),

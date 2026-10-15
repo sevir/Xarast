@@ -134,6 +134,13 @@ pub enum DiagCode {
     /// colour (drawn in its first colour), 3 a shadow type the original
     /// never draws (0 none, 4 feather, or unknown; drawn as a wall shadow).
     ShadowDegraded,
+    /// A bevel could not be mapped as the original draws it. The detail
+    /// says how: 0 a controller with no `TAG_BEVELINK` (drawn with the
+    /// record's parameters all the same), 1 a stray `TAG_BEVELINK` outside
+    /// a controller (dropped with its attributes), 2 a bevel node whose
+    /// fill is not a flat colour (an outer bevel is drawn in its first
+    /// colour), 3 a style outside 0..=14 (drawn flat).
+    BevelDegraded,
 }
 
 impl DiagCode {
@@ -164,6 +171,7 @@ impl DiagCode {
             DiagCode::BitmapNotNormalised => "BitmapNotNormalised",
             DiagCode::ClipViewDegraded => "ClipViewDegraded",
             DiagCode::ShadowDegraded => "ShadowDegraded",
+            DiagCode::BevelDegraded => "BevelDegraded",
         }
     }
 
@@ -214,7 +222,8 @@ impl DiagCode {
             | DiagCode::UnknownEnumValue
             | DiagCode::BitmapNotNormalised
             | DiagCode::ClipViewDegraded
-            | DiagCode::ShadowDegraded => D::UnsupportedFeature,
+            | DiagCode::ShadowDegraded
+            | DiagCode::BevelDegraded => D::UnsupportedFeature,
         }
     }
 }

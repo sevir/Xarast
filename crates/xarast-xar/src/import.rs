@@ -789,6 +789,30 @@ impl<'o> Mapper<'o> {
                 );
                 After::Drop
             }
+            Decoded::BevelController(r) => {
+                let r = *r;
+                self.emit_bevel(node, r)?;
+                After::Drop
+            }
+            // A bevel node outside a controller has nothing to bevel; its
+            // children are its own attributes and go with it, as a stray
+            // shadow node's do.
+            Decoded::BevelInk => {
+                self.mapped = self.mapped.saturating_add(1);
+                self.skipped = self.skipped.saturating_add(count_subtree(&node.children));
+                self.diags.push(
+                    Diagnostic::new(DiagCode::BevelDegraded)
+                        .at(at.0, at.1)
+                        .with_detail(1),
+                );
+                After::Drop
+            }
+            // The original reads these four and discards the value
+            // (`docs/memory/xar-import.md`, finding 21).
+            Decoded::BevelAttribute(_) => {
+                self.mapped = self.mapped.saturating_add(1);
+                After::Same
+            }
             // A marker outside a controller separates nothing; its
             // children, if any, stay at this level.
             Decoded::ClipView => {
@@ -1327,30 +1351,33 @@ impl<'o> Mapper<'o> {
         };
         self.builder.node(live(xarast_doc::LiveRole::Controller))?;
         self.push_scope()?;
-        let r = self.shadow_children(children, shadow_at, &live);
+        let r = self.live_children(children, shadow_at, &live);
         self.pop_scope();
         r
     }
 
     /// The controller's children: its attributes (everything before the
-    /// first object, which the shadow and the object both inherit), then
-    /// the generated node, then the source holding the rest. A stray
-    /// second `TAG_SHADOW` is dropped with its attributes.
-    fn shadow_children(
+    /// first object, which the generated node and the object both
+    /// inherit), then the generated node, then the source holding the
+    /// rest. `generated_at` is the file's generated node (a `TAG_SHADOW`
+    /// or a `TAG_BEVELINK`), folded into the parameters by the caller; a
+    /// stray second one is dropped with its attributes. Shared by shadows
+    /// and bevels.
+    fn live_children(
         &mut self,
         children: &[RecordNode],
-        shadow_at: Option<usize>,
+        generated_at: Option<usize>,
         live: &dyn Fn(xarast_doc::LiveRole) -> NodeKind,
     ) -> Result<(), XarError> {
         let first_ink = children
             .iter()
             .enumerate()
             .position(|(i, c)| {
-                Some(i) != shadow_at && class_of(c.record.tag) == Some(TagClass::Object)
+                Some(i) != generated_at && class_of(c.record.tag) == Some(TagClass::Object)
             })
             .unwrap_or(children.len());
         for (i, c) in children.iter().enumerate().take(first_ink) {
-            if Some(i) != shadow_at {
+            if Some(i) != generated_at {
                 self.visit(c)?;
             }
         }
@@ -1359,7 +1386,7 @@ impl<'o> Mapper<'o> {
         self.push_scope()?;
         let mut r = Ok(());
         for (i, c) in children.iter().enumerate().skip(first_ink) {
-            if Some(i) == shadow_at {
+            if Some(i) == generated_at {
                 continue;
             }
             r = self.visit(c);
@@ -1369,6 +1396,130 @@ impl<'o> Mapper<'o> {
         }
         self.pop_scope();
         r
+    }
+
+    /// A `TAG_BEVEL` and everything under it.
+    ///
+    /// In the file the controller holds its attributes, the object(s) it
+    /// bevels and one `TAG_BEVELINK` (first for an outer bevel, last for an
+    /// inner one), whose own attribute children are copies of the first
+    /// object's fill. The model's live object is
+    ///
+    /// ```text
+    /// Live (Controller, Bevel)   the record's parameters
+    ///   attributes…              the controller's, before the first object
+    ///   Live (Generated, Bevel)  empty: the renderer draws the bevel
+    ///   Live (Source, Bevel)
+    ///     the object(s)…
+    /// ```
+    ///
+    /// The bevel node's flat fill becomes [`xarast_doc::BevelParams::colour`]
+    /// (what an outer bevel is painted in); the rest of its attributes
+    /// repeat the object's and are dropped (`docs/memory/xar-import.md`,
+    /// finding 21).
+    fn emit_bevel(
+        &mut self,
+        node: &RecordNode,
+        r: crate::decode::BevelRecord,
+    ) -> Result<(), XarError> {
+        let rec = &node.record;
+        let at = (rec.number, rec.tag);
+        self.mapped = self.mapped.saturating_add(1);
+        let bevel_type = match xarast_doc::BevelType::from_index(i64::from(r.style)) {
+            Some(t) => t,
+            None => {
+                self.diags.push(
+                    Diagnostic::new(DiagCode::BevelDegraded)
+                        .at(at.0, at.1)
+                        .with_detail(3),
+                );
+                self.diags.push(
+                    Diagnostic::new(DiagCode::UnknownEnumValue)
+                        .at(at.0, at.1)
+                        .with_detail(u64::from(r.style.unsigned_abs())),
+                );
+                xarast_doc::BevelType::Flat
+            }
+        };
+        // f32-ok: whole degrees and a percentage, far inside f32's exact
+        // integers; the contrast is a percentage over 100.
+        let mut params = xarast_doc::BevelParams {
+            bevel_type,
+            indent: Mp::new(r.indent),
+            outer: r.outer != 0,
+            light_angle: r.light_angle as f32,
+            light_tilt: r.tilt as f32,
+            contrast: (f64::from(r.contrast) / 100.0) as f32,
+            colour: None,
+        };
+        let children = node.children.as_slice();
+        let ink_at = children
+            .iter()
+            .position(|c| c.record.tag == crate::tags::TAG_BEVELINK);
+        match ink_at.and_then(|i| children.get(i)) {
+            Some(ink) => self.bevel_ink(ink, &mut params),
+            None => self.diags.push(
+                Diagnostic::new(DiagCode::BevelDegraded)
+                    .at(at.0, at.1)
+                    .with_detail(0),
+            ),
+        }
+        let live = |role| {
+            NodeKind::Live(Box::new(xarast_doc::LiveNode {
+                role,
+                kind: xarast_doc::LiveKind::Bevel(Box::new(params.clone())),
+                regen: xarast_doc::RegenState::Clean,
+                name: None,
+            }))
+        };
+        self.builder.node(live(xarast_doc::LiveRole::Controller))?;
+        self.push_scope()?;
+        let r = self.live_children(children, ink_at, &live);
+        self.pop_scope();
+        r
+    }
+
+    /// `TAG_BEVELINK`'s attribute children: a flat fill becomes the
+    /// bevel's colour; the rest repeat the object's and are dropped.
+    fn bevel_ink(&mut self, node: &RecordNode, params: &mut xarast_doc::BevelParams) {
+        self.mapped = self.mapped.saturating_add(1);
+        for child in &node.children {
+            let crec = &child.record;
+            let cat = (crec.number, crec.tag);
+            self.skipped = self.skipped.saturating_add(count_subtree(&child.children));
+            let Ok(d) = decode(crec.tag, &crec.data, self.origin, &mut self.diags, cat) else {
+                self.skipped = self.skipped.saturating_add(1);
+                continue;
+            };
+            if self.definition(&d, crec) {
+                self.mapped = self.mapped.saturating_add(1);
+                continue;
+            }
+            match self.attribute(&d, cat) {
+                Some(AttrValue::Fill(paint)) if params.colour.is_none() => {
+                    self.mapped = self.mapped.saturating_add(1);
+                    if let Paint::Flat { value } = &paint {
+                        params.colour = Some(value.clone());
+                    } else {
+                        let mut first = None;
+                        let mut p = paint.clone();
+                        p.for_each_value_mut(&mut |c| {
+                            if first.is_none() {
+                                first = Some(c.clone());
+                            }
+                        });
+                        params.colour = first;
+                        self.diags.push(
+                            Diagnostic::new(DiagCode::BevelDegraded)
+                                .at(cat.0, cat.1)
+                                .with_detail(2),
+                        );
+                    }
+                }
+                Some(_) => self.mapped = self.mapped.saturating_add(1),
+                None => self.skipped = self.skipped.saturating_add(1),
+            }
+        }
     }
 
     /// `TAG_SHADOW` and its attribute children, folded into `params`.
@@ -3340,5 +3491,160 @@ mod tests {
             matches!(doc.tree.kind(id), Some(NodeKind::Attr(a)) if matches!(a.value, AttrValue::Fill(_)))
         });
         assert!(!stray_fill);
+    }
+
+    /// `TAG_BEVEL` with the corpus's usual layout.
+    fn bevel_record(style: i32, outer: i32) -> Vec<u8> {
+        let mut v = Vec::new();
+        for n in [style, 3_951, 313, outer, 47, 45] {
+            v.extend_from_slice(&n.to_le_bytes());
+        }
+        v
+    }
+
+    fn bevel_diags(report: &ImportReport) -> Vec<u64> {
+        report
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == DiagCode::BevelDegraded)
+            .map(|d| d.detail)
+            .collect()
+    }
+
+    fn bevels(doc: &xarast_doc::Document) -> Vec<xarast_doc::BevelParams> {
+        doc.tree
+            .preorder(doc.tree.root())
+            .filter_map(|id| match doc.tree.kind(id) {
+                Some(NodeKind::Live(l)) if l.role == xarast_doc::LiveRole::Controller => {
+                    match &l.kind {
+                        xarast_doc::LiveKind::Bevel(p) => Some((**p).clone()),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_inner_bevel_controller_becomes_a_live_bevel_with_its_object_as_source() {
+        // Controller attributes, the object, then the bevel node with its
+        // copies of the object's attributes: the order inner bevels use.
+        let bytes = layer_with(|b| {
+            b.record(4052, &bevel_record(6, 0))
+                .down()
+                .record(152, &500i32.to_le_bytes())
+                .record(116, &square_path(100_000, 100_000, 50_000))
+                .record(4057, &[])
+                .down()
+                .record(166, &[0, 1])
+                .record(163, &[])
+                .up()
+                .up()
+        });
+        let (doc, report) = import(&bytes, &ImportOptions::default()).unwrap();
+        balanced(&report);
+        assert!(bevel_diags(&report).is_empty());
+        assert!(doc.validate().errors.is_empty(), "{:?}", doc.validate());
+        let c = first_of(&doc, "Live").unwrap();
+        assert_eq!(kinds_under(&doc, c), ["Attr", "Live", "Live"]);
+        let parts = xarast_doc::live::parts(&doc.tree, c).expect("a controller");
+        assert_eq!(kinds_under(&doc, parts.source), ["Path"]);
+        let generated = parts.generated.expect("a generated node");
+        assert_eq!(kinds_under(&doc, generated), Vec::<&str>::new());
+        let [p] = bevels(&doc).try_into().unwrap();
+        assert_eq!(
+            p,
+            xarast_doc::BevelParams {
+                bevel_type: xarast_doc::BevelType::Smooth1,
+                indent: Mp::new(3_951),
+                outer: false,
+                light_angle: 313.0,
+                light_tilt: 45.0,
+                contrast: 0.47,
+                colour: None,
+            }
+        );
+        // The bevel node's attributes repeat the object's: none survives.
+        let transparencies = doc
+            .tree
+            .preorder(doc.tree.root())
+            .filter(|&id| {
+                matches!(doc.tree.kind(id), Some(NodeKind::Attr(a))
+                    if matches!(a.value, AttrValue::TranspFill(_)))
+            })
+            .count();
+        assert_eq!(transparencies, 0);
+        // An inner bevel stays inside its object.
+        let mut doc = doc;
+        doc.update_bounds();
+        let b = doc.tree.bounds(c).get().unwrap();
+        assert_eq!(b, doc.tree.bounds(parts.source).get().unwrap());
+    }
+
+    #[test]
+    fn an_outer_bevel_takes_its_colour_and_degraded_bevels_are_reported() {
+        let bytes = layer_with(|b| {
+            // Outer, the bevel node first with its own flat fill.
+            b.record(4052, &bevel_record(8, 1))
+                .down()
+                .record(4057, &[])
+                .down()
+                .record(150, &(-2i32).to_le_bytes())
+                .up()
+                .record(116, &square_path(0, 0, 50_000))
+                .up()
+                // No bevel node, an old 20-byte record (tilt 45).
+                .record(4052, &bevel_record(0, 0)[..20])
+                .down()
+                .record(116, &square_path(0, 0, 50_000))
+                .up()
+                // A style out of range, and a gradient on the bevel node.
+                .record(4052, &bevel_record(99, 1))
+                .down()
+                .record(116, &square_path(0, 0, 50_000))
+                .record(4057, &[])
+                .down()
+                .record(153, &[0u8; 40])
+                .up()
+                .up()
+                // A stray bevel node: its fill must not reach the path
+                // after it. A discarded bevel attribute.
+                .record(4057, &[])
+                .down()
+                .record(150, &(-3i32).to_le_bytes())
+                .up()
+                .record(4053, &750i32.to_le_bytes())
+                .record(116, &square_path(0, 0, 50_000))
+        });
+        let (doc, report) = import(&bytes, &ImportOptions::default()).unwrap();
+        balanced(&report);
+        assert!(doc.validate().errors.is_empty(), "{:?}", doc.validate());
+        // 0: no bevel node; 3: style 99; 2: a gradient; 1: the stray one.
+        assert_eq!(bevel_diags(&report), [0, 3, 2, 1]);
+        let got = bevels(&doc);
+        assert_eq!(got.len(), 3);
+        let built_in = crate::colour::ColourRegistry::new()
+            .resolve(Ref::parse(-2), &mut DiagSink::new(), (1, 150))
+            .unwrap();
+        assert_eq!(got[0].bevel_type, xarast_doc::BevelType::Point1);
+        assert!(got[0].outer);
+        assert_eq!(got[0].colour, Some(built_in));
+        assert_eq!(got[1].light_tilt, 45.0);
+        assert_eq!(got[1].colour, None);
+        assert_eq!(got[2].bevel_type, xarast_doc::BevelType::Flat);
+        assert!(got[2].colour.is_some());
+        let stray_fill = doc.tree.preorder(doc.tree.root()).any(|id| {
+            matches!(doc.tree.kind(id), Some(NodeKind::Attr(a)) if matches!(a.value, AttrValue::Fill(_)))
+        });
+        assert!(!stray_fill);
+        // An outer bevel's controller covers its faces.
+        let mut doc = doc;
+        doc.update_bounds();
+        let c = first_of(&doc, "Live").unwrap();
+        let b = doc.tree.bounds(c).get().unwrap();
+        let parts = xarast_doc::live::parts(&doc.tree, c).expect("a controller");
+        let src = doc.tree.bounds(parts.source).get().unwrap();
+        assert_eq!(b.hi.x.raw(), src.hi.x.raw() + 3_951);
     }
 }

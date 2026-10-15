@@ -214,6 +214,56 @@ fn file_seeds() -> Vec<(String, Vec<u8>)> {
             .end_of_file()
             .finish()
     }));
+    // Bevels: an inner bevel over a path (controller attributes, the
+    // object, then `TAG_BEVELINK` with its own attributes), an outer one
+    // whose bevel node comes first and carries a flat fill, an old 20-byte
+    // record with no tilt, a style out of range, a short record, a stray
+    // `TAG_BEVELINK` and a discarded `TAG_BEVATTR_INDENT`. Declared atomic,
+    // as real files do.
+    out.push(("bevel".into(), {
+        let bevel = |style: i32, outer: i32| {
+            let mut v = Vec::new();
+            for n in [style, 3_750, 300, outer, 50, 45] {
+                v.extend_from_slice(&n.to_le_bytes());
+            }
+            v
+        };
+        XarBuilder::new()
+            .record(10, &[0xD4, 0x0F, 0, 0, 0xD9, 0x0F, 0, 0])
+            .record(40, &[])
+            .down()
+            .record(4052, &bevel(6, 0))
+            .down()
+            .record(152, &500i32.to_le_bytes())
+            .record(116, &minimal_payload(116))
+            .record(4057, &[])
+            .down()
+            .record(166, &[0, 1])
+            .up()
+            .up()
+            .record(4052, &bevel(8, 1))
+            .down()
+            .record(4057, &[])
+            .down()
+            .record(150, &(-2i32).to_le_bytes())
+            .up()
+            .record(116, &minimal_payload(116))
+            .up()
+            .record(4052, &bevel(0, 1)[..20])
+            .down()
+            .record(116, &minimal_payload(116))
+            .up()
+            .record(4052, &bevel(99, 0))
+            .record(4052, &bevel(1, 0)[..7])
+            .record(4057, &[])
+            .down()
+            .record(150, &(-3i32).to_le_bytes())
+            .up()
+            .record(4053, &750i32.to_le_bytes())
+            .up()
+            .end_of_file()
+            .finish()
+    }));
     // A bitmap transparency with levels 115..200 in Bleach, over a PNG
     // definition (record 2).
     out.push(("bitmap-transparency".into(), {

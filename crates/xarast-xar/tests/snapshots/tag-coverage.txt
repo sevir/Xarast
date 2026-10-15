@@ -123,8 +123,8 @@
 4040 | 6 | ignorable | NO | TAG_WIZOP
 4050 | 98 | object | yes | TAG_SHADOWCONTROLLER
 4051 | 98 | object | yes | TAG_SHADOW
-4052 | 22 | object | NO | TAG_BEVEL
-4057 | 22 | object | NO | TAG_BEVELINK
+4052 | 22 | object | yes | TAG_BEVEL
+4057 | 22 | object | yes | TAG_BEVELINK
 4066 | 4 | object | NO | TAG_CONTOURCONTROLLER
 4067 | 4 | object | NO | TAG_CONTOUR
 4070 | 59 | ignorable | yes | TAG_SETSENTINEL

@@ -78,6 +78,12 @@ pub const TAG_CLIPVIEW: u32 = 4085;
 pub const TAG_SHADOWCONTROLLER: u32 = 4050;
 /// The generated shadow node inside a shadow controller.
 pub const TAG_SHADOW: u32 = 4051;
+/// A bevel controller: its attributes, the object(s) it bevels and one
+/// [`TAG_BEVELINK`].
+pub const TAG_BEVEL: u32 = 4052;
+/// The generated bevel node inside a bevel controller: before the objects
+/// for an outer bevel, after them for an inner one.
+pub const TAG_BEVELINK: u32 = 4057;
 /// Per-point path flags, the first child of the path record.
 pub const TAG_PATH_FLAGS: u32 = 111;
 /// A relative path, stroked.
