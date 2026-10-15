@@ -555,6 +555,19 @@ impl SceneWalker {
                             }
                             continue;
                         }
+                        // A blend's steps, regenerated from the objects on
+                        // either side, drawn where its generated node stands
+                        // (over the object before it, under the one after).
+                        NodeKind::Live(l)
+                            if l.role == xarast_doc::LiveRole::Generated
+                                && matches!(l.kind, xarast_doc::LiveKind::Blend(_)) =>
+                        {
+                            walk.control(xarast_doc::Descend::Skip);
+                            if !self.paint_blend(doc, node, &mut attrs, quality, &mut b) {
+                                self.stats.live_pending += 1;
+                            }
+                            continue;
+                        }
                         // An inset path is drawn instead of its source.
                         NodeKind::Live(l)
                             if l.role == xarast_doc::LiveRole::Source
@@ -1146,12 +1159,14 @@ impl SceneWalker {
             // `bevel_of` pushed.
             // A contour's controller and source the same way: its rings
             // are drawn at its generated node.
+            // A blend's too: its steps are drawn at its generated nodes.
             NodeKind::Live(l)
                 if matches!(
                     l.kind,
                     xarast_doc::LiveKind::Shadow(_)
                         | xarast_doc::LiveKind::Bevel(_)
                         | xarast_doc::LiveKind::Contour(_)
+                        | xarast_doc::LiveKind::Blend(_)
                 ) =>
             {
                 return;
@@ -1324,6 +1339,81 @@ impl SceneWalker {
             attrs.pop_scope();
         }
         attrs.pop_scope();
+        true
+    }
+
+    /// Draws a blend's steps at its generated node `node` (one of the
+    /// pairs under the blend's source): regenerated (or found in the
+    /// cache) from the controller, the group for this node, each step
+    /// painted with the attributes in force here plus its blended ones,
+    /// filled and stroked as its ends are. `false` when there is nothing it
+    /// could regenerate.
+    fn paint_blend(
+        &mut self,
+        doc: &Document,
+        node: NodeId,
+        attrs: &mut AttrStack,
+        quality: RenderQuality,
+        b: &mut SceneBuilder<'_>,
+    ) -> bool {
+        let tree = &doc.tree;
+        let Some(source) = tree.links(node).parent else {
+            return false;
+        };
+        let Some(controller) = tree.links(source).parent else {
+            return false;
+        };
+        let Some(k) = xarast_doc::blend::blenders(tree, source)
+            .iter()
+            .position(|&(g, _, _)| g == node)
+        else {
+            return false;
+        };
+        // Blends are geometry: the same at every resolution.
+        let Some((key, out)) = self.live.current_or_regenerate(
+            doc,
+            controller,
+            0.0,
+            &mut xarast_doc::regen::regenerate,
+        ) else {
+            return false;
+        };
+        let xarast_doc::LiveOutput::Groups(groups) = &*out else {
+            return false;
+        };
+        let Some(steps) = groups.get(k) else {
+            return false;
+        };
+        let tag = u64::from(tree.get(node).map_or(0, |d| d.tag.0));
+        let version = mix64(u64::from_le_bytes(first8(&key.0)), k as u64);
+        for (i, step) in steps.iter().enumerate() {
+            if step.path.is_empty() {
+                continue;
+            }
+            attrs.push_scope();
+            for a in step.attrs.iter() {
+                attrs.push(Arc::new(a.clone()));
+            }
+            // As a contour's rings: the step index above the node's tag.
+            let index = (i as u64 + 1) & 0x3fff_ffff;
+            let id = SceneNodeId(tag | (index << 32));
+            let mut bytes = [0u8; 16];
+            bytes[..8].copy_from_slice(&mix64(version, index).to_le_bytes());
+            bytes[8..].copy_from_slice(&self.scope.to_le_bytes());
+            let path = PathRef::from_arc(Arc::clone(&step.path));
+            self.paint_geometry(
+                doc,
+                id,
+                &path,
+                step.filled,
+                step.stroked,
+                attrs,
+                quality,
+                b,
+                ContentHash(bytes),
+            );
+            attrs.pop_scope();
+        }
         true
     }
 
