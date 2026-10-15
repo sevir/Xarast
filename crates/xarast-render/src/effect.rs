@@ -923,11 +923,12 @@ impl Corners {
     }
 }
 
-/// Rows a parallel task takes at least: about 16 Ki pixels, so a small
-/// region (most bevels are a few hundred pixels across) is not split into
-/// tasks that cost more to schedule than to run.
+/// Rows a parallel task takes at least: about 1 Ki pixels, so a narrow
+/// region's rows are not each a task. Not more: Groucho2's bevels are 30–
+/// 55 Ki pixels, and 16 Ki-pixel tasks left them three-way parallel (the
+/// lighting's sum went 13.6 → 26–35 ms of a first frame).
 fn rows_per_task(width: usize) -> usize {
-    (16 * 1024 / width.max(1)).max(1)
+    (1024 / width.max(1)).max(1)
 }
 
 /// The `Bevel` family's table, built once.
