@@ -1232,7 +1232,13 @@ mod tests {
         release.send(()).unwrap();
 
         // The in-flight frame finishes but is thrown away, not published.
-        std::thread::sleep(Duration::from_millis(50));
+        // The worker counts it as cancelled only once it has finished, so
+        // wait for that instead of sleeping a fixed time: under load a fixed
+        // sleep ends before the worker has run (XARA-T-0191).
+        let deadline = std::time::Instant::now() + T;
+        while rt.stats().cancelled < 2 && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
         assert!(rt.take_latest().is_none());
         assert_eq!(wakes.load(Ordering::SeqCst), 0);
         let s = rt.stats();
