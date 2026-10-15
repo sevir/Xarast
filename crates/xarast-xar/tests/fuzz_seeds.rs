@@ -351,6 +351,87 @@ fn file_seeds() -> Vec<(String, Vec<u8>)> {
             .finish()
     }));
 
+    // Blends: profiles before a three-object blend (two blenders, each
+    // with its additional record), a rainbow one-to-one blend, a blend
+    // along a path (curve proportions and angles under its blender, a
+    // blend path and its filled flag), a blender with nothing after it, a
+    // colour type out of range, short records, object indices that
+    // disagree, and a stray blender.
+    out.push(("blend".into(), {
+        let blend = |steps: u16, flags: u8| {
+            let mut v = steps.to_le_bytes().to_vec();
+            v.push(flags);
+            v
+        };
+        let blender = |s: i32, e: i32| {
+            let mut v = s.to_le_bytes().to_vec();
+            v.extend_from_slice(&e.to_le_bytes());
+            v
+        };
+        let extra = |curve: i32, s: i32, e: i32| {
+            let mut v = Vec::new();
+            for x in [curve, -1, s, e] {
+                v.extend_from_slice(&x.to_le_bytes());
+            }
+            v.push(0);
+            v
+        };
+        let doubles = |xs: &[f64]| {
+            let mut v = Vec::new();
+            for x in xs {
+                v.extend_from_slice(&x.to_le_bytes());
+            }
+            v
+        };
+        XarBuilder::new()
+            .record(40, &[])
+            .down()
+            .record(4072, &doubles(&[0.25, -0.5, 0.1, 0.0, 0.0, 0.0]))
+            .record(105, &blend(5, 0x02))
+            .down()
+            .record(176, &[0])
+            .record(116, &minimal_payload(116))
+            .record(106, &blender(3, 0))
+            .record(4073, &extra(0, 0, 2))
+            .record(116, &minimal_payload(116))
+            .record(106, &blender(-1, -1))
+            .record(4073, &extra(0, 2, 4))
+            .record(116, &minimal_payload(116))
+            .up()
+            .record(105, &blend(15, 0x13))
+            .down()
+            .record(116, &minimal_payload(116))
+            .record(106, &blender(0, 0))
+            .record(4073, &extra(0, 0, 2)[..16])
+            .record(116, &minimal_payload(116))
+            .up()
+            .record(105, &blend(4, 0x02))
+            .down()
+            .record(116, &minimal_payload(116))
+            .record(106, &blender(-1, -1))
+            .down()
+            .record(4060, &doubles(&[0.0, 1.0]))
+            .record(4062, &doubles(&[0.0, 90.0]))
+            .up()
+            .record(4073, &extra(1, 0, 2))
+            .record(116, &minimal_payload(116))
+            .record(4061, &minimal_payload(4061))
+            .record(4074, &1i32.to_le_bytes())
+            .up()
+            .record(105, &blend(u16::MAX, 0xF0))
+            .down()
+            .record(116, &minimal_payload(116))
+            .record(106, &blender(7, 7))
+            .record(4073, &extra(0, 5, 9))
+            .up()
+            .record(105, &blend(1, 0)[..2])
+            .record(106, &blender(1, 2)[..4])
+            .record(106, &blender(0, 0))
+            .up()
+            .end_of_file()
+            .finish()
+    }));
+
     // One file per decodable tag, carrying a plausible minimal payload.
     out.push(("every-tag".into(), {
         let mut b = XarBuilder::new();

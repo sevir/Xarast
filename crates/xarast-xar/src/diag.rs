@@ -147,6 +147,13 @@ pub enum DiagCode {
     /// controller (dropped with its attributes), 2 a colour blend outside
     /// 0..=3 (faded), 3 a step count outside 0..=255 rings (clamped).
     ContourDegraded,
+    /// A blend could not be mapped as the original draws it. The detail says
+    /// how: 0 a blender without an object on each side (no steps there), 1 a
+    /// stray `TAG_BLENDER` outside a blend (dropped), 2 a colour blend outside
+    /// 0..=3 (faded), 3 a blend along a path (drawn straight; the path is
+    /// dropped), 4 object indices that disagree with the blender's neighbours
+    /// (the neighbours are blended), 5 more than 999 steps (999 are drawn).
+    BlendDegraded,
 }
 
 impl DiagCode {
@@ -179,6 +186,7 @@ impl DiagCode {
             DiagCode::ShadowDegraded => "ShadowDegraded",
             DiagCode::BevelDegraded => "BevelDegraded",
             DiagCode::ContourDegraded => "ContourDegraded",
+            DiagCode::BlendDegraded => "BlendDegraded",
         }
     }
 
@@ -231,7 +239,8 @@ impl DiagCode {
             | DiagCode::ClipViewDegraded
             | DiagCode::ShadowDegraded
             | DiagCode::BevelDegraded
-            | DiagCode::ContourDegraded => D::UnsupportedFeature,
+            | DiagCode::ContourDegraded
+            | DiagCode::BlendDegraded => D::UnsupportedFeature,
         }
     }
 }

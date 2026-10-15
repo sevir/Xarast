@@ -387,6 +387,34 @@ pub struct ContourRecord {
     pub attr_profile: (f64, f64),
 }
 
+/// `TAG_BLEND` (105, 3 bytes): a blend's step count and flags
+/// (`docs/research/01-xar-format.md`, record table; `docs/memory/xar-import.md`,
+/// finding 23). Both fields are required, as the original requires them.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct BlendRecord {
+    /// The number of intermediate steps (an unsigned 16-bit field).
+    pub steps: u16,
+    /// Bit 0 one-to-one, bit 1 antialiased, bit 2 tangential; bits 4–7 the
+    /// colour blend (0 fade, 1 rainbow, 2 alternate rainbow, 3 none).
+    pub flags: u8,
+}
+
+/// `TAG_BLENDERADDITIONAL` (4073, 17 bytes; 16 in older files): a
+/// blender's extra fields, written right after its `TAG_BLENDER`.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct BlenderExtra {
+    /// Non-zero when the blender runs along a blend path.
+    pub on_curve: i32,
+    /// Which blend path it runs along (−1: none).
+    pub path_index: i32,
+    /// The index of the object it starts from, among the blend's objects.
+    pub obj_start: i32,
+    /// The index of the object it ends at.
+    pub obj_end: i32,
+    /// Bit 0: reversed along its path. 0 when the record has 16 bytes.
+    pub bits: u8,
+}
+
 /// `TAG_BEVEL` (4052, 24 bytes), field by field
 /// (`docs/research/01-xar-format.md`, record table; `docs/memory/xar-import.md`,
 /// finding 21).
@@ -563,6 +591,35 @@ pub enum Decoded {
     /// `TAG_CONTOUR` (4067): the generated contour node. Empty; its own
     /// attribute children are what the last ring is drawn in.
     ContourInk,
+    /// `TAG_BLEND` (105): a blend controller; its children are its
+    /// attributes, the objects it blends and one `TAG_BLENDER` between
+    /// each pair (`research/02 §6.6`).
+    Blend(BlendRecord),
+    /// `TAG_BLENDER` (106): one pair of a blend; the two fields are the
+    /// path indices its ends start from.
+    Blender {
+        /// The start object's path index.
+        path_start: i32,
+        /// The end object's path index.
+        path_end: i32,
+    },
+    /// `TAG_BLENDERADDITIONAL` (4073): the last blender's extra fields.
+    BlenderExtra(BlenderExtra),
+    /// `TAG_BLENDPROFILES` (4072): the object, attribute and position
+    /// profiles (bias, gain) of the *next* `TAG_BLEND`, which the
+    /// original writes just before it.
+    BlendProfiles([(f64, f64); 3]),
+    /// `TAG_BLENDER_CURVEPROP` (4060): where along its path the last
+    /// blender starts and ends, as proportions of the path's length.
+    BlenderCurveProp(f64, f64),
+    /// `TAG_BLENDER_CURVEANGLES` (4062): the last blender's start and end
+    /// angles along its path, in degrees.
+    BlenderCurveAngles(f64, f64),
+    /// `TAG_BLEND_PATH` (4061): a path the blend runs along (absolute).
+    BlendPath(Path),
+    /// `TAG_NODEBLENDPATH_FILLED` (4074): whether the last blend path is
+    /// filled.
+    BlendPathFilled(i32),
     /// `TAG_SETSENTINEL`.
     SetSentinel,
     /// `TAG_SPREADINFORMATION`.
@@ -824,14 +881,14 @@ pub const fn has_decoder(tag: u32) -> bool {
         | 40..=43 | 45 | 46 | 47 | 48 | 49 | 50 | 51 | 52 | 53
         | 60..=64 | 65..=69 | 71
         | 80 | 82 | 87 | 91 | 92 | 93
-        | 100..=104 | 111 | 113..=116
+        | 100..=106 | 111 | 113..=116
         | 150..=186 | 188 | 190..=195 | 198 | 200..=207
         | 1901
         | 2000 | 2001
         | 2100 | 2101 | 2110..=2117 | 2150 | 2151
         | 2200..=2204 | 2206
         | 2900..=2920
-        | 4010 | 4011 | 4050..=4057 | 4066 | 4067 | 4070 | 4075..=4078 | 4084 | 4085 | 4086 | 4087 | 4088
+        | 4010 | 4011 | 4050..=4057 | 4060..=4062 | 4066 | 4067 | 4070 | 4072..=4074 | 4075..=4078 | 4084 | 4085 | 4086 | 4087 | 4088
         | 4114 | 4115 | 4116 | 4119 | 4120 | 4121 | 4123 | 4124 | 4129
         | 4030 | 4031 | 4201..=4203)
 }
@@ -934,6 +991,15 @@ pub fn decode(
             style: PathStyleBits::from_tag(tag).unwrap_or(ABSOLUTE_PLAIN),
         },
         104 => Decoded::Group,
+        // `Kernel/nodeblnd.cpp:4173-4190`: both fields are required.
+        105 => Decoded::Blend(BlendRecord {
+            steps: c.u16()?,
+            flags: c.u8()?,
+        }),
+        106 => Decoded::Blender {
+            path_start: c.i32()?,
+            path_end: c.i32()?,
+        },
         111 => Decoded::PathFlags(payload.to_vec()),
         113..=116 => Decoded::Path {
             path: decode_relative(&mut c, origin, diags, at)?,
@@ -1082,6 +1148,20 @@ pub fn decode(
         }),
         // Empty (`Kernel/nodecntr.cpp:1655-1670`); a payload is ignored.
         4067 => Decoded::ContourInk,
+        4060 => Decoded::BlenderCurveProp(c.f64()?, c.f64()?),
+        4061 => Decoded::BlendPath(decode_absolute(&mut c, origin, diags, at)?),
+        4062 => Decoded::BlenderCurveAngles(c.f64()?, c.f64()?),
+        4072 => Decoded::BlendProfiles([c.opt_profile(), c.opt_profile(), c.opt_profile()]),
+        // Four `INT32`s, then the bit field only when it is there
+        // (`Kernel/nodeblnd.cpp:4495-4520`).
+        4073 => Decoded::BlenderExtra(BlenderExtra {
+            on_curve: c.i32()?,
+            path_index: c.i32()?,
+            obj_start: c.i32()?,
+            obj_end: c.i32()?,
+            bits: c.opt_u8().unwrap_or(0),
+        }),
+        4074 => Decoded::BlendPathFilled(c.i32()?),
         4086 => Decoded::Feather {
             size: c.mp()?,
             bias: c.opt_f64().unwrap_or(0.0),

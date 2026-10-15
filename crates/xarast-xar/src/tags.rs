@@ -90,6 +90,19 @@ pub const TAG_CONTOURCONTROLLER: u32 = 4066;
 /// The generated contour node inside a contour controller: before the
 /// objects for an outer contour, after them for an inner one.
 pub const TAG_CONTOUR: u32 = 4067;
+/// A blend: its attributes, the objects it blends and one [`TAG_BLENDER`]
+/// between each pair; the [`TAG_BLENDPROFILES`] before it is its profiles.
+pub const TAG_BLEND: u32 = 105;
+/// One pair of a blend, between its two objects.
+pub const TAG_BLENDER: u32 = 106;
+/// A blender's extra fields, the record after its [`TAG_BLENDER`].
+pub const TAG_BLENDERADDITIONAL: u32 = 4073;
+/// The profiles of the next [`TAG_BLEND`].
+pub const TAG_BLENDPROFILES: u32 = 4072;
+/// A path a blend runs along.
+pub const TAG_BLEND_PATH: u32 = 4061;
+/// Whether the last blend path is filled.
+pub const TAG_NODEBLENDPATH_FILLED: u32 = 4074;
 /// Per-point path flags, the first child of the path record.
 pub const TAG_PATH_FLAGS: u32 = 111;
 /// A relative path, stroked.

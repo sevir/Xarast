@@ -1118,3 +1118,50 @@ fn winding_rules_are_the_original_enum_and_the_default_is_never_written() {
     assert_eq!(rules[1], 3, "the three negative records");
     assert_eq!(rules.iter().sum::<usize>(), 3);
 }
+
+/// Blends import as live blends (XARA-T-0333, finding 23): 480
+/// controllers and 508 blenders, each blender between two objects, none
+/// along a path, and the pairs drawing steps.
+#[test]
+fn blends_import_as_live_blends_with_a_generated_node_per_pair() {
+    use xarast_doc::{LiveKind, LiveRole, NodeKind};
+    let c = corpus_or_skip!();
+    let (mut controllers, mut generated, mut steps, mut empty) = (0usize, 0usize, 0usize, 0usize);
+    let mut degraded: BTreeMap<u64, usize> = BTreeMap::new();
+    let mut effects: BTreeMap<String, usize> = BTreeMap::new();
+    for (_, doc, report) in imports(&c) {
+        for d in &report.diagnostics {
+            if d.code == xarast_xar::DiagCode::BlendDegraded {
+                *degraded.entry(d.detail).or_default() += 1;
+            }
+        }
+        for n in doc.tree.preorder(doc.tree.root()) {
+            let Some(NodeKind::Live(l)) = doc.tree.kind(n) else {
+                continue;
+            };
+            let LiveKind::Blend(p) = &l.kind else {
+                continue;
+            };
+            match l.role {
+                LiveRole::Controller => {
+                    controllers += 1;
+                    *effects.entry(format!("{:?}", p.colour_effect)).or_default() += 1;
+                    let groups = xarast_doc::blend::generate(&doc, n).unwrap();
+                    assert_eq!(groups.len(), p.blenders.len());
+                    steps += groups.iter().map(Vec::len).sum::<usize>();
+                    empty += groups.iter().filter(|g| g.is_empty()).count();
+                }
+                LiveRole::Generated => generated += 1,
+                LiveRole::Source => {}
+            }
+        }
+    }
+    println!(
+        "blends {controllers}, pairs {generated} ({empty} with no steps), step shapes {steps}, \
+         degraded {degraded:?}, colour effects {effects:?}"
+    );
+    assert_eq!((controllers, generated), (480, 508));
+    assert!(steps > 0);
+    assert_eq!(degraded.get(&0), None, "a blender without two objects");
+    assert_eq!(degraded.get(&3), None, "a blend along a path");
+}

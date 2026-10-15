@@ -30,8 +30,8 @@
 92 | 59 | ignorable | yes | TAG_DOCUMENTUNDOSIZE
 93 | 59 | ignorable | yes | TAG_DOCUMENTFLAGS
 104 | 19075 | object | yes | TAG_GROUP
-105 | 480 | object | NO | TAG_BLEND
-106 | 508 | object | NO | TAG_BLENDER
+105 | 480 | object | yes | TAG_BLEND
+106 | 508 | object | yes | TAG_BLENDER
 107 | 68 | object | NO | TAG_MOULD_ENVELOPE
 108 | 129 | object | NO | TAG_MOULD_PERSPECTIVE
 109 | 197 | object | NO | TAG_MOULD_GROUP
@@ -128,8 +128,8 @@
 4066 | 4 | object | yes | TAG_CONTOURCONTROLLER
 4067 | 4 | object | yes | TAG_CONTOUR
 4070 | 59 | ignorable | yes | TAG_SETSENTINEL
-4072 | 480 | ignorable | NO | TAG_BLENDPROFILES
-4073 | 508 | ignorable | NO | TAG_BLENDERADDITIONAL
+4072 | 480 | ignorable | yes | TAG_BLENDPROFILES
+4073 | 508 | ignorable | yes | TAG_BLENDERADDITIONAL
 4075 | 60 | attribute | yes | TAG_LINEARFILLMULTISTAGE
 4076 | 4 | attribute | yes | TAG_CIRCULARFILLMULTISTAGE
 4077 | 2 | attribute | yes | TAG_ELLIPTICALFILLMULTISTAGE

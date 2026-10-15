@@ -438,6 +438,9 @@ struct Mapper<'o> {
     text_restore: Vec<(usize, AttrValue)>,
     /// A `TAG_TEXT_CHAR` high surrogate waiting for its low half.
     pending_high: Option<u16>,
+    /// The profiles a `TAG_BLENDPROFILES` gave the next `TAG_BLEND`: the
+    /// original writes them just before it (`Kernel/nodeblnd.cpp:3530-3545`).
+    pending_blend_profiles: Option<[(f64, f64); 3]>,
 }
 
 impl<'o> Mapper<'o> {
@@ -458,6 +461,7 @@ impl<'o> Mapper<'o> {
             attrs: AttrStack::with_defaults(&xar_defaults()),
             text_restore: Vec::new(),
             pending_high: None,
+            pending_blend_profiles: None,
         }
     }
 
@@ -810,6 +814,41 @@ impl<'o> Mapper<'o> {
             Decoded::ContourController(r) => {
                 let r = *r;
                 self.emit_contour(node, r)?;
+                After::Drop
+            }
+            Decoded::BlendProfiles(p) => {
+                self.pending_blend_profiles = Some(*p);
+                self.mapped = self.mapped.saturating_add(1);
+                self.skipped = self.skipped.saturating_add(count_subtree(&node.children));
+                After::Drop
+            }
+            Decoded::Blend(r) => {
+                let r = *r;
+                self.emit_blend(node, r)?;
+                After::Drop
+            }
+            // A blender outside a blend has nothing to blend.
+            Decoded::Blender { .. } => {
+                self.skipped = self
+                    .skipped
+                    .saturating_add(count_subtree(&node.children).saturating_add(1));
+                self.diags.push(
+                    Diagnostic::new(DiagCode::BlendDegraded)
+                        .at(at.0, at.1)
+                        .with_detail(1),
+                );
+                After::Drop
+            }
+            // Read with their blend or blender; anywhere else they say
+            // nothing.
+            Decoded::BlenderExtra(_)
+            | Decoded::BlenderCurveProp(..)
+            | Decoded::BlenderCurveAngles(..)
+            | Decoded::BlendPath(_)
+            | Decoded::BlendPathFilled(_) => {
+                self.skipped = self
+                    .skipped
+                    .saturating_add(count_subtree(&node.children).saturating_add(1));
                 After::Drop
             }
             // A contour node outside a controller has nothing to contour;
@@ -1652,6 +1691,210 @@ impl<'o> Mapper<'o> {
             if r.is_err() {
                 break;
             }
+        }
+        self.pop_scope();
+        r
+    }
+
+    /// A `TAG_BLEND` and everything under it.
+    ///
+    /// In the file the blend holds its attributes, then its objects with a
+    /// `TAG_BLENDER` (and its `TAG_BLENDERADDITIONAL`) between each pair
+    /// (`research/02 §6.6`). The model keeps that order, the blenders as
+    /// generated nodes under the source:
+    ///
+    /// ```text
+    /// Live (Controller, Blend)   the record's parameters, every blender's
+    ///   attributes…              the blend's, before the first object
+    ///   Live (Source, Blend)
+    ///     object 0
+    ///     Live (Generated, Blend)  steps from object 0 to object 1
+    ///     object 1 …
+    /// ```
+    ///
+    /// The flags and the profiles are as the original writes them
+    /// (`Kernel/nodeblnd.cpp:3525-3560`; `docs/memory/xar-import.md`,
+    /// finding 23).
+    fn emit_blend(
+        &mut self,
+        node: &RecordNode,
+        r: crate::decode::BlendRecord,
+    ) -> Result<(), XarError> {
+        use crate::tags::{
+            TAG_BLEND_PATH, TAG_BLENDER, TAG_BLENDERADDITIONAL, TAG_NODEBLENDPATH_FILLED,
+        };
+        let rec = &node.record;
+        let at = (rec.number, rec.tag);
+        self.mapped = self.mapped.saturating_add(1);
+        let profiles = self.pending_blend_profiles.take().unwrap_or_default();
+        let degraded = |me: &mut Self, detail: u64| {
+            me.diags.push(
+                Diagnostic::new(DiagCode::BlendDegraded)
+                    .at(at.0, at.1)
+                    .with_detail(detail),
+            );
+        };
+        let colour_effect = match r.flags >> 4 {
+            0 => Some(xarast_color::FillEffect::Fade),
+            1 => Some(xarast_color::FillEffect::Rainbow),
+            2 => Some(xarast_color::FillEffect::AltRainbow),
+            3 => None,
+            other => {
+                degraded(self, 2);
+                self.diags.push(
+                    Diagnostic::new(DiagCode::UnknownEnumValue)
+                        .at(at.0, at.1)
+                        .with_detail(u64::from(other)),
+                );
+                Some(xarast_color::FillEffect::Fade)
+            }
+        };
+        if u32::from(r.steps) > xarast_doc::live::MAX_BLEND_STEPS {
+            degraded(self, 5);
+        }
+        let children = node.children.as_slice();
+        // What the original counts as an object index: every ink child,
+        // blenders included, blend paths not (`Kernel/nodebldr.cpp:3188-
+        // 3240`).
+        let is_object = |c: &RecordNode| {
+            c.record.tag != TAG_BLEND_PATH && class_of(c.record.tag) == Some(TagClass::Object)
+        };
+        let mut blenders = Vec::new();
+        let mut along_path = false;
+        let mut index = 0i32;
+        for (i, c) in children.iter().enumerate() {
+            let tag = c.record.tag;
+            if tag == TAG_BLEND_PATH || tag == TAG_NODEBLENDPATH_FILLED {
+                along_path = true;
+            }
+            if tag == TAG_BLENDER {
+                let (path_start, path_end) = match decode(
+                    tag,
+                    &c.record.data,
+                    self.origin,
+                    &mut self.diags,
+                    (c.record.number, tag),
+                ) {
+                    Ok(Decoded::Blender {
+                        path_start,
+                        path_end,
+                    }) => (path_start, path_end),
+                    _ => (-1, -1),
+                };
+                let index_of = |i: i32| u32::try_from(i).ok();
+                blenders.push(xarast_doc::BlenderParams {
+                    start_index: index_of(path_start),
+                    end_index: index_of(path_end),
+                    pairs: Vec::new(),
+                });
+                if !c.children.is_empty() {
+                    along_path = true;
+                }
+                let extra = children
+                    .get(i.saturating_add(1))
+                    .filter(|n| n.record.tag == TAG_BLENDERADDITIONAL)
+                    .and_then(|n| {
+                        decode(
+                            n.record.tag,
+                            &n.record.data,
+                            self.origin,
+                            &mut self.diags,
+                            (n.record.number, n.record.tag),
+                        )
+                        .ok()
+                    });
+                if let Some(Decoded::BlenderExtra(x)) = extra {
+                    if x.on_curve != 0 {
+                        along_path = true;
+                    }
+                    if x.obj_start != index.saturating_sub(1)
+                        || x.obj_end != index.saturating_add(1)
+                    {
+                        degraded(self, 4);
+                    }
+                }
+            }
+            if is_object(c) {
+                index = index.saturating_add(1);
+            }
+        }
+        if along_path {
+            degraded(self, 3);
+        }
+        let params = xarast_doc::BlendParams {
+            steps: u32::from(r.steps),
+            step_distance: None,
+            one_to_one: r.flags & 1 != 0,
+            antialias: r.flags & 2 != 0,
+            tangential: r.flags & 4 != 0,
+            reverse: false,
+            profile: BiasGain::new(profiles[0].0, profiles[0].1),
+            attr_profile: BiasGain::new(profiles[1].0, profiles[1].1),
+            colour_effect,
+            blenders,
+        };
+        let live = |role| {
+            NodeKind::Live(Box::new(xarast_doc::LiveNode {
+                role,
+                kind: xarast_doc::LiveKind::Blend(Box::new(params.clone())),
+                regen: xarast_doc::RegenState::Clean,
+                name: None,
+            }))
+        };
+        self.builder.node(live(xarast_doc::LiveRole::Controller))?;
+        self.push_scope()?;
+        let first = children
+            .iter()
+            .position(is_object)
+            .unwrap_or(children.len());
+        let mut r = Ok(());
+        for c in children.iter().take(first) {
+            r = self.visit(c);
+            if r.is_err() {
+                break;
+            }
+        }
+        if r.is_ok() {
+            self.builder.node(live(xarast_doc::LiveRole::Source))?;
+            self.push_scope()?;
+            let mut previous_object = false;
+            let mut awaiting_object = false;
+            for c in children.iter().skip(first) {
+                let tag = c.record.tag;
+                if tag == TAG_BLENDER {
+                    self.mapped = self.mapped.saturating_add(1);
+                    self.skipped = self.skipped.saturating_add(count_subtree(&c.children));
+                    if !previous_object {
+                        degraded(self, 0);
+                    }
+                    self.builder.node(live(xarast_doc::LiveRole::Generated))?;
+                    previous_object = false;
+                    awaiting_object = true;
+                    continue;
+                }
+                if tag == TAG_BLENDERADDITIONAL {
+                    self.mapped = self.mapped.saturating_add(1);
+                    continue;
+                }
+                if tag == TAG_BLEND_PATH || tag == TAG_NODEBLENDPATH_FILLED {
+                    self.skipped = self
+                        .skipped
+                        .saturating_add(count_subtree(&c.children).saturating_add(1));
+                    continue;
+                }
+                if is_object(c) {
+                    previous_object = true;
+                    awaiting_object = false;
+                }
+                r = self.visit(c);
+                if r.is_err() {
+                    break;
+                }
+            }
+            if awaiting_object {
+                degraded(self, 0);
+            }
+            self.pop_scope();
         }
         self.pop_scope();
         r
@@ -3145,7 +3388,7 @@ mod tests {
         let bytes = XarBuilder::new()
             .record(40, &[])
             .down()
-            .record(4061, &[1, 2, 3, 4])
+            .record(107, &[1, 2, 3, 4])
             .up()
             .end_of_file()
             .finish();
@@ -3159,7 +3402,7 @@ mod tests {
                 _ => None,
             })
             .expect("the record was kept");
-        assert_eq!(kept.tag, 4061);
+        assert_eq!(kept.tag, 107);
         assert_eq!(&*kept.payload, &[1, 2, 3, 4]);
     }
 
@@ -4041,5 +4284,134 @@ mod tests {
                     .resolve(Ref::parse(-3), &mut DiagSink::new(), (1, 150)).unwrap() }))
         });
         assert!(!stray_fill);
+    }
+
+    fn blend_diags(report: &ImportReport) -> Vec<u64> {
+        report
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == DiagCode::BlendDegraded)
+            .map(|d| d.detail)
+            .collect()
+    }
+
+    fn blends(doc: &xarast_doc::Document) -> Vec<(xarast_doc::NodeId, xarast_doc::BlendParams)> {
+        doc.tree
+            .preorder(doc.tree.root())
+            .filter_map(|id| match doc.tree.kind(id) {
+                Some(NodeKind::Live(l)) if l.role == xarast_doc::LiveRole::Controller => {
+                    match &l.kind {
+                        xarast_doc::LiveKind::Blend(p) => Some((id, (**p).clone())),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn doubles(xs: &[f64]) -> Vec<u8> {
+        xs.iter().flat_map(|x| x.to_le_bytes()).collect()
+    }
+
+    fn blender_extra(s: i32, e: i32) -> Vec<u8> {
+        [0i32, -1, s, e]
+            .iter()
+            .flat_map(|x| x.to_le_bytes())
+            .chain([0u8])
+            .collect()
+    }
+
+    #[test]
+    fn a_blend_keeps_its_objects_with_a_generated_node_between_each_pair() {
+        // The layout every corpus blend has: its profiles before it, its
+        // attributes, then object, blender (+ additional), object …
+        let bytes = layer_with(|b| {
+            b.record(4072, &doubles(&[0.25, -0.5, 0.125, 0.0, 0.0, 0.0]))
+                .record(105, &[7, 0, 0x13])
+                .down()
+                .record(176, &[0])
+                .record(116, &square_path(0, 0, 10_000))
+                .record(106, &[45, 0, 0, 0, 0xff, 0xff, 0xff, 0xff])
+                .record(4073, &blender_extra(0, 2))
+                .record(116, &square_path(50_000, 0, 20_000))
+                .record(106, &[0, 0, 0, 0, 3, 0, 0, 0])
+                .record(4073, &blender_extra(2, 4))
+                .record(116, &square_path(100_000, 0, 5_000))
+                .up()
+        });
+        let (doc, report) = import(&bytes, &ImportOptions::default()).unwrap();
+        balanced(&report);
+        assert!(blend_diags(&report).is_empty(), "{:?}", report.diagnostics);
+        assert_eq!(report.records_stripped, 0);
+        assert!(doc.validate().errors.is_empty(), "{:?}", doc.validate());
+        let [(c, p)] = blends(&doc).try_into().unwrap();
+        assert_eq!(kinds_under(&doc, c), ["Attr", "Live"]);
+        let source = xarast_doc::live::parts(&doc.tree, c).unwrap().source;
+        assert_eq!(
+            kinds_under(&doc, source),
+            ["Path", "Live", "Path", "Live", "Path"]
+        );
+        assert_eq!(p.steps, 7);
+        assert!(p.one_to_one && p.antialias && !p.tangential);
+        assert_eq!(p.colour_effect, Some(xarast_color::FillEffect::Rainbow));
+        assert_eq!(p.profile, BiasGain::new(0.25, -0.5));
+        assert_eq!(p.attr_profile, BiasGain::new(0.125, 0.0));
+        assert_eq!(p.blenders.len(), 2);
+        assert_eq!(
+            (p.blenders[0].start_index, p.blenders[0].end_index),
+            (Some(45), None)
+        );
+        assert_eq!(
+            (p.blenders[1].start_index, p.blenders[1].end_index),
+            (Some(0), Some(3))
+        );
+        // Every pair draws its steps.
+        let groups = xarast_doc::blend::generate(&doc, c).unwrap();
+        assert_eq!(groups.iter().map(Vec::len).collect::<Vec<_>>(), [7, 7]);
+    }
+
+    #[test]
+    fn degraded_blends_are_reported_and_still_import() {
+        let bytes = layer_with(|b| {
+            // A colour type out of range, too many steps, no profiles.
+            b.record(105, &[0xff, 0xff, 0x52])
+                .down()
+                .record(116, &square_path(0, 0, 10_000))
+                .record(106, &[0; 8])
+                .record(4073, &blender_extra(5, 9))
+                .record(116, &square_path(0, 0, 10_000))
+                .up()
+                // Along a path, and a blender with nothing after it.
+                .record(105, &[2, 0, 2])
+                .down()
+                .record(116, &square_path(0, 0, 10_000))
+                .record(106, &[0; 8])
+                .down()
+                .record(4060, &doubles(&[0.0, 1.0]))
+                .up()
+                .record(116, &square_path(0, 0, 10_000))
+                .record(4061, &square_path(0, 0, 10_000))
+                .record(106, &[0; 8])
+                .up()
+                // A stray blender, and a short blend record.
+                .record(106, &[0; 8])
+                .record(105, &[2, 0])
+        });
+        let (doc, report) = import(&bytes, &ImportOptions::default()).unwrap();
+        balanced(&report);
+        assert!(doc.validate().errors.is_empty(), "{:?}", doc.validate());
+        // 2 colour, 5 steps, 4 indices; 3 along a path, 0 no end object;
+        // 1 the stray blender.
+        assert_eq!(blend_diags(&report), [2, 5, 4, 3, 0, 1]);
+        let got = blends(&doc);
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].1.steps, 65_535);
+        assert_eq!(got[0].1.drawn_steps(), 999);
+        assert_eq!(got[0].1.colour_effect, Some(xarast_color::FillEffect::Fade));
+        assert_eq!(got[1].1.blenders.len(), 2);
+        // The path the second blend ran along is not one of its objects.
+        let source = xarast_doc::live::parts(&doc.tree, got[1].0).unwrap().source;
+        assert_eq!(kinds_under(&doc, source), ["Path", "Live", "Path", "Live"]);
     }
 }
