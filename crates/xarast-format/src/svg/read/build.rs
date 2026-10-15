@@ -518,7 +518,8 @@ impl<'d, 'r, 'f> Reader<'d, 'r, 'f> {
             match c {
                 Child::Elem(k) => {
                     let Some(e) = self.elem(*k) else { continue };
-                    if skip(e) {
+                    // A copy the writer derives (a floor shadow's), not a node.
+                    if skip(e) || xa(e, "derived").is_some() {
                         continue;
                     }
                     match self.element(*k, ctx, count, bag)? {

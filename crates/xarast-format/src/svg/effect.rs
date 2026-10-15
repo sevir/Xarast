@@ -219,6 +219,10 @@ pub(crate) struct Shadow<'a> {
     pub colour: &'a str,
     /// The colour's alpha times the darkness, `0..=1`.
     pub opacity: f64,
+    /// Whether the filter also draws the object over its shadow (a filter
+    /// on the controller). Off for a derived copy that holds only the
+    /// shadow (floor shadows, feathered controllers).
+    pub keep_source: bool,
 }
 
 /// A wall or glow shadow (`research/06 §6.8.1`; the renderer's
@@ -284,7 +288,13 @@ pub(crate) fn shadow(sh: &Shadow<'_>, region: Region) -> FilterChain {
     }
     attr(&mut s, "operator", "in");
     attr(&mut s, "result", "s");
-    s.push_str("/><feMerge><feMergeNode in=\"s\"/><feMergeNode in=\"SourceGraphic\"/></feMerge>");
+    if sh.keep_source {
+        s.push_str(
+            "/><feMerge><feMergeNode in=\"s\"/><feMergeNode in=\"SourceGraphic\"/></feMerge>",
+        );
+    } else {
+        s.push_str("/>");
+    }
     f.push(&s);
     f
 }
@@ -475,6 +485,7 @@ mod tests {
             profile: BiasGain::IDENTITY,
             colour: "#102030",
             opacity: 0.5,
+            keep_source: true,
         };
         let s = written(shadow(&sh, region));
         assert!(s.contains("xarast:filter=\"shadow\""));
@@ -502,6 +513,7 @@ mod tests {
             profile: BiasGain::new(0.5, 0.0),
             colour: "#fff",
             opacity: 1.0,
+            keep_source: true,
         };
         let s = written(shadow(&sh, Region::Object { margin: 0.5 }));
         assert_eq!(s.matches("operator=\"dilate\"").count(), 4);
@@ -520,6 +532,7 @@ mod tests {
             profile: BiasGain::IDENTITY,
             colour: "#000",
             opacity: 1.0,
+            keep_source: true,
         };
         let s = written(shadow(&sh, Region::Object { margin: 0.5 }));
         assert!(s.contains("<feComposite in=\"c\" in2=\"SourceAlpha\" operator=\"in\""));

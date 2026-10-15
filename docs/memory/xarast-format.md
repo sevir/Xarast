@@ -781,10 +781,27 @@ renderer draws the shadow) and `<g xarast:kind="live-source">`:
   `xarast:filter` (`is_known_def`) and a `filter` attribute naming it
   (`Reader::is_derived_filter`, which now accepts `feather` and `shadow`),
   drops both, and reads the shadow from `<xarast:shadow>`; the next save
-  derives the same filter. Floor shadows, and a shadow on a controller that
-  also owns a feather, are not baked (`Stats::shadows_unbaked` →
-  `Compromise::NotRendered`, "shadows (recorded, not baked)"); the others
-  are counted in `Stats::shadows_baked`.
+  derives the same filter. All are counted in `Stats::shadows_baked`.
+- **The derived copy** (XARA-T-0324): a floor shadow (an SVG filter cannot
+  apply the affine map) and any shadow on a controller that also owns a
+  feather (one `filter` per element) are drawn by a wrapper `<g
+  xarast:derived="shadow" filter="url(#f…)"><use href="#<source id>"
+  [transform="matrix(…)"]/></g>`, written in the controller after the
+  `<xarast:shadow>` prelude, so it sits under the object and inside the
+  controller's own feather (which therefore feathers it, as the renderer
+  does). The filter is the shadow-only variant (`effect::Shadow
+  { keep_source: false }`); the `<use>` carries the floor map conjugated by
+  the frame flip (`F·M·F⁻¹`, points). **Reader rule: `children()` skips
+  every element with an `xarast:derived` attribute**, so it is neither a node
+  nor baggage; the next save derives it again. `Stats::shadows_unbaked`
+  now only counts a controller without a source. The map's anchor uses
+  the source's geometry bounds **without line width** and never the bounds
+  cache: the line width's place changes between a built document and a
+  read one (controller attribute vs localised), which broke the fixed
+  point. Dead end: the stroke-extent anchor the walker uses.
+  Corpus: 98 wall, 0 floor, 0 glow, 0 feathered shadows; pinned by
+  synthetic tests (`shadows_are_drawn_by_a_filter_…`,
+  `a_feathered_shadow_is_drawn_by_a_derived_copy_…`).
 - Pinned by `tests/svg_read.rs`,
   `a_shadow_reads_back_exactly_and_saves_to_the_same_bytes`,
   `shadows_are_drawn_by_a_filter_that_the_reader_ignores` (no baggage,

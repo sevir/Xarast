@@ -1601,17 +1601,21 @@ fn a_shadow_reads_back_exactly_and_saves_to_the_same_bytes() {
 }
 
 /// A wall and a glow shadow are drawn by a filter on their controller
-/// (XARA-T-0320), a floor one stays recorded only; the reader drops the
-/// filters and the next save derives them again.
+/// (XARA-T-0320), a floor one by a mapped copy of its object (XARA-T-0324);
+/// the reader drops the filters and the copy and the next save derives
+/// them again.
 #[test]
 fn shadows_are_drawn_by_a_filter_that_the_reader_ignores() {
     let doc = shadow_doc();
     let native =
         xarast_format::svg::write_svg(&doc, &mut ResourceIndex::new(), &SvgOptions::default());
     let s = &native.svg;
-    assert_eq!(s.matches("xarast:filter=\"shadow\"").count(), 2, "{s}");
-    assert_eq!(native.stats.shadows_baked, 2);
-    assert_eq!(native.stats.shadows_unbaked, 1, "the floor shadow");
+    assert_eq!(s.matches("xarast:filter=\"shadow\"").count(), 3, "{s}");
+    assert_eq!(native.stats.shadows_baked, 3);
+    assert_eq!(native.stats.shadows_unbaked, 0);
+    assert_eq!(s.matches("xarast:derived=\"shadow\"").count(), 1, "{s}");
+    assert_eq!(s.matches("<use href=\"#x").count(), 1, "{s}");
+    assert!(s.contains("transform=\"matrix("), "{s}");
     // The wall: σ = 5.25/4 and the offset; the glow dilates before it blurs.
     assert!(s.contains("stdDeviation=\"1.3125\""), "{s}");
     assert!(s.contains("<feOffset dx=\"2.22\" dy=\"3.75\"/>"), "{s}");
@@ -1636,6 +1640,59 @@ fn shadows_are_drawn_by_a_filter_that_the_reader_ignores() {
     );
     assert!(!export.svg.contains("xarast"), "{}", export.svg);
     assert_eq!(export.svg.matches("<feMerge>").count(), 2);
+    assert_eq!(export.svg.matches("<use ").count(), 1, "{}", export.svg);
+}
+
+/// A wall shadow whose controller owns a feather: the controller's one
+/// `filter` is the feather, so the shadow is drawn by an unmapped derived
+/// copy that the feather then fades with the object (XARA-T-0324).
+#[test]
+fn a_feathered_shadow_is_drawn_by_a_derived_copy_the_reader_ignores() {
+    let mut b = xarast_doc::builder::skeleton(BuildLimits::default()).unwrap();
+    let kind = LiveKind::Shadow(Box::default());
+    let live = |role| {
+        NodeKind::Live(Box::new(LiveNode {
+            role,
+            kind: kind.clone(),
+            regen: RegenState::Clean,
+            name: None,
+        }))
+    };
+    b.node(live(LiveRole::Controller)).unwrap();
+    b.push_scope().unwrap();
+    b.attribute(AttrValue::Feather {
+        size: Mp::new(4_000),
+        profile: BiasGain::IDENTITY,
+    })
+    .unwrap();
+    b.node(live(LiveRole::Generated)).unwrap();
+    b.node(live(LiveRole::Source)).unwrap();
+    b.push_scope().unwrap();
+    b.node(triangle(50_000, 300_000)).unwrap();
+    b.push_scope().unwrap();
+    b.attribute(flat(rgb(0.9, 0.5, 0.1))).unwrap();
+    b.pop_scope();
+    b.pop_scope();
+    b.pop_scope();
+    let doc = b.finish().unwrap().0;
+
+    let native =
+        xarast_format::svg::write_svg(&doc, &mut ResourceIndex::new(), &SvgOptions::default());
+    let s = &native.svg;
+    assert_eq!(native.stats.shadows_baked, 1);
+    assert_eq!(native.stats.shadows_unbaked, 0);
+    assert_eq!(s.matches("xarast:derived=\"shadow\"").count(), 1, "{s}");
+    assert_eq!(s.matches("xarast:filter=\"feather\"").count(), 1, "{s}");
+    assert!(!s.contains("transform=\"matrix("), "{s}");
+    let r = read(s);
+    assert_eq!(r.stats.foreign_attributes, 0);
+    assert_eq!(r.stats.foreign_elements, 0);
+    let again = xarast_format::svg::write_svg(
+        &r.document,
+        &mut ResourceIndex::new(),
+        &SvgOptions::default(),
+    );
+    assert_eq!(*s, again.svg, "the copy is derived, not carried");
 }
 
 /// Bevel controllers as the `.xar` importer builds them: every style, a

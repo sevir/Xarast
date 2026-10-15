@@ -289,11 +289,12 @@ pub struct Stats {
     /// Feathers drawn by an SVG filter (`effect.rs`), plus their twin.
     pub effects_baked: usize,
     /// Shadows recorded (`<xarast:shadow>`) but not baked: an external
-    /// viewer draws the object without its shadow (floor shadows, and a
-    /// shadow whose controller is feathered).
+    /// viewer draws the object without its shadow (a controller without a
+    /// source, which a valid document never has).
     pub shadows_unbaked: usize,
-    /// Wall and glow shadows drawn by an SVG filter (`effect.rs`), plus
-    /// their twin.
+    /// Shadows drawn by an SVG filter (`effect.rs`), on the controller or,
+    /// for floor shadows and feathered controllers, on a derived copy of
+    /// the object, plus their twin.
     pub shadows_baked: usize,
     /// Bevels recorded (`<xarast:bevel>`) but not baked (their controller
     /// also owns a feather): an external viewer draws the object without

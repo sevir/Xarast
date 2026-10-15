@@ -81,7 +81,7 @@ same code. What Interchange changes, and where:
 | Background | none | `SvgOptions::background` → a `<rect>` over the viewBox, first in the body | `assemble` |
 | Ids | stable, the identity model | kept; `minify` drops those nothing refers to (`url(#…)`, `href="#…"`, `inkscape:current-layer`) plus comments and indentation | `interchange::project` |
 | Baked content | `xarast:generated` | unmarked (the attribute goes with the rest) | projection |
-| Shadows (XARA-T-0320) | `xarast:shadow` + `filter="url(#f…)"` on the controller to a `<filter xarast:filter="shadow">` | the same filter, unmarked | `Emitter::bake_shadow`, `svg/effect.rs` |
+| Shadows (XARA-T-0320, floor + feathered T-0324) | `xarast:shadow` + `filter="url(#f…)"` on the controller to a `<filter xarast:filter="shadow">`; floor/feathered: a derived `<g xarast:derived>` copy | the same, unmarked | `Emitter::bake_shadow`, `svg/effect.rs` |
 | Feathers (XARA-T-0317) | `xarast:feather` + `filter="url(#f…)"` to a `<filter xarast:filter="feather">` | the same filter, unmarked | `Emitter::own_feather`, `svg/effect.rs` |
 
 **Why a projection pass instead of an `if` at every write.** The
@@ -244,16 +244,20 @@ Region: `effect_region(controller, blur + glow + max|offset|)`.
 `Stats::shadows_baked` feeds `Simplified { "wall and glow shadows drawn by
 an SVG filter (a Gaussian blur for the disc blur)" }`.
 
-**Not baked, still `NotRendered "shadows (recorded, not baked)"`**:
-- **Floor shadows.** The renderer maps the silhouette through an affine
-  map (vertical scale + shear) before blurring; a filter cannot transform
-  its input, so a floor needs a transformed copy of the object
-  (`<use>` with the map and a blur filter, §6.8.1) inside the empty
-  `generated` group, and the reader would have to ignore that copy. Not
-  done (follow-up; all 81 of Groucho2's are wall or glow)
-  (`shadow_doc` in `tests/svg_read.rs` pins the report).
-- A shadow whose controller also owns a feather: one `filter` per element,
-  and the renderer feathers the shadow with the object. No corpus file.
+**Floor shadows and feathered controllers (XARA-T-0324, 2026-10-15)**: a
+derived wrapper `<g xarast:derived="shadow">` with a `<use>` of the source
+(floor map `F·M·F⁻¹` as `matrix(…)`) and the shadow-only filter, placed
+before the object inside the controller; the reader skips `xarast:derived`
+elements (`xarast-format.md`). The filter acts in the wrapper's space, after
+the `<use>`'s transform, so the blur is isotropic like the renderer's disc
+blur after the warp. Resvg draws it (synthetic test document: squashed,
+sheared copy under the object). **No corpus file has a floor shadow** (98
+wall, 0 floor, 0 glow, none feathered), so the corpus scores did not move
+(Groucho2 svg 6.77, SoftShadow 3.16, 118 comparisons, 0 failures, before
+and after). `NotRendered "shadows"` is now reported only for a controller
+without a source. Residual: the anchor ignores the line width (up to
+half of it times 1 − scale off the renderer's), shadows of text keep the
+±50 % region.
 
 **Measured** (72 dpi, paper, resvg, mean |Δ| against our PNG):
 Groucho2 6.67 → **2.69**, SoftShadow 5.03 → **3.16**. Whole corpus: 118

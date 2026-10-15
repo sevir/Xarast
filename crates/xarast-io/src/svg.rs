@@ -443,7 +443,7 @@ fn compromises(s: &fsvg::Stats, svg: &str, failed_images: usize) -> Vec<Compromi
             s.effects_baked,
         ),
         (
-            "wall and glow shadows drawn by an SVG filter (a Gaussian blur for the disc blur)",
+            "shadows drawn by an SVG filter (a Gaussian blur for the disc blur; floor shadows by a mapped copy)",
             s.shadows_baked,
         ),
         (

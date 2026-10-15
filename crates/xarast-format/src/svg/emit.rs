@@ -1566,6 +1566,13 @@ impl<'d, 'b> Emitter<'d, 'b> {
     /// extent the writer does not know, takes the element's own box with a
     /// wide margin instead.
     fn effect_region(&self, n: NodeId, size: Mp) -> effect::Region {
+        self.effect_region_mapped(n, size, None)
+    }
+
+    /// [`effect_region`](Self::effect_region) for content that is also
+    /// drawn through a document-space affine map (a floor shadow's copy):
+    /// the box covers the objects and their image.
+    fn effect_region_mapped(&self, n: NodeId, size: Mp, map: Option<[f64; 6]>) -> effect::Region {
         let tree = &self.doc.tree;
         let mut widest = 0i64;
         let mut b = xarast_geom::Rect::EMPTY;
@@ -1598,6 +1605,17 @@ impl<'d, 'b> Emitter<'d, 'b> {
             .saturating_mul(2)
             .saturating_add(i64::from(size.raw()))
             .saturating_add(1000);
+        if let Some(m) = map {
+            let (bx0, by0) = (f64::from(b.lo.x.raw()), f64::from(b.lo.y.raw()));
+            let (bx1, by1) = (f64::from(b.hi.x.raw()), f64::from(b.hi.y.raw()));
+            let mut r = b;
+            for (x, y) in [(bx0, by0), (bx1, by0), (bx0, by1), (bx1, by1)] {
+                let q =
+                    Point::from_f64_round(m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
+                r = r.union(xarast_geom::Rect::new(q, q));
+            }
+            b = r;
+        }
         let (x0, y0) = self.frame.pt(Point::new(b.lo.x, b.hi.y));
         let (x1, y1) = self.frame.pt(Point::new(b.hi.x, b.lo.y));
         effect::Region::User {
@@ -1869,7 +1887,14 @@ impl<'d, 'b> Emitter<'d, 'b> {
         }
         self.own_feather(n, &mut el);
         if let Some(sh) = shadow {
-            self.bake_shadow(n, &mut el, sh);
+            if let Some(copy) = self.bake_shadow(n, &mut el, sh) {
+                let pad = if self.pretty {
+                    format!("\n{}", " ".repeat(self.depth + 1))
+                } else {
+                    String::new()
+                };
+                prelude = Some(format!("{}{pad}{copy}", prelude.unwrap_or_default()));
+            }
         }
         if let Some(bv) = bevel {
             self.bake_bevel(n, &mut el, bv);
@@ -1916,20 +1941,36 @@ impl<'d, 'b> Emitter<'d, 'b> {
         self.stats.bevels_baked += 1;
     }
 
-    /// Draws a controller's shadow in a browser (`svg/effect.rs`): a filter
-    /// on the controller, which holds the object, that paints the shadow
-    /// under it. Derived from the parameters at every save and ignored by
-    /// the reader.
+    /// Draws a controller's shadow in a browser (`svg/effect.rs`), derived
+    /// from the parameters at every save and ignored by the reader.
     ///
-    /// Left unbaked, and reported: a floor shadow (a filter cannot map the
-    /// silhouette through an affine map), and any shadow whose controller
-    /// also owns a feather (one `filter` per element; the renderer
-    /// feathers the shadow along with the object, which no corpus file
-    /// does).
-    fn bake_shadow(&mut self, n: NodeId, el: &mut El, sh: &xarast_doc::ShadowParams) {
-        if sh.kind == xarast_doc::ShadowKind::Floor || el.has("filter") {
+    /// A wall or glow shadow is a filter on the controller, which holds the
+    /// object, that paints the shadow under it. A floor shadow, whose
+    /// affine map no filter can apply, and any shadow whose controller also
+    /// owns a feather (one `filter` per element), are drawn by a derived
+    /// copy instead: a wrapper `<g xarast:derived="shadow">` placed before
+    /// the object, holding a `<use>` of it (mapped for a floor) and
+    /// carrying the shadow-only filter. The controller's feather then
+    /// feathers the shadow with the object, as the renderer does. The
+    /// reader skips every `xarast:derived` element.
+    ///
+    /// Returns the copy's markup, to go after the controller's parameters.
+    fn bake_shadow(
+        &mut self,
+        n: NodeId,
+        el: &mut El,
+        sh: &xarast_doc::ShadowParams,
+    ) -> Option<String> {
+        let floor = sh.kind == xarast_doc::ShadowKind::Floor;
+        let copy = floor || el.has("filter");
+        let parts = if copy {
+            xarast_doc::live::parts(&self.doc.tree, n)
+        } else {
+            None
+        };
+        if copy && parts.is_none() {
             self.stats.shadows_unbaked += 1;
-            return;
+            return None;
         }
         let pt = |v: i64| v as f64 / 1000.0;
         let (dx, dy) = match sh.kind {
@@ -1946,8 +1987,19 @@ impl<'d, 'b> Emitter<'d, 'b> {
         let blur = f64::from(sh.blur.raw().max(0));
         let rgba = sh.colour.resolve(&self.doc.resources.colours).to_rgba8();
         let (hex, _) = self.shadow_colour(&sh.colour);
+        // The floor map, in the document's frame, anchored on the source's
+        // bounds as the renderer anchors it.
+        let map = parts.as_ref().filter(|_| floor).map(|p| {
+            let tree = &self.doc.tree;
+            // Computed, never read from the cache, and without the line
+            // width (the walker's anchor includes it, but where the width
+            // lives moves between a built document and a read one), so a
+            // save is a function of the model alone and a fixed point.
+            let src = xarast_doc::bounds::compute_bounds_with(tree, p.source, Mp::ZERO);
+            sh.silhouette_map(src)
+        });
         let reach = blur + glow + (dx.abs().max(dy.abs()) * 1000.0).ceil();
-        let region = self.effect_region(n, Mp::from_f64_round(reach.min(1e9)));
+        let region = self.effect_region_mapped(n, Mp::from_f64_round(reach.min(1e9)), map);
         let spec = effect::Shadow {
             offset: (dx, dy),
             penumbra: blur / 1000.0,
@@ -1957,10 +2009,29 @@ impl<'d, 'b> Emitter<'d, 'b> {
             profile: xarast_geom::BiasGain::new(-sh.profile.bias, sh.profile.gain),
             colour: &hex,
             opacity: f64::from(rgba.a) / 255.0 * f64::from(sh.opacity_level()) / 255.0,
+            keep_source: !copy,
         };
         let id = effect::shadow(&spec, region).finish(&mut self.defs);
-        el.a("filter", format!("url(#{id})"));
         self.stats.shadows_baked += 1;
+        let Some(parts) = parts else {
+            el.a("filter", format!("url(#{id})"));
+            return None;
+        };
+        let mut s = format!(
+            "<g xarast:derived=\"shadow\" filter=\"url(#{id})\"><use href=\"#{}\"",
+            node_id(self.doc, parts.source)
+        );
+        if let Some(m) = map {
+            // F · M · F⁻¹ for the frame's flip F (`Frame::pt`), in points.
+            let (ox, oy) = (self.frame.ox as f64, self.frame.oy as f64);
+            let e = (m[0] * ox + m[2] * oy + m[4] - ox) / 1000.0;
+            let f = (oy - m[1] * ox - m[3] * oy - m[5]) / 1000.0;
+            let v = [m[0], -m[1], -m[2], m[3], e, f];
+            let v: Vec<String> = v.iter().map(|x| f64s(*x, 6)).collect();
+            s.push_str(&format!(" transform=\"matrix({})\"", v.join(" ")));
+        }
+        s.push_str("/></g>");
+        Some(s)
     }
 
     /// A text story (`research/06 §6.7`, `svg/text.rs`): `<text>` with one
