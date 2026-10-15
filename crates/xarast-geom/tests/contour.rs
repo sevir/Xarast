@@ -106,6 +106,43 @@ proptest! {
         }
     }
 
+    /// An inset past the inradius leaves nothing, curves or not: the band
+    /// of a stroked outline cancels itself there, and the first version
+    /// kept the whole region.
+    #[test]
+    fn an_inset_past_the_inradius_leaves_nothing(
+        pts in points(),
+        bulge in -40_000i32..40_000,
+        extra in 1.0f64..1e6,
+        j in 0u8..3,
+    ) {
+        let mut b = Path::builder();
+        let mut it = pts.iter();
+        if let Some(&(x, y)) = it.next() {
+            b.move_to(Point::raw(x, y));
+            for &(x, y) in it {
+                b.cubic_to(
+                    Point::raw(x + bulge, y - bulge),
+                    Point::raw(x - bulge, y + bulge),
+                    Point::raw(x, y),
+                );
+            }
+            b.close();
+        }
+        let input = b.build();
+        let clean = self_union(&input, FillRule::NonZero, TOL);
+        prop_assume!(!clean.is_empty());
+        let r = clean.tight_bounds();
+        let w = f64::from(r.hi.x.raw() - r.lo.x.raw());
+        let h = f64::from(r.hi.y.raw() - r.lo.y.raw());
+        let d = w.min(h) / 2.0 + extra;
+        let inn = offset_clean(&clean, -d, join_of(j), CONTOUR_MITRE_LIMIT, TOL);
+        prop_assert!(inn.is_empty(), "{} left of {}", area(&inn), area(&clean));
+        let out = offset_clean(&clean, d, join_of(j), CONTOUR_MITRE_LIMIT, TOL);
+        assert_sane(&out, &input, "curved outer");
+        prop_assert!(area(&out) >= area(&clean));
+    }
+
     #[test]
     fn hostile_distances_and_rules_never_panic(
         pts in points(),

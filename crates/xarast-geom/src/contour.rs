@@ -24,10 +24,7 @@
 //! the curve-fitting tolerance grows with the distance, so neither the
 //! coordinates nor the output's size can run away on hostile input.
 
-use crate::{
-    BiasGain, BoolOp, Cap, FillRule, Join, Mp, Path, StrokeStyle, Tolerance, boolean, self_union,
-    stroke_to_path,
-};
+use crate::{BiasGain, BoolOp, FillRule, Join, Path, Tolerance, boolean, self_union};
 
 /// The mitre limit the original contours with: `751941` in 16.16 fixed
 /// point (`Kernel/paths.h:467`), about 11.47 — the PostScript ratio of
@@ -81,35 +78,219 @@ pub fn offset_clean(
     if clean.is_empty() || d.abs() < 0.5 {
         return clean.clone();
     }
-    // The band: twice the distance wide, centred on the outline. Every
-    // subpath of a clean region is closed, so there are no caps.
-    let width = Mp::from_f64_round(2.0 * d.abs());
-    if width.raw() <= 0 {
-        return clean.clone();
-    }
     let limit = if mitre_limit.is_finite() && mitre_limit >= 1.0 {
         mitre_limit
     } else {
         CONTOUR_MITRE_LIMIT
     };
-    let style = StrokeStyle {
-        width,
-        cap_start: Cap::Butt,
-        cap_end: Cap::Butt,
-        join,
-        mitre_limit: limit,
-        dash: None,
-    };
+    // A region fits in its box, so nothing of it lies further than half
+    // the box's smaller side from its outline: a deeper inset is empty.
+    if d < 0.0 {
+        let r = clean.tight_bounds();
+        let w = f64::from(r.hi.x.raw()) - f64::from(r.lo.x.raw());
+        let h = f64::from(r.hi.y.raw()) - f64::from(r.lo.y.raw());
+        if -d >= w.min(h) / 2.0 {
+            return Path::new();
+        }
+    }
     let fit = Tolerance(tol.get().max(d.abs() * RELATIVE_TOLERANCE));
-    let Ok(band) = stroke_to_path(clean, &style, fit) else {
-        return clean.clone();
-    };
+    let band = band(clean, d.abs(), join, limit, fit);
     let op = if d > 0.0 {
         BoolOp::Union
     } else {
         BoolOp::Difference
     };
     boolean(clean, &band, op, FillRule::NonZero, fit)
+}
+
+/// Everything within `d` of a clean region's outline, as pieces that are
+/// all oriented counter-clockwise, so that the non-zero rule unions them
+/// and no two can cancel: one rectangle per edge of the flattened outline
+/// (holding the edge's own end points, so that it meets its neighbours'
+/// joins exactly), and on the outside of every turn the join's wedge — a
+/// sector of the disc for a round join, the mitre's quadrilateral within
+/// the limit, the bevel's triangle otherwise.
+///
+/// Why not the stroker: a stroke of a closed outline is two contours of
+/// opposite orientation, and where the inner one loops back over itself
+/// (a distance beyond the curvature, or beyond the region's inradius) the
+/// windings cancel to zero, leaving holes in the band that an inset then
+/// keeps. The first version did that, and the property tests found it.
+fn band(clean: &Path, d: f64, join: Join, limit: f64, tol: Tolerance) -> Path {
+    let mut b = Pieces::new(tol);
+    // The arc step that keeps a sector within `tol` of the true circle.
+    let step = (2.0 * (1.0 - (tol.get() / d).min(1.0)).acos()).max(1e-3);
+    for poly in crate::flatten(clean, tol) {
+        let mut pts: Vec<(f64, f64)> = Vec::with_capacity(poly.points.len());
+        for p in &poly.points {
+            let q = (p.x.to_f64(), p.y.to_f64());
+            if pts.last() != Some(&q) {
+                pts.push(q);
+            }
+        }
+        while pts.len() > 1 && pts.first() == pts.last() {
+            pts.pop();
+        }
+        let n = pts.len();
+        if n < 2 {
+            continue;
+        }
+        // Each edge's left unit normal.
+        let normals: Vec<(f64, f64)> = (0..n)
+            .map(|i| {
+                let (a, c) = (pts[i], pts[(i + 1) % n]);
+                let (dx, dy) = (c.0 - a.0, c.1 - a.1);
+                let len = dx.hypot(dy);
+                (-dy / len, dx / len)
+            })
+            .collect();
+        let off = |p: (f64, f64), nrm: (f64, f64), s: f64| {
+            crate::Point::from_f64_round(p.0 + s * nrm.0 * d, p.1 + s * nrm.1 * d)
+        };
+        let pt = |p: (f64, f64)| crate::Point::from_f64_round(p.0, p.1);
+        for i in 0..n {
+            let (a, c, nrm) = (pts[i], pts[(i + 1) % n], normals[i]);
+            b.piece(&[
+                pt(a),
+                off(a, nrm, 1.0),
+                off(c, nrm, 1.0),
+                pt(c),
+                off(c, nrm, -1.0),
+                off(a, nrm, -1.0),
+            ]);
+            // The turn at vertex `i + 1`, from edge `i` to edge `i + 1`.
+            let v = (i + 1) % n;
+            let (p, n1, n2) = (pts[v], normals[i], normals[v]);
+            let cross = n1.0 * n2.1 - n1.1 * n2.0;
+            let dot = n1.0 * n2.0 + n1.1 * n2.1;
+            if cross.abs() < 1e-12 && dot > 0.0 {
+                continue;
+            }
+            // A left turn bulges on the right, and the other way round.
+            let s = if cross > 0.0 { -1.0 } else { 1.0 };
+            let (s1, s2) = ((s * n1.0, s * n1.1), (s * n2.0, s * n2.1));
+            let theta = dot.clamp(-1.0, 1.0).acos();
+            let mut ring = vec![pt(p), off(p, s1, 1.0)];
+            match join {
+                Join::Round => {
+                    let k = ((theta / step).ceil() as usize).clamp(1, 1024);
+                    let a0 = s1.1.atan2(s1.0);
+                    let sweep = if s1.0 * s2.1 - s1.1 * s2.0 >= 0.0 {
+                        theta
+                    } else {
+                        -theta
+                    };
+                    for j in 1..k {
+                        let a = a0 + sweep * (j as f64 / k as f64);
+                        ring.push(off(p, (a.cos(), a.sin()), 1.0));
+                    }
+                }
+                Join::Mitre => {
+                    let half = (theta / 2.0).cos();
+                    if half > 0.0 && 1.0 / half <= limit {
+                        let (mx, my) = (s1.0 + s2.0, s1.1 + s2.1);
+                        let m = mx.hypot(my);
+                        if m > 0.0 {
+                            ring.push(off(p, (mx / m, my / m), 1.0 / half));
+                        }
+                    }
+                }
+                Join::Bevel => {}
+            }
+            ring.push(off(p, s2, 1.0));
+            b.piece(&ring);
+        }
+    }
+    b.finish()
+}
+
+/// The band's pieces, unioned in a balanced tree: runs of neighbouring
+/// pieces first, then pairs of runs. One sweep over every piece at once
+/// meets every crossing of every pair of overlapping pieces, which a wide
+/// band over a detailed outline makes quadratic (100 s for a 1 000-edge
+/// outline grown by ten times its size); a union's outline is about as
+/// long as its pieces' together, so the tree stays near linear.
+struct Pieces {
+    tol: Tolerance,
+    run: crate::PathBuilder,
+    in_run: usize,
+    unions: Vec<Path>,
+}
+
+impl Pieces {
+    /// How many pieces one run holds.
+    const RUN: usize = 16;
+
+    fn new(tol: Tolerance) -> Pieces {
+        Pieces {
+            tol,
+            run: Path::builder(),
+            in_run: 0,
+            unions: Vec::new(),
+        }
+    }
+
+    fn piece(&mut self, pts: &[crate::Point]) {
+        if piece(&mut self.run, pts) {
+            self.in_run += 1;
+            if self.in_run == Self::RUN {
+                self.flush();
+            }
+        }
+    }
+
+    fn flush(&mut self) {
+        if self.in_run > 0 {
+            let run = std::mem::replace(&mut self.run, Path::builder()).build();
+            self.unions
+                .push(self_union(&run, FillRule::NonZero, self.tol));
+            self.in_run = 0;
+        }
+    }
+
+    fn finish(mut self) -> Path {
+        self.flush();
+        let mut level = self.unions;
+        while level.len() > 1 {
+            let mut next = Vec::with_capacity(level.len().div_ceil(2));
+            let mut it = level.into_iter();
+            while let Some(a) = it.next() {
+                next.push(match it.next() {
+                    Some(b) => boolean(&a, &b, BoolOp::Union, FillRule::NonZero, self.tol),
+                    None => a,
+                });
+            }
+            level = next;
+        }
+        level.pop().unwrap_or_default()
+    }
+}
+
+/// Appends one closed piece, counter-clockwise whatever its order;
+/// `false` for a piece with no area.
+fn piece(b: &mut crate::PathBuilder, pts: &[crate::Point]) -> bool {
+    let area: f64 = (0..pts.len())
+        .map(|i| {
+            let (p, q) = (pts[i], pts[(i + 1) % pts.len()]);
+            p.x.to_f64() * q.y.to_f64() - q.x.to_f64() * p.y.to_f64()
+        })
+        .sum();
+    if area == 0.0 {
+        return false;
+    }
+    let mut it: Box<dyn Iterator<Item = &crate::Point>> = if area > 0.0 {
+        Box::new(pts.iter())
+    } else {
+        Box::new(pts.iter().rev())
+    };
+    if let Some(first) = it.next() {
+        b.move_to(*first);
+        for p in it {
+            b.line_to(*p);
+        }
+        b.close();
+    }
+    true
 }
 
 /// A distance with NaN as zero, infinities and huge values clamped.
