@@ -553,8 +553,23 @@ impl<'d> Tx<'d> {
     }
 
     /// Links a node into the tree.
+    ///
+    /// A generated node refuses every edit, except that one this
+    /// transaction created may be furnished before it is used: a command
+    /// that builds a live object gives its new generated node the
+    /// attribute children it starts with (a contour's colours).
     pub fn attach(&mut self, node: NodeId, anchor: NodeId, how: Attach) -> Result<(), EditError> {
-        self.check_permitted(anchor)?;
+        let furnishing = how == Attach::LastChild
+            && self.created.contains(&anchor)
+            && self.created.contains(&node)
+            && !self
+                .doc
+                .tree
+                .get(anchor)
+                .is_some_and(|n| n.flags.contains(NodeFlags::LOCKED));
+        if !furnishing {
+            self.check_permitted(anchor)?;
+        }
         self.act(Action::Attach { node, anchor, how })?;
         // A new attribute recolours what it applies to (§8.5 rule 2).
         if matches!(self.doc.tree.kind(node), Some(NodeKind::Attr(_)))
@@ -638,12 +653,22 @@ impl<'d> Tx<'d> {
                     && l.kind.discriminant() == kind.discriminant() => {}
             _ => return Err(EditError::WrongKind(controller)),
         }
-        let mut nodes = vec![controller];
-        nodes.extend(tree.children(controller).filter(|c| {
+        let same = |c: &NodeId| {
             matches!(tree.kind(*c), Some(NodeKind::Live(x))
                 if x.role != LiveRole::Controller
                     && x.kind.discriminant() == kind.discriminant())
-        }));
+        };
+        let mut nodes = vec![controller];
+        nodes.extend(tree.children(controller).filter(same));
+        // A blend's generated nodes stand between its objects, under its
+        // source: they carry the parameters too.
+        if let Some(p) = crate::live::parts(tree, controller) {
+            nodes.extend(tree.children(p.source).filter(|c| {
+                same(c)
+                    && matches!(tree.kind(*c), Some(NodeKind::Live(x))
+                        if x.role == LiveRole::Generated)
+            }));
+        }
         for n in nodes {
             let Some(NodeKind::Live(old)) = self.doc.tree.kind(n) else {
                 continue;

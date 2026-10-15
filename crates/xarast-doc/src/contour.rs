@@ -61,16 +61,29 @@ const BLENDED: [AttrSlot; 5] = [
 /// attributes.
 #[must_use]
 pub fn generate(doc: &Document, controller: NodeId) -> Option<Vec<GeneratedShape>> {
+    generate_with(doc, controller, None)
+}
+
+/// [`generate`] with `params` in place of the controller's own, when
+/// given: what a drag of a contour's width or steps previews before
+/// anything is in the document.
+#[must_use]
+pub fn generate_with(
+    doc: &Document,
+    controller: NodeId,
+    params: Option<&ContourParams>,
+) -> Option<Vec<GeneratedShape>> {
     let tree = &doc.tree;
     let Some(NodeKind::Live(l)) = tree.kind(controller) else {
         return None;
     };
-    let LiveKind::Contour(params) = &l.kind else {
+    let LiveKind::Contour(own) = &l.kind else {
         return None;
     };
     if l.role != LiveRole::Controller {
         return None;
     }
+    let params = params.unwrap_or(own);
     let p = parts(tree, controller)?;
     let start = resolve_uncached(tree, p.generated.unwrap_or(controller), &doc.defaults);
     let inks = ink_nodes(tree, p.source);

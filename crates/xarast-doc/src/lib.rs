@@ -128,8 +128,8 @@ pub use photo::{
     replaced_placement,
 };
 pub use regen::{
-    FlushReport, GeneratedShape, LiveCache, LiveOutput, RegenError, RegenKey, RegenQueue,
-    regen_key, regenerate,
+    FlushReport, GeneratedShape, LiveCache, LiveOutput, Moved, RegenError, RegenKey, RegenOverride,
+    RegenQueue, regen_key, regen_key_with, regenerate, regenerate_with,
 };
 pub use resources::{
     ArrowId, BitmapData, BitmapId, BitmapInfo, BitmapResource, BitmapUsage, DashId,

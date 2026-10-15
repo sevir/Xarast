@@ -42,7 +42,7 @@ use crate::document::Document;
 use crate::fill::{FillGeometry, Paint};
 use crate::kind::NodeKind;
 use crate::live::{BlendParams, LiveKind, LiveRole, parts};
-use crate::regen::GeneratedShape;
+use crate::regen::{GeneratedShape, Moved, is_moved};
 use crate::tree::{NodeId, Tree};
 
 /// The ratios one step is drawn at.
@@ -94,16 +94,32 @@ struct End {
 /// `None` when `controller` is not a blend controller with a source.
 #[must_use]
 pub fn generate(doc: &Document, controller: NodeId) -> Option<Vec<Vec<GeneratedShape>>> {
+    generate_with(doc, controller, None, None)
+}
+
+/// [`generate`] as a preview draws it: `params` in place of the
+/// controller's own, and the `moved` objects inside it where the preview
+/// draws them (an end being dragged), outlines and geometry-linked
+/// attributes (fills) through the matrix.
+#[must_use]
+pub fn generate_with(
+    doc: &Document,
+    controller: NodeId,
+    params: Option<&BlendParams>,
+    moved: Option<Moved<'_>>,
+) -> Option<Vec<Vec<GeneratedShape>>> {
     let tree = &doc.tree;
     let Some(NodeKind::Live(l)) = tree.kind(controller) else {
         return None;
     };
-    let LiveKind::Blend(params) = &l.kind else {
+    let LiveKind::Blend(own) = &l.kind else {
         return None;
     };
     if l.role != LiveRole::Controller {
         return None;
     }
+    let params = params.unwrap_or(own);
+    let moved = moved.map(|m| (controller, m));
     let source = parts(tree, controller)?.source;
     let blenders = blenders(tree, source);
     let mut out = Vec::with_capacity(blenders.len());
@@ -112,7 +128,7 @@ pub fn generate(doc: &Document, controller: NodeId) -> Option<Vec<Vec<GeneratedS
             out.push(Vec::new());
             continue;
         };
-        out.push(pair_steps(doc, params, k, start, end));
+        out.push(pair_steps(doc, params, k, start, end, moved));
     }
     Some(out)
 }
@@ -142,7 +158,12 @@ pub fn blenders(tree: &Tree, source: NodeId) -> Vec<(NodeId, Option<NodeId>, Opt
 /// One end: every object under `node` (itself included), its subpaths
 /// aligned. `start_point` applies when the end is a single subpath, as
 /// the original records one only then.
-fn end_of(doc: &Document, node: NodeId, start_point: Option<u32>) -> End {
+fn end_of(
+    doc: &Document,
+    node: NodeId,
+    start_point: Option<u32>,
+    moved: Option<(NodeId, Moved<'_>)>,
+) -> End {
     let tree = &doc.tree;
     let mut end = End {
         attrs: Vec::new(),
@@ -175,7 +196,20 @@ fn end_of(doc: &Document, node: NodeId, start_point: Option<u32>) -> End {
                     _ => (true, true),
                 };
                 let resolved = resolve_uncached(tree, n, &doc.defaults);
-                Some((path, shown_attrs(doc, &resolved, f, s), f, s))
+                let mut attrs = shown_attrs(doc, &resolved, f, s);
+                // An object a preview moves blends from where it is drawn.
+                let path = match moved {
+                    Some((c, m)) if is_moved(tree, c, n, &m) => {
+                        for a in &mut attrs {
+                            if a.linked_to_geometry() {
+                                a.transform(m.matrix);
+                            }
+                        }
+                        path.transformed(m.matrix)
+                    }
+                    _ => path,
+                };
+                Some((path, attrs, f, s))
             })
             .collect(),
     };
@@ -211,10 +245,11 @@ fn pair_steps(
     k: usize,
     start: NodeId,
     end: NodeId,
+    moved: Option<(NodeId, Moved<'_>)>,
 ) -> Vec<GeneratedShape> {
     let blender = params.blender(k);
-    let a = end_of(doc, start, blender.start_index);
-    let b = end_of(doc, end, blender.end_index);
+    let a = end_of(doc, start, blender.start_index, moved);
+    let b = end_of(doc, end, blender.end_index, moved);
     let (na, nb) = (a.pieces.len(), b.pieces.len());
     // Explicit pairs when every index names a subpath; else the stepper.
     let explicit: Vec<(usize, usize)> = blender

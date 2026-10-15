@@ -40,7 +40,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use xarast_geom::Path;
+use xarast_geom::{Matrix, Path};
 
 use crate::attr::AttrValue;
 use crate::digest::{Canon, CanonicalHasher};
@@ -70,10 +70,76 @@ fn quantised_dpi(dpi: f64) -> u64 {
     }
 }
 
+/// Objects a preview draws moved: the nodes and the matrix they move by
+/// (the tools' `Preview::transform`).
+#[derive(Copy, Clone, Debug)]
+pub struct Moved<'a> {
+    /// The moved nodes (each with its subtree).
+    pub nodes: &'a [NodeId],
+    /// How they move.
+    pub matrix: Matrix,
+}
+
+/// What a preview draws a controller with in place of the document's
+/// state: other parameters (a drag of a contour's width, a blend's steps)
+/// and objects inside it moved (a blend's end dragged). Nothing here is
+/// in the document; the output it gives is keyed apart from the
+/// document's own ([`regen_key_with`]).
+#[derive(Copy, Clone, Debug, Default)]
+pub struct RegenOverride<'a> {
+    /// Parameters in place of the controller's (same kind).
+    pub kind: Option<&'a LiveKind>,
+    /// Objects moved by a preview.
+    pub moved: Option<Moved<'a>>,
+}
+
+impl<'a> RegenOverride<'a> {
+    /// The moved nodes strictly inside `controller` (a move of the
+    /// controller itself, or of something holding it, moves its output
+    /// whole and changes nothing it derives).
+    #[must_use]
+    pub fn moved_inside(&self, tree: &Tree, controller: NodeId) -> Option<Moved<'a>> {
+        let m = self.moved?;
+        m.nodes
+            .iter()
+            .any(|n| *n != controller && tree.ancestors(*n).any(|a| a == controller))
+            .then_some(m)
+    }
+
+    /// Whether this override changes nothing for `controller`.
+    #[must_use]
+    pub fn is_inert(&self, tree: &Tree, controller: NodeId) -> bool {
+        self.kind.is_none() && self.moved_inside(tree, controller).is_none()
+    }
+}
+
+/// Whether `node` (or what holds it, up to `controller`) is among the
+/// moved nodes.
+#[must_use]
+pub fn is_moved(tree: &Tree, controller: NodeId, node: NodeId, moved: &Moved<'_>) -> bool {
+    std::iter::once(node)
+        .chain(tree.ancestors(node).take_while(|a| *a != controller))
+        .any(|n| moved.nodes.contains(&n))
+}
+
 /// The key of `controller`'s current state at `dpi`, or `None` when it is
 /// not a controller.
 #[must_use]
 pub fn regen_key(doc: &Document, controller: NodeId, dpi: f64) -> Option<RegenKey> {
+    regen_key_with(doc, controller, dpi, RegenOverride::default())
+}
+
+/// The key of `controller`'s state at `dpi` as a preview draws it: the
+/// override's parameters in place of its own, and its moved objects
+/// where they are drawn. Equal to [`regen_key`] for an override that
+/// changes nothing here, so a preview finds the committed output.
+#[must_use]
+pub fn regen_key_with(
+    doc: &Document,
+    controller: NodeId,
+    dpi: f64,
+    over: RegenOverride<'_>,
+) -> Option<RegenKey> {
     let tree = &doc.tree;
     let Some(NodeKind::Live(l)) = tree.kind(controller) else {
         return None;
@@ -84,9 +150,13 @@ pub fn regen_key(doc: &Document, controller: NodeId, dpi: f64) -> Option<RegenKe
     let mut h = CanonicalHasher::new();
     h.str("xarast-regen-key/1");
     // The parameters, not the regeneration flag or the name.
+    let kind = match over.kind {
+        Some(k) if k.discriminant() == l.kind.discriminant() => k.clone(),
+        _ => l.kind.clone(),
+    };
     LiveNode {
         role: LiveRole::Controller,
-        kind: l.kind.clone(),
+        kind,
         regen: RegenState::Clean,
         name: None,
     }
@@ -124,6 +194,19 @@ pub fn regen_key(doc: &Document, controller: NodeId, dpi: f64) -> Option<RegenKe
     }
     h.u64(tree.resources_rev());
     h.u64(quantised_dpi(dpi));
+    // Objects a preview moves: which, and by how much.
+    if let Some(m) = over.moved_inside(tree, controller) {
+        h.str("moved");
+        for n in m.nodes {
+            h.u32(tree.get(*n).map_or(0, |d| d.tag.0));
+        }
+        let x = m.matrix;
+        for c in [x.a, x.b, x.c, x.d] {
+            h.u64(c.to_bits());
+        }
+        h.u64(u64::from(x.e.raw().cast_unsigned()));
+        h.u64(u64::from(x.f.raw().cast_unsigned()));
+    }
     Some(RegenKey(h.finish()))
 }
 
@@ -180,6 +263,22 @@ pub enum RegenError {
 ///
 /// [`RegenError`] when `controller` is not a controller with a source.
 pub fn regenerate(doc: &Document, controller: NodeId, dpi: f64) -> Result<LiveOutput, RegenError> {
+    regenerate_with(doc, controller, dpi, RegenOverride::default())
+}
+
+/// [`regenerate`] as a preview draws the controller: with the override's
+/// parameters and moved objects (contours take other parameters; blends
+/// both). Reads the document and writes nothing.
+///
+/// # Errors
+///
+/// As [`regenerate`].
+pub fn regenerate_with(
+    doc: &Document,
+    controller: NodeId,
+    dpi: f64,
+    over: RegenOverride<'_>,
+) -> Result<LiveOutput, RegenError> {
     let _ = dpi;
     let Some(NodeKind::Live(l)) = doc.tree.kind(controller) else {
         return Err(RegenError::NotAController(controller));
@@ -194,11 +293,26 @@ pub fn regenerate(doc: &Document, controller: NodeId, dpi: f64) -> Result<LiveOu
     // one line, and a new kind cannot be added without deciding.
     Ok(match &l.kind {
         // Geometry, independent of the resolution.
-        LiveKind::Contour(_) => match crate::contour::generate(doc, controller) {
+        LiveKind::Contour(_) => match crate::contour::generate_with(
+            doc,
+            controller,
+            match over.kind {
+                Some(LiveKind::Contour(p)) => Some(p),
+                _ => None,
+            },
+        ) {
             Some(shapes) => LiveOutput::Shapes(Arc::from(shapes)),
             None => LiveOutput::Stored,
         },
-        LiveKind::Blend(_) => match crate::blend::generate(doc, controller) {
+        LiveKind::Blend(_) => match crate::blend::generate_with(
+            doc,
+            controller,
+            match over.kind {
+                Some(LiveKind::Blend(p)) => Some(p),
+                _ => None,
+            },
+            over.moved_inside(&doc.tree, controller),
+        ) {
             Some(groups) => {
                 LiveOutput::Groups(groups.into_iter().map(Arc::from).collect::<Vec<_>>().into())
             }
@@ -224,6 +338,8 @@ pub type Generator<'a> = dyn FnMut(&Document, NodeId, f64) -> Result<LiveOutput,
 #[derive(Clone, Debug, Default)]
 pub struct LiveCache {
     entries: HashMap<NodeId, (RegenKey, Arc<LiveOutput>)>,
+    /// How many outputs this cache has computed in its life.
+    regenerated: u64,
 }
 
 impl LiveCache {
@@ -260,6 +376,14 @@ impl LiveCache {
         self.entries.is_empty()
     }
 
+    /// How many outputs this cache has computed in its life: a frame that
+    /// computes none leaves it unchanged, a drag frame adds one per
+    /// controller it changes.
+    #[must_use]
+    pub const fn regenerated(&self) -> u64 {
+        self.regenerated
+    }
+
     /// Forgets every controller no longer in `tree` (a delete the history
     /// has let go of, a document replaced).
     pub fn retain_alive(&mut self, tree: &Tree) {
@@ -286,10 +410,27 @@ impl LiveCache {
         dpi: f64,
         generate: &mut Generator<'_>,
     ) -> Option<(RegenKey, Arc<LiveOutput>)> {
-        let key = regen_key(doc, controller, dpi)?;
+        self.current_or_regenerate_with(doc, controller, dpi, RegenOverride::default(), generate)
+    }
+
+    /// [`current_or_regenerate`](Self::current_or_regenerate) for a
+    /// preview: keyed by [`regen_key_with`]; `generate` is expected to
+    /// honour the same override. A drag regenerates once per frame that
+    /// changes the override, never for a frame that repeats it, and the
+    /// output it leaves is replaced (once) when the document catches up.
+    pub fn current_or_regenerate_with(
+        &mut self,
+        doc: &Document,
+        controller: NodeId,
+        dpi: f64,
+        over: RegenOverride<'_>,
+        generate: &mut Generator<'_>,
+    ) -> Option<(RegenKey, Arc<LiveOutput>)> {
+        let key = regen_key_with(doc, controller, dpi, over)?;
         if let Some(out) = self.current(controller, key) {
             return Some((key, Arc::clone(out)));
         }
+        self.regenerated += 1;
         match generate(doc, controller, dpi) {
             Ok(out) => {
                 let out = Arc::new(out);
@@ -460,6 +601,7 @@ fn run(
             report.unchanged += 1;
             continue;
         }
+        cache.regenerated += 1;
         match generate(doc, id, dpi) {
             Ok(out) => {
                 cache.entries.insert(id, (key, Arc::new(out)));

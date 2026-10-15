@@ -184,3 +184,69 @@ fn a_hostile_step_count_is_clamped() {
     assert_eq!(p.drawn_steps(), 999);
     assert_eq!(BlendParams::default().drawn_steps(), 5);
 }
+
+#[test]
+fn a_preview_override_regenerates_apart_and_an_inert_one_finds_the_committed_output() {
+    use crate::regen::{
+        LiveCache, Moved, RegenOverride, regen_key, regen_key_with, regenerate_with,
+    };
+    use xarast_geom::{Matrix, Vector};
+    let params = BlendParams::default();
+    let (doc, c) = blend(&params, 2);
+    let source = parts(&doc.tree, c).unwrap().source;
+    let end = doc.tree.children(source).next_back().unwrap();
+    // Nothing overridden: the same key, the same output.
+    assert_eq!(
+        regen_key_with(&doc, c, 0.0, RegenOverride::default()),
+        regen_key(&doc, c, 0.0)
+    );
+    // Other parameters: another key, the output those parameters give.
+    let more = LiveKind::Blend(Box::new(BlendParams {
+        steps: 9,
+        ..params.clone()
+    }));
+    let over = RegenOverride {
+        kind: Some(&more),
+        moved: None,
+    };
+    assert_ne!(regen_key_with(&doc, c, 0.0, over), regen_key(&doc, c, 0.0));
+    let LiveOutput::Groups(g) = regenerate_with(&doc, c, 0.0, over).unwrap() else {
+        panic!("groups")
+    };
+    assert_eq!(g[0].len(), 9);
+    // An end moved: the steps follow it; moving the controller itself
+    // changes nothing it derives.
+    let m = Matrix::translate(Vector::raw(0, 5_000));
+    let nodes = [end];
+    let moved = RegenOverride {
+        kind: None,
+        moved: Some(Moved {
+            nodes: &nodes,
+            matrix: m,
+        }),
+    };
+    assert_ne!(regen_key_with(&doc, c, 0.0, moved), regen_key(&doc, c, 0.0));
+    let (LiveOutput::Groups(a), LiveOutput::Groups(b)) = (
+        regenerate_with(&doc, c, 0.0, RegenOverride::default()).unwrap(),
+        regenerate_with(&doc, c, 0.0, moved).unwrap(),
+    ) else {
+        panic!("groups")
+    };
+    assert!(a[0][2].path.bounds().hi.y < b[0][2].path.bounds().hi.y);
+    let whole = [c];
+    let inert = RegenOverride {
+        kind: None,
+        moved: Some(Moved {
+            nodes: &whole,
+            matrix: m,
+        }),
+    };
+    assert!(inert.is_inert(&doc.tree, c));
+    assert_eq!(regen_key_with(&doc, c, 0.0, inert), regen_key(&doc, c, 0.0));
+    // The cache counts what it computes, once per state.
+    let mut cache = LiveCache::new();
+    let mut generate = |d: &Document, n: NodeId, dpi: f64| regenerate_with(d, n, dpi, over);
+    cache.current_or_regenerate_with(&doc, c, 0.0, over, &mut generate);
+    cache.current_or_regenerate_with(&doc, c, 0.0, over, &mut generate);
+    assert_eq!(cache.regenerated(), 1);
+}
