@@ -2,13 +2,14 @@
 id: XARA-T-0319
 type: task
 title: "perf: re-base render-10k/render-100k gates on whole-frame rasterisation (bench render --whole)"
-status: in_progress
+status: done
 priority: high
 author: mcp
 labels: [perf, ci, render]
 created: 2026-09-24T20:11:50Z
-updated: 2026-10-15T12:14:12Z
+updated: 2026-10-15T12:38:54Z
 started: 2026-10-15T12:14:12Z
+closed: 2026-10-15T12:38:54Z
 ---
 
 ## Description
