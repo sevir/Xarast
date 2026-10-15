@@ -2185,6 +2185,14 @@ fn bevel_of(doc: &Document, node: NodeId) -> Option<(LayerEffect, Mp)> {
         },
         |c| c.resolve(&doc.resources.colours).to_rgba8(),
     );
+    // An inner band in its first object's flat fill, as the original's
+    // bevel node paints it over the objects.
+    let inner_colour = if p.outer {
+        None
+    } else {
+        p.flat_paint(&doc.tree, node, &doc.defaults)
+            .map(|c| c.resolve(&doc.resources.colours).to_rgba8())
+    };
     let indent = f64::from(p.indent.raw());
     // The join the bevel node finds applied to it (`Kernel/nodebev.cpp:
     // 845-850`): the controller's attributes before it and its ancestors'.
@@ -2206,8 +2214,9 @@ fn bevel_of(doc: &Document, node: NodeId) -> Option<(LayerEffect, Mp)> {
         light_angle: p.light_angle,
         light_tilt: p.light_tilt,
         contrast: p.contrast,
-        colour,
+        colour: inner_colour.unwrap_or(colour),
         join,
+        paint_inner: inner_colour.is_some(),
     }));
     Some((effect, p.indent))
 }

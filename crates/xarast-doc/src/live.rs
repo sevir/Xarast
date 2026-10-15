@@ -364,20 +364,7 @@ impl BevelParams {
         if let Some(c) = &self.colour {
             return Some(c.clone());
         }
-        let source = parts(tree, controller)?.source;
-        let first = tree.preorder(source).find(|&n| {
-            matches!(
-                tree.kind(n),
-                Some(
-                    NodeKind::Path(_)
-                        | NodeKind::Shape(_)
-                        | NodeKind::QuickShape(_)
-                        | NodeKind::TextItem(_)
-                )
-            )
-        })?;
-        let attrs = crate::attr::resolve_uncached(tree, first, defaults);
-        let mut paint = attrs.fill().clone();
+        let mut paint = first_fill(tree, controller, defaults)?;
         let mut colour = None;
         paint.for_each_value_mut(&mut |c| {
             if colour.is_none() {
@@ -385,6 +372,30 @@ impl BevelParams {
             }
         });
         colour
+    }
+
+    /// The flat colour an inner bevel paints its band in: its own, else its
+    /// source's first object's fill when that is flat. The original's bevel
+    /// node, drawn over the objects, carries that object's fill
+    /// (`tools/opbevel.cpp:1318-1341`); a flat one is drawn as the lighting
+    /// bitmap in that colour, a non-flat one as the fill itself under the
+    /// lighting (`Kernel/nodebev.cpp:1495-1590`), which lighting the
+    /// objects' own colours matches when there is one object. `None` for
+    /// that: the renderer lights what is there.
+    #[must_use]
+    pub fn flat_paint(
+        &self,
+        tree: &Tree,
+        controller: NodeId,
+        defaults: &crate::attr::DefaultAttrs,
+    ) -> Option<Colour> {
+        if let Some(c) = &self.colour {
+            return Some(c.clone());
+        }
+        match first_fill(tree, controller, defaults)? {
+            crate::fill::Paint::Flat { value } => Some(value),
+            _ => None,
+        }
     }
 
     /// How far an outer bevel reaches beyond its object; 0 for an inner
@@ -397,6 +408,31 @@ impl BevelParams {
             Mp::ZERO
         }
     }
+}
+
+/// The fill a live controller's source's first object is drawn with.
+fn first_fill(
+    tree: &Tree,
+    controller: NodeId,
+    defaults: &crate::attr::DefaultAttrs,
+) -> Option<crate::fill::Paint> {
+    let source = parts(tree, controller)?.source;
+    let first = tree.preorder(source).find(|&n| {
+        matches!(
+            tree.kind(n),
+            Some(
+                NodeKind::Path(_)
+                    | NodeKind::Shape(_)
+                    | NodeKind::QuickShape(_)
+                    | NodeKind::TextItem(_)
+            )
+        )
+    })?;
+    Some(
+        crate::attr::resolve_uncached(tree, first, defaults)
+            .fill()
+            .clone(),
+    )
 }
 
 /// Which sort of mould.
