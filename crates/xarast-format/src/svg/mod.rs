@@ -293,8 +293,8 @@ pub struct Stats {
     /// viewer draws the object without its shadow (a controller without a
     /// source, which a valid document never has).
     pub shadows_unbaked: usize,
-    /// Shadows drawn by an SVG filter (`effect.rs`), on the controller or,
-    /// for floor shadows and feathered controllers, on a derived copy of
+    /// Shadows drawn by an SVG filter (`effect.rs`), on the controller (with
+    /// its feather, if it owns one) or, for floor shadows, on a derived copy of
     /// the object, plus their twin.
     pub shadows_baked: usize,
     /// Bevels recorded (`<xarast:bevel>`) but not baked (their controller

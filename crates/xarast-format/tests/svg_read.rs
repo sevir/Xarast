@@ -1647,47 +1647,80 @@ fn shadows_are_drawn_by_a_filter_that_the_reader_ignores() {
     assert_eq!(export.svg.matches("<use ").count(), 1, "{}", export.svg);
 }
 
-/// A wall shadow whose controller owns a feather: the controller's one
-/// `filter` is the feather, so the shadow is drawn by an unmapped derived
-/// copy that the feather then fades with the object (XARA-T-0324).
-#[test]
-fn a_feathered_shadow_is_drawn_by_a_derived_copy_the_reader_ignores() {
+/// Shadow controllers that own a feather: a wall and a floor shadow.
+fn feathered_shadow_doc() -> Document {
     let mut b = xarast_doc::builder::skeleton(BuildLimits::default()).unwrap();
-    let kind = LiveKind::Shadow(Box::default());
-    let live = |role| {
-        NodeKind::Live(Box::new(LiveNode {
-            role,
-            kind: kind.clone(),
-            regen: RegenState::Clean,
-            name: None,
-        }))
-    };
-    b.node(live(LiveRole::Controller)).unwrap();
-    b.push_scope().unwrap();
-    b.attribute(AttrValue::Feather {
-        size: Mp::new(4_000),
-        profile: BiasGain::IDENTITY,
-    })
-    .unwrap();
-    b.node(live(LiveRole::Generated)).unwrap();
-    b.node(live(LiveRole::Source)).unwrap();
-    b.push_scope().unwrap();
-    b.node(triangle(50_000, 300_000)).unwrap();
-    b.push_scope().unwrap();
-    b.attribute(flat(rgb(0.9, 0.5, 0.1))).unwrap();
-    b.pop_scope();
-    b.pop_scope();
-    b.pop_scope();
-    let doc = b.finish().unwrap().0;
+    for (i, kind) in [xarast_doc::ShadowKind::Wall, xarast_doc::ShadowKind::Floor]
+        .into_iter()
+        .enumerate()
+    {
+        let kind = LiveKind::Shadow(Box::new(xarast_doc::ShadowParams {
+            kind,
+            offset: Point::raw(8_000, -8_000),
+            darkness: 0.6,
+            ..xarast_doc::ShadowParams::default()
+        }));
+        let live = |role| {
+            NodeKind::Live(Box::new(LiveNode {
+                role,
+                kind: kind.clone(),
+                regen: RegenState::Clean,
+                name: None,
+            }))
+        };
+        b.node(live(LiveRole::Controller)).unwrap();
+        b.push_scope().unwrap();
+        b.attribute(AttrValue::Feather {
+            size: Mp::new(12_000),
+            profile: BiasGain::IDENTITY,
+        })
+        .unwrap();
+        b.node(live(LiveRole::Generated)).unwrap();
+        b.node(live(LiveRole::Source)).unwrap();
+        b.push_scope().unwrap();
+        b.node(triangle(50_000 + 200_000 * i as i32, 300_000))
+            .unwrap();
+        b.push_scope().unwrap();
+        b.attribute(flat(rgb(0.9, 0.5, 0.1))).unwrap();
+        b.pop_scope();
+        b.pop_scope();
+        b.pop_scope();
+    }
+    b.finish().unwrap().0
+}
 
+/// A wall shadow whose controller owns a feather is one filter on the
+/// controller that draws the shadow and feathers both, cutting the
+/// feather from the object's outline and its moved copy as the renderer
+/// does (XARA-T-0327). A floor shadow's needs a derived copy, which the
+/// controller's feather filter then fades with the object (XARA-T-0324).
+/// The reader ignores the filters and the copy.
+#[test]
+fn a_feathered_shadow_is_one_filter_and_a_feathered_floor_a_derived_copy() {
+    let doc = feathered_shadow_doc();
     let native =
         xarast_format::svg::write_svg(&doc, &mut ResourceIndex::new(), &SvgOptions::default());
     let s = &native.svg;
-    assert_eq!(native.stats.shadows_baked, 1);
+    assert_eq!(native.stats.shadows_baked, 2);
     assert_eq!(native.stats.shadows_unbaked, 0);
+    assert_eq!(native.stats.effects_baked, 2, "both feathers count");
+    assert_eq!(s.matches("xarast:filter=\"shadow\"").count(), 2, "{s}");
+    assert_eq!(s.matches("xarast:feather=").count(), 2, "{s}");
+    // The floor: a mapped copy, and the feather as its own filter.
     assert_eq!(s.matches("xarast:derived=\"shadow\"").count(), 1, "{s}");
+    assert_eq!(s.matches("transform=\"matrix(").count(), 1, "{s}");
     assert_eq!(s.matches("xarast:filter=\"feather\"").count(), 1, "{s}");
-    assert!(!s.contains("transform=\"matrix("), "{s}");
+    // The wall: the feather's silhouette is the object's alpha merged with
+    // its copy moved by the offset (8 pt right and down in SVG's frame),
+    // eroded by four rectangles, and it masks the shadow-and-object `k`.
+    assert!(
+        s.contains(
+            "<feOffset in=\"SourceAlpha\" dx=\"8\" dy=\"8\" result=\"o\"/><feMerge result=\"u\">"
+        ),
+        "{s}"
+    );
+    assert_eq!(s.matches("operator=\"erode\"").count(), 8, "{s}");
+    assert!(s.contains("<feComposite in=\"k\" operator=\"in\"/>"), "{s}");
     let r = read(s);
     assert_eq!(r.stats.foreign_attributes, 0);
     assert_eq!(r.stats.foreign_elements, 0);

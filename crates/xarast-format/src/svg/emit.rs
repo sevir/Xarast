@@ -1513,8 +1513,18 @@ impl<'d, 'b> Emitter<'d, 'b> {
     /// attribute stack but are not feathered again, so they do not write
     /// it (a reader would make each of them an owner).
     fn own_feather(&mut self, n: NodeId, el: &mut El) {
-        let owned = self
-            .doc
+        if let Some((size, profile)) = self.owned_feather(n) {
+            el.a("xarast:feather", feather_text(size, profile));
+            let filter = self.feather_filter(n, el, size, profile);
+            el.a("filter", format!("url(#{filter})"));
+            self.stats.effects_baked += 1;
+        }
+    }
+
+    /// The feather `n` owns, if any: a `Feather` attribute child with a
+    /// size above zero.
+    fn owned_feather(&self, n: NodeId) -> Option<(Mp, xarast_geom::BiasGain)> {
+        self.doc
             .tree
             .children(n)
             .find_map(|c| match self.doc.tree.kind(c) {
@@ -1525,13 +1535,7 @@ impl<'d, 'b> Emitter<'d, 'b> {
                     _ => None,
                 },
                 _ => None,
-            });
-        if let Some((size, profile)) = owned {
-            el.a("xarast:feather", feather_text(size, profile));
-            let filter = self.feather_filter(n, el, size, profile);
-            el.a("filter", format!("url(#{filter})"));
-            self.stats.effects_baked += 1;
-        }
+            })
     }
 
     /// The filter that draws `n`'s feather in a browser (`svg/effect.rs`),
@@ -1926,9 +1930,20 @@ impl<'d, 'b> Emitter<'d, 'b> {
             RegenState::Dirty => el.a("xarast:regen", "dirty"),
             RegenState::Deferred => el.a("xarast:regen", "deferred"),
         }
-        self.own_feather(n, &mut el);
+        // A wall or glow controller that owns a feather draws both in one
+        // filter, which cuts the feather from the outlines as the renderer
+        // does (`svg/effect.rs`, `feathered_shadow`).
+        let feathered = shadow
+            .filter(|sh| sh.kind != xarast_doc::ShadowKind::Floor)
+            .and_then(|_| self.owned_feather(n));
+        if let Some((size, profile)) = feathered {
+            el.a("xarast:feather", feather_text(size, profile));
+            self.stats.effects_baked += 1;
+        } else {
+            self.own_feather(n, &mut el);
+        }
         if let Some(sh) = shadow
-            && let Some(copy) = self.bake_shadow(n, &mut el, sh)
+            && let Some(copy) = self.bake_shadow(n, &mut el, sh, feathered)
         {
             let pad = if self.pretty {
                 format!("\n{}", " ".repeat(self.depth + 1))
@@ -2290,14 +2305,16 @@ impl<'d, 'b> Emitter<'d, 'b> {
     /// from the parameters at every save and ignored by the reader.
     ///
     /// A wall or glow shadow is a filter on the controller, which holds the
-    /// object, that paints the shadow under it. A floor shadow, whose
-    /// affine map no filter can apply, and any shadow whose controller also
-    /// owns a feather (one `filter` per element), are drawn by a derived
-    /// copy instead: a wrapper `<g xarast:derived="shadow">` placed before
-    /// the object, holding a `<use>` of it (mapped for a floor) and
-    /// carrying the shadow-only filter. The controller's feather then
-    /// feathers the shadow with the object, as the renderer does. The
-    /// reader skips every `xarast:derived` element.
+    /// object, that paints the shadow under it; when the controller owns a
+    /// feather (`feather`), the same filter feathers both, its mask cut
+    /// from the outlines as the renderer cuts it. A floor shadow, whose
+    /// affine map no filter can apply, and any shadow whose controller
+    /// already carries a filter, are drawn by a derived copy instead: a
+    /// wrapper `<g xarast:derived="shadow">` placed before the object,
+    /// holding a `<use>` of it (mapped for a floor) and carrying the
+    /// shadow-only filter. A feather on that controller then feathers the
+    /// shadow with the object, but reads the shadow as drawn (`export.md`,
+    /// "Shadows in SVG"). The reader skips every `xarast:derived` element.
     ///
     /// Returns the copy's markup, to go after the controller's parameters.
     fn bake_shadow(
@@ -2305,6 +2322,7 @@ impl<'d, 'b> Emitter<'d, 'b> {
         n: NodeId,
         el: &mut El,
         sh: &xarast_doc::ShadowParams,
+        feather: Option<(Mp, xarast_geom::BiasGain)>,
     ) -> Option<String> {
         let floor = sh.kind == xarast_doc::ShadowKind::Floor;
         let copy = floor || el.has("filter");
@@ -2356,7 +2374,14 @@ impl<'d, 'b> Emitter<'d, 'b> {
             opacity: f64::from(rgba.a) / 255.0 * f64::from(sh.opacity_level()) / 255.0,
             keep_source: !copy,
         };
-        let id = effect::shadow(&spec, region).finish(&mut self.defs);
+        let chain = match feather.filter(|_| !copy) {
+            Some((size, profile)) => {
+                let r = f64::from(size.raw()) / 2000.0;
+                effect::feathered_shadow(&spec, effect::Radius { x: r, y: r }, profile, region)
+            }
+            None => effect::shadow(&spec, region),
+        };
+        let id = chain.finish(&mut self.defs);
         self.stats.shadows_baked += 1;
         let Some(parts) = parts else {
             el.a("filter", format!("url(#{id})"));

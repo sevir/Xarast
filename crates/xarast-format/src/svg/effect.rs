@@ -99,7 +99,7 @@ impl FilterChain {
 /// (0.98 r) in every direction.
 const DISC_ANGLES: [f64; 4] = [11.25, 33.75, 56.25, 78.75];
 
-/// Appends primitives that erode `SourceAlpha` by a disc of radius `r`,
+/// Appends primitives that erode `input`'s alpha by a disc of radius `r`,
 /// leaving the result in the alpha channel.
 ///
 /// `feMorphology` erodes by a rectangle, which pulls a diagonal edge in by
@@ -109,14 +109,11 @@ const DISC_ANGLES: [f64; 4] = [11.25, 33.75, 56.25, 78.75];
 /// per-channel minimum over opaque inputs: so the alpha is moved into the
 /// (opaque) colour channels, eroded by four rectangles whose union is
 /// close to the disc, the four combined with `darken`, and moved back.
-fn erode_disc(s: &mut String, r: Radius) {
-    morph_disc(s, r, "SourceAlpha", false);
-}
-
-/// [`erode_disc`] or its dual: with `grow`, `input`'s alpha is dilated by
-/// the union of the same rectangles, the per-channel maximum
-/// (`feBlend mode="lighten"`) standing in for the minimum. A glow grows
-/// the silhouette by a disc (`render.md`, "Shadows").
+///
+/// With `grow`, the dual: `input`'s alpha is dilated by the union of the
+/// same rectangles, the per-channel maximum (`feBlend mode="lighten"`)
+/// standing in for the minimum. A glow grows the silhouette by a disc
+/// (`render.md`, "Shadows").
 fn morph_disc(s: &mut String, r: Radius, input: &str, grow: bool) {
     let (operator, blend) = if grow {
         ("dilate", "lighten")
@@ -180,9 +177,22 @@ const PROFILE_SAMPLES: usize = 33;
 pub(crate) fn feather(r: Radius, profile: xarast_geom::BiasGain, region: Region) -> FilterChain {
     let mut f = FilterChain::new("feather", region);
     let mut s = String::new();
-    erode_disc(&mut s, r);
+    feather_mask(&mut s, r, profile, "SourceAlpha");
+    s.push_str("<feComposite");
+    attr(&mut s, "in", "SourceGraphic");
+    attr(&mut s, "operator", "in");
+    s.push_str("/>");
+    f.push(&s);
+    f
+}
+
+/// Appends a feather's mask, left as the last result: `silhouette`'s
+/// alpha eroded by a disc of `r` (`morph_disc`), blurred by σ = r/2 and
+/// shaped by the profile ([`feather`]).
+fn feather_mask(s: &mut String, r: Radius, profile: xarast_geom::BiasGain, silhouette: &str) {
+    morph_disc(s, r, silhouette, false);
     s.push_str("<feGaussianBlur");
-    attr(&mut s, "stdDeviation", &r.text(0.5));
+    attr(s, "stdDeviation", &r.text(0.5));
     s.push_str("/>");
     if profile != xarast_geom::BiasGain::default() {
         let d = (PROFILE_SAMPLES - 1) as f64;
@@ -190,16 +200,10 @@ pub(crate) fn feather(r: Radius, profile: xarast_geom::BiasGain, region: Region)
             .map(|i| f64s(1.0 - profile.map(1.0 - i as f64 / d), 4))
             .collect();
         s.push_str("<feComponentTransfer><feFuncA");
-        attr(&mut s, "type", "table");
-        attr(&mut s, "tableValues", &v.join(" "));
+        attr(s, "type", "table");
+        attr(s, "tableValues", &v.join(" "));
         s.push_str("/></feComponentTransfer>");
     }
-    s.push_str("<feComposite");
-    attr(&mut s, "in", "SourceGraphic");
-    attr(&mut s, "operator", "in");
-    s.push_str("/>");
-    f.push(&s);
-    f
 }
 
 /// A shadow's parameters, in the user units of the element it is set on
@@ -221,7 +225,7 @@ pub(crate) struct Shadow<'a> {
     pub opacity: f64,
     /// Whether the filter also draws the object over its shadow (a filter
     /// on the controller). Off for a derived copy that holds only the
-    /// shadow (floor shadows, feathered controllers).
+    /// shadow (floor shadows).
     pub keep_source: bool,
 }
 
@@ -233,14 +237,72 @@ pub(crate) struct Shadow<'a> {
 pub(crate) fn shadow(sh: &Shadow<'_>, region: Region) -> FilterChain {
     let mut f = FilterChain::new("shadow", region);
     let mut s = String::new();
-    s.push_str("<feFlood");
-    attr(&mut s, "flood-color", sh.colour);
-    attr(
+    shadow_body(&mut s, sh);
+    f.push(&s);
+    f
+}
+
+/// A wall or glow shadow and the feather of the controller that casts it,
+/// as one filter on the controller (`render.md`, "Nested effects in a
+/// silhouette pass"): the shadow drawn under the object as [`shadow`]
+/// draws it, then feathered with the object as one unit by a mask cut,
+/// as the renderer cuts it, from the object's outline together with that
+/// outline moved by the offset or grown by the glow, **unblurred and at
+/// full strength**, not from the shadow as drawn. Draws the object, so
+/// `sh.keep_source` is ignored.
+pub(crate) fn feathered_shadow(
+    sh: &Shadow<'_>,
+    r: Radius,
+    profile: xarast_geom::BiasGain,
+    region: Region,
+) -> FilterChain {
+    let mut f = FilterChain::new("shadow", region);
+    let mut s = String::new();
+    shadow_body(
         &mut s,
-        "flood-opacity",
-        &f64s(sh.opacity.clamp(0.0, 1.0), 4),
+        &Shadow {
+            keep_source: false,
+            ..*sh
+        },
     );
-    attr(&mut s, "result", "c");
+    s.push_str(
+        "<feMerge result=\"k\"><feMergeNode in=\"s\"/><feMergeNode in=\"SourceGraphic\"/></feMerge>",
+    );
+    // The feather's silhouette: the object's alpha and its moved or grown
+    // copy, combined as two shapes drawn into one plane.
+    if sh.glow > 1e-9 {
+        // A glow's grown outline encloses the object.
+        let g = Radius {
+            x: sh.glow,
+            y: sh.glow,
+        };
+        morph_disc(&mut s, g, "SourceAlpha", true);
+        s.push_str("<feOffset dx=\"0\" dy=\"0\" result=\"u\"/>");
+    } else {
+        s.push_str("<feOffset");
+        attr(&mut s, "in", "SourceAlpha");
+        attr(&mut s, "dx", &f64s(sh.offset.0, 4));
+        attr(&mut s, "dy", &f64s(sh.offset.1, 4));
+        attr(&mut s, "result", "o");
+        s.push_str(
+            "/><feMerge result=\"u\"><feMergeNode in=\"SourceAlpha\"/><feMergeNode in=\"o\"/></feMerge>",
+        );
+    }
+    feather_mask(&mut s, r, profile, "u");
+    s.push_str("<feComposite");
+    attr(&mut s, "in", "k");
+    attr(&mut s, "operator", "in");
+    s.push_str("/>");
+    f.push(&s);
+    f
+}
+
+/// Appends [`shadow`]'s primitives; the shadow alone is the result `s`.
+fn shadow_body(s: &mut String, sh: &Shadow<'_>) {
+    s.push_str("<feFlood");
+    attr(s, "flood-color", sh.colour);
+    attr(s, "flood-opacity", &f64s(sh.opacity.clamp(0.0, 1.0), 4));
+    attr(s, "result", "c");
     s.push_str("/>");
     // The first primitive that reads the silhouette names it; the rest
     // read the previous result.
@@ -250,21 +312,21 @@ pub(crate) fn shadow(sh: &Shadow<'_>, region: Region) -> FilterChain {
             x: sh.glow,
             y: sh.glow,
         };
-        morph_disc(&mut s, r, "SourceAlpha", true);
+        morph_disc(s, r, "SourceAlpha", true);
         input = None;
     }
     let sigma = sh.penumbra / 4.0;
     if sigma > 1e-9 {
         s.push_str("<feGaussianBlur");
-        read(&mut s, &mut input);
-        attr(&mut s, "stdDeviation", &f64s(sigma, 4));
+        read(s, &mut input);
+        attr(s, "stdDeviation", &f64s(sigma, 4));
         s.push_str("/>");
     }
     if sh.offset != (0.0, 0.0) {
         s.push_str("<feOffset");
-        read(&mut s, &mut input);
-        attr(&mut s, "dx", &f64s(sh.offset.0, 4));
-        attr(&mut s, "dy", &f64s(sh.offset.1, 4));
+        read(s, &mut input);
+        attr(s, "dx", &f64s(sh.offset.0, 4));
+        attr(s, "dy", &f64s(sh.offset.1, 4));
         s.push_str("/>");
     }
     if sh.profile != xarast_geom::BiasGain::default() {
@@ -273,21 +335,21 @@ pub(crate) fn shadow(sh: &Shadow<'_>, region: Region) -> FilterChain {
             .map(|i| f64s(1.0 - sh.profile.map(1.0 - i as f64 / d), 4))
             .collect();
         s.push_str("<feComponentTransfer");
-        read(&mut s, &mut input);
+        read(s, &mut input);
         s.push_str("><feFuncA");
-        attr(&mut s, "type", "table");
-        attr(&mut s, "tableValues", &v.join(" "));
+        attr(s, "type", "table");
+        attr(s, "tableValues", &v.join(" "));
         s.push_str("/></feComponentTransfer>");
     }
     // No primitive read the silhouette (no blur, offset, glow or profile):
     // the colour is painted where the object is.
     s.push_str("<feComposite");
-    attr(&mut s, "in", "c");
+    attr(s, "in", "c");
     if let Some(i) = input {
-        attr(&mut s, "in2", i);
+        attr(s, "in2", i);
     }
-    attr(&mut s, "operator", "in");
-    attr(&mut s, "result", "s");
+    attr(s, "operator", "in");
+    attr(s, "result", "s");
     if sh.keep_source {
         s.push_str(
             "/><feMerge><feMergeNode in=\"s\"/><feMergeNode in=\"SourceGraphic\"/></feMerge>",
@@ -295,8 +357,6 @@ pub(crate) fn shadow(sh: &Shadow<'_>, region: Region) -> FilterChain {
     } else {
         s.push_str("/>");
     }
-    f.push(&s);
-    f
 }
 
 /// The height field's scale against the indent. `feDiffuseLighting`
@@ -521,6 +581,40 @@ mod tests {
         assert!(s.contains("<feGaussianBlur stdDeviation=\"1\"/>"), "{s}");
         assert!(!s.contains("feOffset"));
         assert!(s.contains("<feComponentTransfer><feFuncA"));
+    }
+
+    #[test]
+    fn a_feathered_glow_cuts_the_feather_from_the_grown_outline() {
+        let sh = Shadow {
+            offset: (0.0, 0.0),
+            penumbra: 4.0,
+            glow: 2.0,
+            profile: BiasGain::default(),
+            colour: "#fff",
+            opacity: 1.0,
+            keep_source: false,
+        };
+        let r = Radius { x: 3.0, y: 3.0 };
+        let s = written(feathered_shadow(
+            &sh,
+            r,
+            BiasGain::default(),
+            Region::Object { margin: 0.5 },
+        ));
+        assert!(s.contains("xarast:filter=\"shadow\""));
+        // The object is kept under the feather whatever `keep_source` says.
+        assert!(s.contains("<feMerge result=\"k\">"), "{s}");
+        // The shadow's growth, then the silhouette's: the same disc.
+        assert_eq!(s.matches("operator=\"dilate\"").count(), 8, "{s}");
+        assert!(
+            s.contains("<feOffset dx=\"0\" dy=\"0\" result=\"u\"/>"),
+            "{s}"
+        );
+        assert_eq!(s.matches("operator=\"erode\"").count(), 4, "{s}");
+        assert!(
+            s.ends_with("<feComposite in=\"k\" operator=\"in\"/></filter>"),
+            "{s}"
+        );
     }
 
     #[test]
