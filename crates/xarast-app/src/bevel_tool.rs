@@ -125,6 +125,60 @@ fn object_box(doc: &xarast_doc::Document, n: NodeId) -> DocRect {
     }
 }
 
+/// The most objects whose contoured outline a size drag follows; more
+/// than this and the dashed box is drawn instead.
+const MAX_OUTLINED_OBJECTS: usize = 24;
+/// The mitre limit of the outline preview (rounded joins make it moot).
+const CONTOUR_MITRE_LIMIT: f64 = 4.0;
+
+/// The clean regions of the objects a size drag outlines: what a bevel
+/// follows (its controller's source, or the object itself).
+fn size_regions(doc: &xarast_doc::Document, sel: &[NodeId]) -> Vec<xarast_geom::Path> {
+    let mut out = Vec::new();
+    for n in sel {
+        let root = match effect_of(doc, *n, LiveEffect::Bevel)
+            .and_then(|c| xarast_doc::live::parts(&doc.tree, c))
+        {
+            Some(p) => p.source,
+            None => *n,
+        };
+        for ink in xarast_doc::contour::ink_nodes(&doc.tree, root) {
+            let r = xarast_doc::contour::silhouette(doc, ink, false);
+            if !r.is_empty() {
+                out.push(r);
+            }
+            if out.len() > MAX_OUTLINED_OBJECTS {
+                return Vec::new();
+            }
+        }
+    }
+    out
+}
+
+/// Adds a path's subpaths to the overlay as closed dashed polylines.
+fn push_outline(path: &xarast_geom::Path, px: f64, out: &mut Vec<OverlayShape>) {
+    let mut points: Vec<DocPoint> = Vec::new();
+    let mut done = |points: &mut Vec<DocPoint>| {
+        if points.len() > 1 {
+            out.push(OverlayShape::Polyline {
+                points: std::mem::take(points),
+                closed: true,
+                dashed: true,
+            });
+        }
+        points.clear();
+    };
+    kurbo::flatten(path.to_bez_path(), (0.25 * px).max(1.0), |el| match el {
+        kurbo::PathEl::MoveTo(p) => {
+            done(&mut points);
+            points.push(DocPoint::from_f64_round(p.x, p.y));
+        }
+        kurbo::PathEl::LineTo(p) => points.push(DocPoint::from_f64_round(p.x, p.y)),
+        _ => {}
+    });
+    done(&mut points);
+}
+
 fn union(boxes: impl IntoIterator<Item = DocRect>) -> DocRect {
     boxes
         .into_iter()
@@ -240,6 +294,10 @@ enum Drag {
         bevels: Vec<(NodeId, BevelParams)>,
         /// The signed width now.
         now: f64,
+        /// The selected objects' clean regions, for the contoured
+        /// outline; empty when there are too many or none is contourable
+        /// (the dashed box is drawn then).
+        regions: Vec<xarast_geom::Path>,
     },
     /// The light blob of a group of bevels.
     Light {
@@ -317,6 +375,7 @@ impl BevelTool {
             .collect();
         let base = bevels.first().map_or(0.0, |(_, p)| signed_indent(p));
         let start = signed_width(rect, from);
+        let regions = size_regions(cx.doc, &sel);
         self.drag = Some(Drag::Size {
             rect,
             start,
@@ -324,6 +383,7 @@ impl BevelTool {
             bare,
             bevels,
             now: base,
+            regions,
         });
     }
 
@@ -504,10 +564,26 @@ impl Tool for BevelTool {
             });
         }
         // While sizing, the outline the bevel follows, dashed.
-        if let Some(Drag::Size { rect, now, .. }) = &self.drag {
+        if let Some(Drag::Size {
+            rect, now, regions, ..
+        }) = &self.drag
+        {
             let w = Mp::from_f64_round(-*now);
             let r = rect.inflated(w);
-            if !r.is_empty() {
+            if !regions.is_empty() {
+                // The contoured path, as the original's XOR outline is.
+                for region in regions {
+                    let off = xarast_geom::contour::offset_region(
+                        region,
+                        xarast_geom::FillRule::NonZero,
+                        -*now,
+                        Join::Round,
+                        CONTOUR_MITRE_LIMIT,
+                        xarast_geom::Tolerance::from_device_px(0.5, device_px(view.viewport)),
+                    );
+                    push_outline(&off, device_px(view.viewport), out);
+                }
+            } else if !r.is_empty() {
                 out.push(OverlayShape::Rect {
                     rect: r,
                     dashed: true,
