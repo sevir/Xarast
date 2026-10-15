@@ -1214,9 +1214,58 @@ impl<'d, 'r, 'f> Reader<'d, 'r, 'f> {
             true,
         );
         self.b.push_scope()?;
-        self.children(e, &cctx, &|_| false, 0, &mut bag)?;
+        if kind == "contour" {
+            // The rings are derived: the walker and the next save
+            // regenerate them. What the node itself holds — the start of
+            // the ring blend — is the paint of the ring marked
+            // `xarast:contour-start`, with the join attribute in force
+            // there (`research/06 §6.8.3`).
+            self.contour_start(e, &cctx)?;
+            self.children(e, &cctx, &|c| c.is(NS_SVG, "path"), 0, &mut bag)?;
+        } else {
+            self.children(e, &cctx, &|_| false, 0, &mut bag)?;
+        }
         self.b.pop_scope();
         self.store(node, bag);
+        Ok(())
+    }
+
+    /// A baked contour's start ring, read back into attribute children of
+    /// the generated node being built.
+    fn contour_start(&mut self, e: &'d Elem, cctx: &Ctx) -> Result<(), SvgReadError> {
+        let start = e.children.iter().find_map(|c| match c {
+            Child::Elem(i) => self
+                .elem(*i)
+                .filter(|x| x.is(NS_SVG, "path") && xa(x, "contour-start").is_some()),
+            _ => None,
+        });
+        let Some(s) = start else {
+            return Ok(());
+        };
+        let join = match xa(s, "contour-start") {
+            Some("round") => Join::Round,
+            Some("bevel") => Join::Bevel,
+            _ => Join::Mitre,
+        };
+        let (sctx, _) = self.child_ctx(s, cctx);
+        let segs = match attr(s, "", "d") {
+            Some(d) => self.path_data(d, s.start),
+            None => Vec::new(),
+        };
+        let path = self.path_of(&sctx, &segs);
+        let info = InkInfo {
+            filled: true,
+            stroked: true,
+            image: false,
+            bounds: (!path.is_empty()).then(|| ink::path_box(sctx.frame, &path)),
+        };
+        let mut attrs = self.ink_paint(s, &sctx, info);
+        attrs.retain(|a| !matches!(a, AttrValue::JoinType(_)));
+        attrs.push(AttrValue::JoinType(join));
+        for a in attrs {
+            self.stats.attributes = self.stats.attributes.saturating_add(1);
+            self.b.attribute(a)?;
+        }
         Ok(())
     }
 

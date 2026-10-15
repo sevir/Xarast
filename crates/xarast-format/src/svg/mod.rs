@@ -302,6 +302,9 @@ pub struct Stats {
     pub bevels_unbaked: usize,
     /// Bevels drawn by an SVG lighting filter (`effect.rs`).
     pub bevels_baked: usize,
+    /// Contour rings baked as real offset paths (§6.8.3), the start ring
+    /// of each contour included even when it is empty.
+    pub contour_rings: usize,
     /// `ClipRegion` attributes, which nothing draws yet.
     pub clip_regions_ignored: usize,
     /// Non-attribute children of ink nodes, drawn before them as siblings.

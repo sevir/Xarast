@@ -1888,9 +1888,11 @@ impl<'d, 'b> Emitter<'d, 'b> {
                 if let Some(p) = self.doc.tree.links(n).parent {
                     el.a("xarast:generated-by", node_id(self.doc, p));
                 }
-                // Nothing regenerates live effects before Phase 13, so the
-                // baked geometry must survive a reader (§6.8.7).
-                el.a("xarast:base-authoritative", "true");
+                // A contour regenerates its rings (XARA-T-0330); the other
+                // kinds' baked geometry must survive a reader (§6.8.7).
+                if !matches!(l.kind, LiveKind::Contour(_)) {
+                    el.a("xarast:base-authoritative", "true");
+                }
             }
         }
         if let Some(name) = &l.name {
@@ -1915,7 +1917,92 @@ impl<'d, 'b> Emitter<'d, 'b> {
         if let Some(bv) = bevel {
             self.bake_bevel(n, &mut el, bv);
         }
+        if l.role == LiveRole::Generated && matches!(l.kind, LiveKind::Contour(_)) {
+            self.contour_rings(n, el);
+            return;
+        }
         self.container(n, el, prelude);
+    }
+
+    /// A contour's generated node, baked (`research/06 §6.8.3`): its rings
+    /// as **real offset paths**, regenerated from the source at every save
+    /// and painted in paint order with the attributes in force at the
+    /// node, its own (the blend's start) and each ring's blended ones.
+    ///
+    /// The ring painted in the start attributes is written even when it is
+    /// empty and carries `xarast:contour-start` with the join attribute in force
+    /// at the node: what the reader rebuilds the node's own attributes
+    /// from. The other rings are derived, and the reader drops them.
+    fn contour_rings(&mut self, n: NodeId, el: El) {
+        let tag = el.tag;
+        self.open_container(Some(n), el);
+        self.body.push('>');
+        self.newline();
+        self.depth += 1;
+        self.attrs.push_scope();
+        let kids: Vec<NodeId> = self.doc.tree.children(n).collect();
+        for c in kids {
+            if let Some(NodeKind::Attr(a)) = self.doc.tree.kind(c) {
+                self.attrs.push(Arc::new(a.value.clone()));
+            }
+        }
+        let controller = self.doc.tree.links(n).parent;
+        // The join attribute in force here, which the rings are cut with
+        // unless the parameters name one; a stroke-less paint would not
+        // carry it.
+        let join = match self.attrs.get(AttrSlot::JoinType) {
+            AttrValue::JoinType(j) => *j,
+            _ => Join::Mitre,
+        };
+        let rings = controller
+            .and_then(|c| xarast_doc::contour::generate(self.doc, c))
+            .unwrap_or_default();
+        let start = rings.iter().position(|r| r.attrs.is_empty());
+        for (i, ring) in rings.iter().enumerate() {
+            let is_start = Some(i) == start;
+            if ring.path.is_empty() && !is_start {
+                continue;
+            }
+            self.attrs.push_scope();
+            for a in ring.attrs.iter() {
+                self.attrs.push(Arc::new(a.clone()));
+            }
+            let mut el = El::new("path");
+            el.ink = true;
+            let f = self.frame;
+            el.a("d", path_data(&ring.path, |q| f.pt(q)));
+            if is_start {
+                el.a("xarast:contour-start", join_name(join));
+            }
+            let bounds = (!ring.path.is_empty()).then(|| self.path_box(&ring.path));
+            let mut known = Vec::new();
+            self.paint(&mut el, bounds, true, true, &mut known);
+            let t = el.tag;
+            self.open(None, el);
+            if known.is_empty() {
+                self.body.push_str("/>");
+                self.newline();
+            } else {
+                self.body.push('>');
+                self.newline();
+                self.depth += 1;
+                for k in known {
+                    self.indent();
+                    self.body.push_str(&k);
+                    self.newline();
+                }
+                self.depth -= 1;
+                self.close(t);
+            }
+            self.attrs.pop_scope();
+            self.stats.contour_rings += 1;
+        }
+        self.attrs.pop_scope();
+        let mut next = 0usize;
+        self.fragments(n, &mut next, None);
+        self.depth -= 1;
+        self.close_group();
+        self.close(tag);
     }
 
     /// Draws a controller's bevel in a browser (`svg/effect.rs`): a lighting

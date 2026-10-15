@@ -1901,3 +1901,188 @@ fn no_join_written_is_a_mitre_as_when_the_default_was_one() {
         assert_eq!(join_at(&r.document, *n), AttrValue::JoinType(Join::Mitre));
     }
 }
+
+/// Contour controllers as the `.xar` importer builds them (XARA-T-0330):
+/// an outer contour beneath its object whose join comes from the
+/// attributes and whose generated node carries a palette colour, an inner
+/// one over its object with an explicit bevel join and a literal colour,
+/// and an inset path that collapses to nothing.
+fn contour_doc() -> Document {
+    let mut b = xarast_doc::builder::skeleton(BuildLimits::default()).unwrap();
+    let ink = b.define_colour(ColourDef::normal(ColourValue::rgb(0.6, 0.4, 0.2)).named("Wood"));
+    let cases = [
+        (
+            xarast_doc::ContourParams {
+                steps: 3,
+                width: Mp::new(6_000),
+                outer: true,
+                join: None,
+                profile: BiasGain::new(0.123_456_7, -0.3),
+                colour_profile: BiasGain::new(0.25, 0.5),
+                colour_effect: xarast_color::FillEffect::Rainbow,
+                ..xarast_doc::ContourParams::default()
+            },
+            Colour::Indexed {
+                id: ink,
+                tint: None,
+            },
+        ),
+        (
+            xarast_doc::ContourParams {
+                steps: 2,
+                width: Mp::new(4_000),
+                outer: false,
+                join: Some(xarast_geom::Join::Bevel),
+                ..xarast_doc::ContourParams::default()
+            },
+            rgb(0.2, 0.8, 0.4),
+        ),
+        (
+            xarast_doc::ContourParams {
+                steps: 0,
+                width: Mp::new(1_000_000),
+                outer: false,
+                inset: true,
+                ..xarast_doc::ContourParams::default()
+            },
+            rgb(0.0, 0.0, 1.0),
+        ),
+    ];
+    for (i, (p, start)) in cases.into_iter().enumerate() {
+        let n = i32::try_from(i).unwrap();
+        let outer = p.outer;
+        let kind = LiveKind::Contour(Box::new(p));
+        let live = |role| {
+            NodeKind::Live(Box::new(LiveNode {
+                role,
+                kind: kind.clone(),
+                regen: RegenState::Clean,
+                name: None,
+            }))
+        };
+        let generated = |b: &mut xarast_doc::DocumentBuilder| {
+            b.node(live(LiveRole::Generated)).unwrap();
+            b.push_scope().unwrap();
+            b.attribute(flat(start.clone())).unwrap();
+            b.pop_scope();
+        };
+        b.node(live(LiveRole::Controller)).unwrap();
+        b.push_scope().unwrap();
+        b.attribute(AttrValue::LineWidth(Mp::new(500))).unwrap();
+        b.attribute(AttrValue::JoinType(xarast_geom::Join::Round))
+            .unwrap();
+        if outer {
+            generated(&mut b);
+        }
+        b.node(live(LiveRole::Source)).unwrap();
+        b.push_scope().unwrap();
+        b.node(triangle(50_000 + 200_000 * n, 300_000)).unwrap();
+        b.push_scope().unwrap();
+        b.attribute(flat(rgb(0.9, 0.5, 0.1))).unwrap();
+        b.pop_scope();
+        b.pop_scope();
+        if !outer {
+            generated(&mut b);
+        }
+        b.pop_scope();
+    }
+    b.finish().unwrap().0
+}
+
+/// The `d` of every ring a contour's generated group holds, in order.
+fn rings_in(svg: &str) -> Vec<Vec<String>> {
+    let mut out = Vec::new();
+    for g in svg.split("xarast:generated=\"contour\"").skip(1) {
+        let body = &g[..g.find("</g>").unwrap()];
+        out.push(
+            body.split("<path")
+                .skip(1)
+                .map(|p| {
+                    let d = &p[p.find(" d=\"").unwrap() + 4..];
+                    d[..d.find('"').unwrap()].to_owned()
+                })
+                .collect(),
+        );
+    }
+    out
+}
+
+#[test]
+fn a_contour_is_baked_as_real_offset_paths_and_reads_back_exactly() {
+    let doc = contour_doc();
+    let first = package(&doc, SvgOptions::default());
+    let svg = svg_of(&first);
+    // Every parameter, exactly.
+    assert!(svg.contains("xarast:profile=\".1234567 -.3\""), "{svg}");
+    assert!(svg.contains("xarast:colour-profile=\".25 .5\""), "{svg}");
+    assert!(svg.contains("xarast:colour-effect=\"rainbow\""), "{svg}");
+    assert!(svg.contains("xarast:join=\"bevel\""), "{svg}");
+    assert!(svg.contains("xarast:insets=\"true\""), "{svg}");
+    // The rings are real paths, one per ring, each its own outline; the
+    // collapsed inset path keeps only its (empty) start ring.
+    let rings = rings_in(&svg);
+    assert_eq!(rings.len(), 3);
+    assert_eq!(rings[0].len(), 4, "{:?}", rings[0]);
+    assert_eq!(rings[1].len(), 3, "{:?}", rings[1]);
+    assert_eq!(rings[2], [String::new()]);
+    for r in &rings[..2] {
+        let mut distinct = r.clone();
+        distinct.sort();
+        distinct.dedup();
+        assert_eq!(distinct.len(), r.len(), "{r:?}");
+        assert!(r.iter().all(|d| !d.is_empty()));
+    }
+    assert_eq!(svg.matches("xarast:contour-start=").count(), 3);
+    assert!(svg.contains("xarast:contour-start=\"round\""), "{svg}");
+
+    let mut o = open(&first);
+    assert!(o.diagnostics.is_empty(), "{:?}", o.diagnostics);
+    same_text(&normal_form(&doc), &normal_form(&o.document));
+    // The generated nodes hold their start paint again, no ring.
+    let generated: Vec<_> = o
+        .document
+        .tree
+        .preorder(o.document.tree.root())
+        .filter(|&n| {
+            matches!(o.document.tree.kind(n), Some(NodeKind::Live(l))
+                if l.role == LiveRole::Generated)
+        })
+        .collect();
+    assert_eq!(generated.len(), 3);
+    for g in &generated {
+        assert!(
+            o.document
+                .tree
+                .children(*g)
+                .all(|c| matches!(o.document.tree.kind(c), Some(NodeKind::Attr(_))))
+        );
+    }
+    let start = resolve_uncached(&o.document.tree, generated[0], &o.document.defaults);
+    assert!(matches!(
+        start.fill(),
+        FillGeometry::Flat {
+            value: Colour::Indexed { tint: None, .. }
+        }
+    ));
+    assert_eq!(
+        start.get(AttrSlot::JoinType),
+        &AttrValue::JoinType(xarast_geom::Join::Round)
+    );
+    let again = resave(&mut o);
+    same_text(&svg, &svg_of(&again));
+    assert!(first == again, "a fixed point");
+
+    // A browser sees the same rings, and nothing of ours.
+    let export = xarast_format::svg::write_svg(
+        &doc,
+        &mut ResourceIndex::new(),
+        &SvgOptions {
+            dialect: xarast_format::svg::SvgDialect::Interchange,
+            ..SvgOptions::default()
+        },
+    );
+    assert!(!export.svg.contains("xarast"), "{}", export.svg);
+    for r in rings.iter().flatten().filter(|d| !d.is_empty()) {
+        assert!(export.svg.contains(r.as_str()), "{r}");
+    }
+}
