@@ -939,6 +939,33 @@ XARA-T-0330 it was misused for include-line-widths) and
   the four corpus contours.
 - Not done: an inset path's source is still drawn by an SVG viewer.
 
+## Moulds: source hidden in the parameters, copy baked (XARA-T-0334, 2026-10-16)
+
+`research/06 §6.8.5` as implemented (`Emitter::mould_controller`,
+`mould_generated`; reader `live_kind("mould")`, `live_controller`):
+
+- `<xarast:mould xarast:type="envelope|envelope-2x2|perspective"
+  xarast:bounds="x y w h" xarast:threshold="n">` — bounds omitted when
+  the model's rectangle is empty, threshold omitted at 32. Inside:
+  `<xarast:mould-shape d="…"/>` (the cage: cubics for an envelope, lines
+  for a perspective; read back with `cage_from_path`/`corners_from_path`,
+  a bad one becomes a flat cage) and `<xarast:mould-source>` holding the
+  **Source node** as its usual `<g xarast:kind="live-source">`. No SVG
+  renderer draws it; the interchange dialect drops it with every
+  `xarast:` element.
+- The controller frame is `block()`ed: nothing hoists across the foreign
+  element. The reader reads the mould-source **after** the controller's
+  other children, so the model order (attributes, Generated, Source)
+  comes back.
+- The generated `<g xarast:generated="mould">` bakes the copy as paths
+  (`Stats::moulded_paths`), text as curves only when the placer makes
+  outlines (`Stats::moulded_text_unbaked` otherwise; the corpus round-trip
+  test has no placer). Not `base-authoritative`: the reader drops the
+  paths. The affine reduction to one `transform` (§6.8.5 MAY) is not done.
+- Pinned by `tests/svg_read.rs::a_mould_keeps_its_source_hidden_and_bakes_its_copy`
+  and the corpus round trip: 59/59 normal form and byte-identical with
+  the 197 moulds.
+
 ## Blends: steps baked as real paths, parameters read back (XARA-T-0333, 2026-10-15)
 
 `<xarast:blend>` in the controller (`research/06 §6.8.4` as implemented):

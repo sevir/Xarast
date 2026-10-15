@@ -774,6 +774,21 @@ placer (XARA-T-0259, 2026-09-24, ext4, load ≈ 3): ProbeX16 UI thread
 - `tests/xar_blends.rs` (+ golden): fading squares, widening stroked
   lines, a three-object rainbow blend.
 
+### Moulds in the walker (XARA-T-0334, 2026-10-16)
+
+- At a mould's **generated node** the walk skips the subtree and
+  `paint_mould` draws `LiveCache::current_or_regenerate` with a generator
+  that calls `mould::generate_with` and lays text out with the walker's
+  fonts (`text::story_outlines`), so moulded text is curves (G8). Each
+  shape is pushed with its whole attribute map and painted with its own
+  `filled`/`stroked`. A mould's **source** is skipped (drawn only through
+  the copy); controller and source are not `live_pending`.
+- Scene ids as rings (tag | (index + 1) << 32). The key does not cover
+  fonts: a font change does not re-mould text until the source changes.
+- `SvgTextPlacer::outlines` (new `TextPlacer` method) gives the writer the
+  same outlines. `tests/xar_moulds.rs` (+ golden): a perspective whose
+  linear fill deforms with it, an envelope that bulges.
+
 ---
 
 ## Invariants that must not be broken

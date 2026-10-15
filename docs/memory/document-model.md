@@ -547,6 +547,34 @@ New in Phase 2:
     when either end is; `reverse` draws the steps from the end. The
     controller's bounds need nothing: a straight blend's steps lie in its
     ends' union.
+52. **A mould's cage is a parameter; its copy is generated, never
+    stored** (XARA-T-0334, phase 13 G1/G5–G8). `MouldParams` is an enum:
+    `Envelope { shape: [Point; 12] }`, `Envelope2x2 { shape: [Point; 24] }`,
+    `Perspective { corners: [Point; 4] }`, each with `source: Rect` (the
+    rectangle the cage maps from; empty = the source subtree's bounds)
+    and `threshold: i32` (refit tolerance, mp; 0 never splits). Cage
+    order as the original's mould path: the source's bottom-left image
+    first, clockwise. Tree: `Controller (Mould)` › attributes, an
+    **empty** `Generated`, `Source` › the originals. `mould::generate`
+    (and `generate_with`, which takes the caller's text outliner) →
+    `LiveOutput::Shapes` in paint order: each object's outline through
+    the mould (`xarast_geom::mould`), carrying **every** slot (so the
+    stack only scopes it), `filled`/`stroked` from the object (also
+    encoded as no-colour paint). Fills mould **once, on `FillGeometry`**
+    (`mould::mould_fill`): control points through the map; a fill under
+    a perspective (or already perspective) gains its far corner and a
+    `persp`; under an envelope an implied perpendicular axis (linear,
+    circular) is made explicit (linear: as an affine `persp`); flat and
+    procedural fills unchanged. A bitmap object becomes its
+    parallelogram filled with itself (`Tiling::Simple`, not stroked). A
+    nested generated node (contour rings, blend pair `k`, inner mould)
+    is moulded where it stands; an inner mould's or inset path's source
+    is skipped; pixel effects inside a mould are not moulded. A flat
+    cage (no width or height) is the identity: what the importer stores
+    for a missing or malformed one. A controller's bounds are the image
+    of its source rectangle (an 8×8 sample grid + 2 %), grown by the
+    stroke extent. A blend end that is a mould controller blends from
+    its moulded copy.
 
 ## The `.xar` attribute tag reconciliation
 
@@ -814,6 +842,16 @@ the digest recorded for that state serial.
 
 ## Open TODOs
 
+- **Mould follow-ups (XARA-T-0334).** G9 (the tool, presets,
+  vanishing points); hit-testing and snapping inside a mould still see
+  the undeformed source (interaction must map the pointer through
+  `MouldTransform::source_point`); a blend end that *contains* a mould
+  deeper than its top node still blends the undeformed source; shadows,
+  bevels and feathers inside a mould are not moulded; the original's 2×2
+  envelope smooths its inner lines (ours is the Coons patch of its
+  piecewise sides; it cannot come from a `.xar`); "convert to shapes" of
+  a mould is not wired; the walker's mould cache key does not cover
+  fonts.
 - **Blend follow-ups (XARA-T-0333).** F6 (along a path: the record
   family is decoded and reported, the path dropped; none in the corpus;
   bounds would then need the path); blends whose ends are moulds,

@@ -652,6 +652,42 @@ Decisions:
   rotation; nothing in the corpus); the phase plan's "VM comparison over
   12 pairs" of the matching rule.
 
+### Moulds: `geom::mould` (XARA-T-0334, 2026-10-16)
+
+- **Facts, checked numerically against the original (not translated):**
+  an envelope is the **bilinearly blended Coons patch** of its four
+  cubic sides (the polynomial in `Kernel/genv.cpp:244-369` equals it to
+  1e-15); a perspective is the **projective map** of the unit square
+  onto its corners (`Kernel/moldpers.cpp:1840-2080`, via vanishing
+  points, equals the homography). Cage order: source bottom-left image
+  first, then clockwise; left side up, top right, right down, bottom
+  left. A straight side's handles sit at its thirds, rounded towards
+  zero (`Kernel/moldenv.cpp:807-866`).
+- **Refit:** each source cubic mapped at 0, ⅓, ⅔, 1 → the cubic through
+  them; checked at ⅙, ½, ⅚, split at the middle while over the
+  threshold (`Kernel/gmould.cpp:189-258`). Our error: max axis
+  deviation in mp vs the threshold (the original normalises by cage
+  size). **Bounded**: depth ≤ `MAX_DEPTH` 10, ≤ `SPLITS_PER_SEGMENT` 64
+  splits per input segment per path. Lines stay lines under a valid
+  perspective; under an envelope they are cubics; a closed subpath's
+  implied closing line is moulded too.
+- **Never a NaN:** an invalid perspective (coincident, flat, crossed or
+  non-convex; the original's `WillBeValid` rule) maps **bilinearly**; a
+  projective denominator is clamped away from 0; every output clamped to
+  the extent; a zero-width source axis maps to 0. `affine()` detects a
+  parallelogram (exact integer test) and, for envelopes, straight sides
+  with handles within 1 mp of the thirds.
+- `MouldTransform`: `is_invertible() == false`, line widths unchanged
+  (the original's scalar is 1, `Kernel/tranform.cpp:136`),
+  `source_point` = 9×9 grid nearest + ≤ 24 Newton steps.
+- 2×2 envelope (24 points): Coons over piecewise (2-cubic) sides — our
+  definition; the original's also smooths inner lines and has no tag.
+- Property tests (`tests/mould.rs`): corners map exactly (envelope:
+  bit-exact; perspective: ≤ 1 mp), no NaN or malformed path on hostile
+  cages/thresholds, subdivision bounded at threshold 1e-9, outputs pass
+  through the images of on-curve points, refit within 4 × threshold,
+  perspective collinearity and inversion, cage↔path round trips.
+
 ### Bevel cross-sections (XARA-T-0322, 2026-10-15)
 
 `xarast_geom::bevel`: `BevelType` (the original's fifteen styles, record

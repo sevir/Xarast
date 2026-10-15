@@ -1732,6 +1732,13 @@ baked as paths.
   affine transformation.
 - For text under a mould, the baking **MUST** convert the text to curves (there is no
   way to deform `<text>` in SVG); the original text stays in `<xarast:mould-source>`.
+- As implemented (XARA-T-0334): `xarast:type` is `envelope` (12 cage points, one cubic
+  per side), `envelope-2x2` (24 points, two per side) or `perspective` (4 corners);
+  `<xarast:mould-shape>` holds the cage, starting at the image of the source's
+  bottom-left corner and running clockwise; `xarast:bounds` is omitted when the source
+  rectangle is the source subtree's own bounds; `xarast:threshold` (the curve refit
+  tolerance in millipoints) is omitted at its default, 32. The generated group is
+  regenerated at every save and dropped by the reader.
 
 #### 6.8.6 Feathering (`TAG_FEATHER` 4086, `TAG_FEATHER_EFFECT` 4127)
 
@@ -2835,8 +2842,9 @@ Blend =
 
 Mould =
   element x:mould {
-    attribute x:type   { "envelope" | "perspective" },
-    attribute x:bounds { xsd:string },
+    attribute x:type   { "envelope" | "envelope-2x2" | "perspective" },
+    attribute x:bounds { xsd:string }?,
+    attribute x:threshold { xsd:integer }?,
     element x:mould-shape  { attribute d { text } },
     element x:mould-source { AnySvg* },
     AnyForeign*

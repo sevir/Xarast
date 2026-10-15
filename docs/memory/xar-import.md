@@ -626,7 +626,7 @@ shadows) of the 59 files, for clip and mask constructs:
 | Bitmap transparency (171), a bitmap used as a mask | 3 | JagSS100 simple, scope3 simple | renders (XARA-T-0171), with its levels and mode since XARA-T-0307 (finding 18) |
 | `TAG_FEATHER` (4086), a soft-edge mask | 75 | Groucho2 63, feathers 9, Watch4 3 | imported as an attribute; **drawn feathered** since XARA-US-0068 (finding 19) |
 | Shadow (4050) / bevel (4052) / contour (4066) controllers | 98 / 22 / 4 | Groucho2, Girard_simple, SoftShadow, Watch4, testimp1 | live objects, Phase 13; **shadows imported and drawn** since XARA-T-0318 (finding 20), **bevels** since XARA-T-0322 (finding 21), **contours** since XARA-T-0330 (finding 22) |
-| Perspective / envelope moulds (108 / 107) | 129 / 68 | Watch4, ProbeX16, scope3 simple, TextCurve, testimp1 | live objects, Phase 13 |
+| Perspective / envelope moulds (108 / 107) | 129 / 68 | Watch4, ProbeX16, scope3 simple, TextCurve, testimp1 | live objects, **imported and drawn** since XARA-T-0334 (finding 24) |
 
 So "clips in imported files" is, for this corpus, only bitmap
 transparency; `smoke-open` reports every file complete with
@@ -754,7 +754,7 @@ that owns it:
 | ~~4052–4057 bevel (atomic)~~ | 22 controllers | done, XARA-T-0322 (finding 21) |
 | ~~4066, 4067 contour (atomic)~~ | 4 controllers | done, XARA-T-0330 (finding 22) |
 | ~~105, 106, 4060–4062, 4072–4074 blend~~ | 1 976 records | done, XARA-T-0333 (finding 23); along a path not drawn (F6) |
-| 107–110, 4012 mould | 197 controllers | XARA-US-0071 (G10) |
+| ~~107–110, 4012 mould~~ | 197 controllers | done, XARA-T-0334 (finding 24) |
 | 4127 feather effect (the effect-stack form) | 0 in the corpus | XARA-US-0069 |
 
 Fidelity limits accepted for feathers: the disc is centred on a pixel
@@ -946,6 +946,41 @@ yet). Watch4 has one blender with no 4073.
   remain), scope3 295 → 21, ProbeX16 1 411 → 259, WATCH2 246 → 2. Fuzz
   seed `blend`.
 
+### 24. Moulds are live objects, their copy regenerated (XARA-T-0334, 2026-10-16)
+
+Decoders for `TAG_MOULD_ENVELOPE`/`_PERSPECTIVE` (107/108: one `INT32`
+threshold), `TAG_MOULD_GROUP` (109, empty), `TAG_MOULD_PATH` (110, an
+absolute path, origin-translated like every coordinate) and
+`TAG_MOULD_BOUNDS` (4012, a translated rectangle). Corpus census:
+**197 moulds** (129 perspective: Watch4 124, scope3 simple 4, TextCurve
+1; 68 envelope: ProbeX16 64, Watch4 2, TextCurve 1, testimp1 1), none
+nested, none with a bitmap. Contents: paths and regular shapes (Watch4
+127 paths + 95 shapes, ProbeX16 176 paths + 48 shapes), groups, **text
+stories** (Watch4 19, ProbeX16 16, TextCurve 2), 3 blends (Watch4);
+fills flat, linear, multi-stage, circular, elliptical, conical, and
+linear/elliptical/circular/flat transparencies. Every record order is
+attributes (and colour definitions), path (+ `TAG_PATH_FLAGS`), bounds,
+group.
+
+- **Field facts.** The record holds only the threshold
+  (`Kernel/nodemold.cpp:2699-2727`; 32 now, 1024 in v1 files,
+  `Kernel/moldshap.h:111-113`). The moulded objects (`NodeMoulder`) are
+  **never written** (`Kernel/nodemldr.cpp:1613-1650`); the original
+  rebuilds them in `PostImport` from the path and the group's bounds
+  (`Kernel/nodemold.cpp:2625-2660`). The cage is the path's coordinates
+  in order (no enum involved; the cap/join lesson does not apply here).
+  4012 is ignored by the original's reader, which recomputes the same
+  rectangle; we take it (it is that rectangle as saved).
+- **Mapping** (`Mapper::emit_mould`): `Live (Controller, Mould)` with
+  its attributes, an empty `Live (Generated)`, `Live (Source)` holding
+  the group's children. `MouldDegraded`: 0 no group, 1 an unusable cage
+  (stored flat = identity), 2 an extra object or second
+  cage/bounds/group inside (dropped), 3 a stray 109/110/4012 outside a
+  mould (dropped with its subtree). None fires on the corpus.
+- Snapshots (over the blends base): skipped Watch4 513 → 9, ProbeX16
+  259 → 3, scope3 simple 21 → 5, TextCurve 10 → 2, testimp1 13 → 9.
+  Fuzz seed `mould`. The opaque-record test now uses tag 118.
+
 ## Caps and joins (XARA-T-0329, 2026-10-15)
 
 - **`TAG_STARTCAP`/`TAG_ENDCAP`/`TAG_JOINSTYLE` hold the original's
@@ -1062,8 +1097,8 @@ yet). Watch4 has one blender with no 4073.
   is not in the format at all).
 - Live objects: 1 594 records currently round-trip as `NodeKind::Opaque`
   and should become `NodeKind::Live` in Phase 13. Shadows done
-  (finding 20), bevels done (finding 21), contours done (finding 22), blends done (finding 23);
-  moulds remain.
+  (finding 20), bevels done (finding 21), contours done (finding 22), blends done (finding 23),
+  moulds done (finding 24).
 - ~~A release-profile import benchmark~~: done 2026-09-23 as
   `cargo bench -p xarast-xar --bench import`. ~~`ProbeX16.xar` 644 ms
   against the 350 ms budget~~: 329–343 ms after XARA-T-0031 (finding 13).
