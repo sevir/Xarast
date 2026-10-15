@@ -858,6 +858,12 @@ XaraX" text); light angles 300–345, tilt 45 (testimp1 32), contrast
   (its contour). Groucho2 gains 19 paths, 63 Live nodes and 14 text
   units (the bevelled "made with XaraX" text). Fuzz seed `bevel`.
 - Open question 2 settled for bevels: whole degrees in an `INT32`.
+- **Joins** (XARA-T-0326): no `TAG_BEVELINK` in the corpus carries a
+  join attribute (its children: one flat fill, plus fill effect,
+  mappings and a transparency on one node). One controller has an
+  explicit mitre in force; the other 21 rely on the document
+  default, which is `Mitre` in the model and `BevelledJoin` in the
+  original (`document-model.md`, open TODO).
 
 ## Dead ends (do not retry)
 

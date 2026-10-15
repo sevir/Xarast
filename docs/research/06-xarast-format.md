@@ -1550,27 +1550,68 @@ default is `linearRGB`, which produces blurs and shadows visibly different from 
 #### 6.8.2 Bevel (`TAG_BEVEL` 4052, attributes `TAG_BEVATTR_*` 4053-4056, `TAG_BEVELINK` 4057)
 
 ```xml
-<xarast:bevel xarast:type="round" xarast:indent="6" xarast:light-angle="135"
-              xarast:light-elevation="45" xarast:contrast="0.5"
-              xarast:direction="outer" xarast:join="round"
-              xarast:light-colour="#ffffff" xarast:shadow-colour="#000000"/>
+<g id="xv3" xarast:kind="bevel">
+  <xarast:bevel xarast:type="round" xarast:indent="6" xarast:direction="outer"
+                xarast:light-angle="315" xarast:light-elevation="45"
+                xarast:contrast="0.5" xarast:colour="#c0c0c0"/>
+  <g xarast:generated="bevel" xarast:generated-by="xv3"/>
+  <path id="xv3src" d="…"/>   <!-- source object(s) -->
+</g>
 ```
 
-Baking: a `<filter>` with the classic chain
-`feGaussianBlur` (over `SourceAlpha`, radius = indent) →
-`feSpecularLighting` with `feDistantLight azimuth elevation` →
-`feComposite operator="in"` →
-`feComposite operator="arithmetic"` to compose light and shadow over `SourceGraphic`.
-When the bevel carries its own fill (`bevfill.cpp`), the writer **MUST** additionally
-bake the “inking node” (`TAG_BEVELINK`) as a sibling `<path>`.
-
-| `xarast:type` | Correspondence in Xara |
+| Attribute | Meaning |
 |---|---|
-| `round` | Rounded |
-| `flat` | Flat |
-| `chisel` | Chisel / Angled |
-| `ridge` | Ridge |
-| `mesa` | Mesa / Plateau |
+| `xarast:type` | the cross-section, one of the fifteen names below |
+| `xarast:indent` | the band's width, user units (points) |
+| `xarast:direction` | `inner` (the band lies inside the object, drawn over it) or `outer` (outside, drawn beneath) |
+| `xarast:light-angle` | the light's direction of travel, degrees anticlockwise in the document's frame (y up); the light sits opposite it |
+| `xarast:light-elevation` | the light's height above the plane, degrees (the record's tilt; 45 when the record has none) |
+| `xarast:contrast` | `0..=1` (the record's 0..100) |
+| `xarast:colour` (+ `xarast:colour-ref`) | the bevel node's own flat fill, only when it has one; otherwise the band takes the first colour of the source's first object |
+
+The join is not a bevel attribute: it is the join attribute in force at
+the bevel (the controller's or an ancestor's `stroke-linejoin`), as the
+original's bevel node finds it applied (`Kernel/nodebev.cpp:845-850`).
+`TAG_BEVATTR_*` are read and discarded by the original and are not
+written.
+
+`xarast:type` vocabulary: the original's fifteen styles in record order
+(`GDraw/gdraw2.h` `eBevelStyle`; the record stores the index). The faces'
+cross-sections are drawn by the closed CDraw; Xarast's are its own
+(`xarast_geom::bevel`), so a reader without Xarast must treat the
+cross-section as a hint.
+
+| Index | `gdraw2.h` | `xarast:type` | Xarast's cross-section |
+|---:|---|---|---|
+| 0 | `BEVEL_FLAT` | `flat` | a 45° chamfer |
+| 1 | `BEVEL_ROUND` | `round` | a quarter circle |
+| 2 | `BEVEL_HALFROUND` | `half-round` | half a round |
+| 3 | `BEVEL_FRAME` | `frame` | a ridge |
+| 4 | `BEVEL_MESA_1` | `mesa` | a chamfer to a plateau over ½ the band |
+| 5 | `BEVEL_MESA_2` | `mesa-2` | a chamfer to a plateau over ⅓ |
+| 6 | `BEVEL_SMOOTH_1` | `smooth` | a cosine S |
+| 7 | `BEVEL_SMOOTH_2` | `smooth-2` | a quintic S |
+| 8 | `BEVEL_POINT_1` | `point` | a concave ridge |
+| 9 | `BEVEL_POINT_2a` | `point-2a` | two ridges, a |
+| 10 | `BEVEL_POINT_2b` | `point-2b` | two ridges, b |
+| 11 | `BEVEL_RUFFLE_2a` | `ruffle-2a` | two cosine waves, a |
+| 12 | `BEVEL_RUFFLE_2b` | `ruffle-2b` | two cosine waves, b |
+| 13 | `BEVEL_RUFFLE_3a` | `ruffle-3a` | three cosine waves, a |
+| 14 | `BEVEL_RUFFLE_3b` | `ruffle-3b` | three cosine waves, b |
+
+The earlier draft's `chisel` and `ridge` are not used: no original style
+has those names (`frame` is the ridge). A reader **MUST** keep an unknown
+name rather than drop the bevel, and a writer **MUST NOT** emit one.
+
+Baking (`xarast:filter="bevel"`, dropped on reading): the silhouette
+(grown by a disc of the indent for an outer bevel) blurred by σ = indent/2
+into a height field, `feDiffuseLighting` with `feDistantLight
+azimuth = 180 − light-angle` and `elevation = light-elevation`, and an
+`arithmetic` composite applying the lit-to-flat ratio, scaled by the
+contrast, to `SourceGraphic` (inner) or to a flood of the colour
+composited beneath the object (outer). It approximates: the cross-section
+is the blur's whatever the style, and `feDiffuseLighting` differentiates
+per filter pixel, so the lit slope depends on the output resolution.
 
 #### 6.8.3 Contour (`TAG_CONTOURCONTROLLER` 4066, `TAG_CONTOUR` 4067)
 

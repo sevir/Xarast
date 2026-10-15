@@ -1274,6 +1274,38 @@ hour: cbdc3bd warm median 7.19 ms, first 73.1 ms, RSS 62.0 MiB; with
 bevels warm **7.35 ms**, first 109.2 ms, RSS 77.1 MiB, walk 18.8 ms.
 `render-groucho2` (nightly 16 ms) unaffected.
 
+### Bevel cost (XARA-T-0326, 2026-10-15)
+
+Design in `render.md`, "Bevel follow-ups". The machine was shared with
+another agent's builds (load 9–140 during the session); every number is a
+median of interleaved runs, before = the dev tip 0fd7599 (T-0321 merged),
+after = c2a6e17.
+
+| Measure | Before | After |
+|---|---:|---:|
+| `effects/bevel_inner_r16_1024` (lighting alone, 1024², r = 16 px, new bench) | 30.2 ms | **5.3 ms** |
+| `effects/bevel_outer_r16_1024` | 37.9 ms | **5.1 ms** |
+| Scratch per pixel (feature mask, column rows, faces) | 49 B | **17 B** |
+| Groucho2 first frame, sum of `BevelEffect::apply` (28 calls, 9 runs) | 16.5 ms | **14.5 ms** |
+| … at 400 % (5 runs) | 87.9 ms | **46.4 ms** |
+| Groucho2 `bench render --whole` first frame, 100 % (2 × 11 runs) | 103.6 / 97.9 ms | 109.4 / 100.6 ms (noise; see below) |
+| … at 400 % (7 runs) | 436.5 ms | **385.5 ms** |
+| … peak RSS 100 % / 400 % | 75.5 / 152.3 MiB | 75.4 / 150.1 MiB |
+| … warm median 100 % | 8.6–8.9 ms | 8.5–9.1 ms |
+
+- **At 100 % the lighting is not what the first frame waits on.** Its
+  calls are 30–55 Ki pixels and latency-bound (four short parallel
+  phases each); the bevelled content's two offscreen passes are the rest
+  of the 73 → 109 ms of T-0322, and its bitmap and noise fills the RSS
+  (with the lighting switched off the RSS stays at 75 MiB). The outer
+  bevels' mitre (Groucho2's two text bevels) adds a few pixels of region
+  each; the 100 % row is within the noise of the session.
+- **A parallel task needs ≥ 1 Ki pixels, not 16 Ki**: 16 Ki left these
+  regions three-way parallel and doubled the lighting's share (26–35 ms).
+- **No lighting cache.** It would only serve an edit of a bevelled
+  object's colour; a first frame, a zoom or a pan computes the
+  silhouette anew either way.
+
 ## Things that were slow, and why
 
 Worth remembering, because each was a factor of several and each has a shape

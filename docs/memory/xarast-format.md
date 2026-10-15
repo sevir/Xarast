@@ -824,6 +824,28 @@ the `live-source`:
   differentiates per filter pixel, so the slope depends on resolution;
   the scale was tuned at 72 dpi (`export.md`). A controller that also
   owns a feather stays unbaked (`Stats::bevels_unbaked`).
+- **The bake is still resolution-dependent (XARA-T-0326, not done).**
+  `kernelUnitLength` would fix `feDiffuseLighting`'s step in user units,
+  but Chromium and resvg ignore it, so it is no fix. What would work
+  everywhere, sketched and not built: take the slope as a difference of
+  the height field offset along the light in user units: `feColorMatrix`
+  the blurred alpha into an opaque grey `h`, `feOffset` it by ±δ (δ ≈
+  indent/4) towards and away from the light (two inputs `h⁺`, `h⁻`, the
+  second inverted to `1 − h⁻` by another matrix), `feComposite
+  arithmetic k2 = k3 = 0.5, k4 = 0` gives `D = ½ + ½(h⁺ − h⁻)` with alpha
+  1 (no clamp), then `arithmetic k1 = 2G, k2 = 1 − G` over the paint
+  gives `paint · (1 + G(2D − 1))`, G ∝ contrast · cot(elevation) / δ.
+  Every length is a user unit, so it scales with the drawing. It needs
+  re-tuning against the corpus export at two resolutions (`export.md`'s
+  comparison at 72 and e.g. 288 dpi), which is why it was left.
+- **The bake ignores the renderer's newer bevel rules** (XARA-T-0326):
+  joins (the band's corners are the blur's, i.e. round) and the inner
+  band painted in the first object's flat fill (the bake lights the
+  object's own colours). No corpus file shows the second; the first
+  changes testimp1's frame.
+- **`research/06 §6.8.2` now lists the fifteen-name vocabulary**, the
+  attributes as written, and that the join is the applied
+  `stroke-linejoin`, not a bevel attribute (XARA-T-0326).
 - **Dead end: an outer bevel's paint from its generated node's
   inheritance.** The first bake resolved the fill the empty generated
   node inherits from the controller; on reading, the controller's fill

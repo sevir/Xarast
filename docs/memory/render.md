@@ -1770,13 +1770,12 @@ controller's own feather) and needs only the silhouette:
   inner-bevel style swap and angle flip of the original are not
   reproduced (their meaning is inside CDraw). Corpus styles: flat 13,
   smooth 1 7, point 1 2.
-- **Not reproduced**: mitre/bevel joins on outer corners (the transform
-  always rounds them; the join attribute is not read); an inner bevel
-  lights each object's own colours where the original paints the first
-  object's fill over the band (they differ only for a group of several
-  fills, or a stroke under the band).
+- **Joins and the inner paint**: done in XARA-T-0326 (below). An inner
+  band's concave corners stay round and its convex ones mitred whatever
+  the join.
 - **Width**: `indent` in device pixels, capped at `MAX_BEVEL_PX` (2048);
-  reach `ceil(width) + 2`, growth that much for an outer bevel, 0 inner.
+  reach `ceil(width) + 2` (a mitred outer band: `ceil(10·width) + 2 +
+  11`), growth that much for an outer bevel, 0 inner.
 - **Against the embedded previews** (re-measured with a scratch
   registration over the drawing frame at 60 dpi; it differs from the
   T-0248 scripts, so compare only within this table):
@@ -1791,6 +1790,87 @@ controller's own feather) and needs only the silhouette:
   11`, release, load ~9: warm median 7.19 → **7.35 ms** (the 21 bevels
   hit the effect cache), first frame 73 → 109 ms, peak RSS 62.0 → 77.1
   MiB; at 400 % one Groucho2 frame is ~1.0 s.
+
+### Bevel follow-ups (XARA-T-0326, 2026-10-15)
+
+- **The feature transform got cheaper; nothing was cached.** The cost
+  item asked for the lighting map to be cached apart from the content's
+  colour. Measured first: in Groucho2's first frame the 27 bevel renders
+  were ~36 ms, of which the lighting (`BevelEffect::apply`) was ~13 ms and
+  the two offscreen passes over the bevelled content ~18–23 ms; at 400 %
+  171 ms, 78 of them lighting. A lighting cache would only serve an edit
+  of a bevelled object's colour (a new frame or zoom changes the
+  silhouette), so the transform itself was made cheaper instead: the
+  column sweep runs in parallel blocks of 64 columns with `i32` rows,
+  each band pixel's face is computed inside the row pass (no `nearest`
+  plane), and the faces are `[f32; 3]` with a NaN sentinel (17 bytes a
+  pixel of scratch instead of 49); rows run in tasks of ≥ 1 Ki pixels
+  (16 Ki halved the parallelism of Groucho2's 30–55 Ki-pixel regions). Byte-identical output (goldens; Groucho2 at 100/300 %,
+  testimp1 at 100/400 % PNGs). `effects/bevel_{inner,outer}_r16_1024`
+  (new): 30.2 / 37.9 → **5.3 / 5.1 ms**; in Groucho2's first frame the
+  lighting's sum 16.5 → 14.5 ms at 100 % (latency-bound small regions),
+  87.9 → 46.4 ms at 400 % (whole frame 437 → 386 ms). Numbers in `perf.md`, "Bevel
+  cost". The passes are the bevelled content itself, drawn twice; the
+  peak RSS is the frame's content (its bitmap and noise fills), not the
+  lighting (disabling the lighting leaves it at 75 MiB).
+- **Joins** (`BevelEffect::join`, the walker's `bevel_of`). Facts from
+  the original: the beveler gets the join type applied to the bevel node
+  (`Kernel/nodebev.cpp:845-850`, `:624-629`; RoundJoin only if none is
+  found), passes it to its face generator with a mitre limit of `10<<16`
+  and a line width of twice the indent (`Kernel/beveler.cpp:284-293`);
+  the outer path is contoured with the same join (`nodebev.cpp:479-501`).
+  The bevel node's own attributes copy the first object's join when it has
+  one (`tools/opbevel.cpp:1321-1340`); no corpus bevel node carries one,
+  so the join is the one resolved at the generated node (the controller's
+  attributes and its ancestors'). **Corpus: 21 of 22 controllers have no
+  join attribute in force** and get the model's default, `Mitre`; the
+  other has an explicit mitre in force. The original's registered default is
+  `BevelledJoin` (`Kernel/attr.cpp:1967-1980`), see document-model TODO.
+- **How corners are found** (renderer only, from the silhouette): an
+  outer band with a mitre or bevel join takes, for each piece, the pieces
+  2–8 px away (`CORNER_RING`), sorts their normals by turn from its own
+  and splits them at the widest gap; a gap of ≥ 20° (`CORNER_GAP`) with
+  ≥ 2 pieces each side (each edge's pieces within 20° of its outer end,
+  at least half of its side: the corner's own rounded pieces drop out)
+  and a convex corner (each edge's points behind the other's line) is a
+  corner. Each edge is a line fitted through its pieces' outline points
+  (principal axis; normals tilt ±7° along a straight antialiased edge,
+  the points only ±0.3 px). Past the corner (beyond both edges' ends)
+  the band is the far face up to the mitre limit, else the straight cut
+  (distance across (d1 + d2) / (1 + cos φ)); beside one edge, its face;
+  beside both (fit error inside a convex corner), the far face. A curve's
+  normals spread evenly (no gap) and round as before. Concave corners of
+  an outer band need nothing: both strips cover them.
+- **Dead ends**: (1) the extremes of the ring's spread with a 6° cluster
+  tolerance: coverage steps tilt piece normals ±7°, so nearly-axis-aligned
+  squares were missed; (2) a 2–4.5 px ring: line fits over 2 px tilted
+  7°; (3) testing the strip (`across ≤ 1`) before the corner: the corner
+  piece's own normal is the bisector, so the whole diagonal became a face
+  and the corner stayed round; (4) splitting the ring by the sign of the
+  turn: pieces next to the tip have normals near the piece's own and fell
+  on both sides; (5) face beside an edge whenever behind the other's line
+  (no tangent test): at a sharp tip that region reaches past the vertex,
+  so the edges' bands crossed beyond it.
+- **Invariant 23 again**: positions in the corner code *and* the piece's
+  outline point are relative to the piece's pixel (integer differences +
+  fractions). Region-local absolute positions rounded differently per
+  strip and moved six pixels by one level in the strip export test.
+  The mitre's reach adds the ring and its stencils (`+ CORNER_RING + 3`).
+- **Inner paint** (`BevelEffect::paint_inner`, `BevelParams::flat_paint`):
+  when the bevel's own colour or its first object's fill is flat, the
+  inner band is that colour, lit, painted over the content (antialiased
+  at the outline and at the band's inner edge), as the original's bevel
+  node (last child, a copy of the first object's flat fill, drawn as the
+  lighting bitmap through a palette of that colour) does; otherwise the
+  content's own colours are lit, which matches the original's non-flat
+  bevel node (the fill under a `TT_BEVEL` transparency) for one object.
+  The first object's transparency, also copied onto the bevel node, is
+  not applied. Corpus: no change (Groucho2's inner bevels are bitmap
+  filled). Golden `effect_bevel_smooth_inner_painted`.
+- **Corpus effect**: Groucho2 at 100 % byte-identical; at 300 % and
+  testimp1 changed: testimp1's frame-like outer bevel now has mitred
+  corners (a picture frame) instead of round ones. Not re-scored against
+  the previews (the T-0322 scratch registration is not in the tree).
 
 ### Nested effects in a silhouette pass (XARA-T-0321, phase 13, 2026-10-15)
 
@@ -2117,10 +2197,12 @@ erosion removed most of it (`effect_shadow_feathered`).
 | 28 | ~~Inner shadows (C5)~~. **Decided 2026-10-15: nothing now**: no `.xar` shadow type is inner, the model has no `Inner` kind and no tool makes one; the rules it will follow are fixed under "Nested effects in a silhouette pass" | deferred to C7 / the native format (XARA-US-0069) |
 | 29 | ~~A nested effect in a silhouette pass composites with its alpha~~. **Done 2026-10-15**: feathers and bevels see nested effects as outlines, a shadow as rendered; see "Nested effects in a silhouette pass" | done (XARA-T-0321) |
 | 30 | Bevel cross-sections, lighting curve and the inner-bevel style swap are Xarast's own (`xarast_geom::bevel`): determine them empirically against the original in a VM (phase 13 D's gate) | XARA-US-0069 |
-| 31 | Outer bevel joins: always round; read the join attribute and mitre/bevel the band's outer corners | XARA-US-0069 |
-| 32 | Bevel cost: the first Groucho2 frame went 73 → 109 ms (21 feature transforms); a bevel's lighting could be cached apart from its content's colour | XARA-US-0069 |
+| 31 | ~~Outer bevel joins: always round~~. **Done (XARA-T-0326)**: mitre (limit 10) and bevel joins from the applied join attribute; an inner band's concave corners still round | done |
+| 32 | ~~Bevel cost~~. **Done (XARA-T-0326)**: the feature transform is ~6× cheaper and uses 17 instead of 49 bytes a pixel; no lighting cache (it would only serve colour edits). What is left of the first frame is the bevelled content's two offscreen passes | done |
 | 33 | A shadow's own silhouette ignores transparency (invariant 24), but the original casts the *rendered alpha* of its subtree (`nodeshad.cpp:3999-4011`, `bshadow.cpp:245`): a 50 % transparent object casts a half-dark shadow there. Switching changes every shadow golden and the SoftShadow/Groucho2 numbers; decide against the previews | XARA-US-0069 |
 | 34 | SVG: a feather filter around a shadowed object reads `SourceAlpha` (the shadow as rendered), not the outline rule above; no corpus file has one (`export.md`, "Shadows in SVG") | XARA-US-0069 |
+| 35 | Bevels the renderer still does differently: an inner band's concave corners always round (a mitre there needs a reach of ten widths inside the content); corners are found in the silhouette, so a mitre's point and a cut's position are as good as a line fit over 2–8 px (corners under ~16 px of edge on a side, e.g. small text, round); the bevel node's own transparency copy is not applied to a painted inner band | XARA-US-0069 |
+| 36 | The SVG bevel bake is resolution-dependent (`feDiffuseLighting` differentiates per filter pixel); a user-space chain is sketched in `xarast-format.md`, "Bevels" | XARA-US-0069 |
 | 24 | ~~`RampMapping::Sin` ignored; `ClipViewMode::Outside` dropped~~. **Done 2026-09-24**: `RampEase` (above) and the walker's outside clip (`app-core.md` decision 34); the renderer still clips only to a path's inside, on purpose | done (XARA-US-0017) |
 | 12 | ~~Reconcile `wgpu` versions~~. **Decided 2026-09-23**: no `vello` in the product until it targets the workspace's `wgpu` (two `wgpu`s cost +4.08 MiB and 46 crates, and cannot share a device); the spike keeps building against `vello::wgpu` behind `spike-gpu` | done (XARA-US-0011) |
 

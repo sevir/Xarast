@@ -485,6 +485,14 @@ New in Phase 2:
     parameter: it is the controller's join attribute, already in the
     tree. An outer bevel's controller bounds grow by its indent. The
     digest covers the colour.
+    *XARA-T-0326*: the walker resolves the join at the generated node
+    (`resolve_uncached`: the controller's attributes before it and its
+    ancestors'), which is what the original's bevel node finds applied
+    when it carries no copy of its own (none in the corpus).
+    `BevelParams::flat_paint` is `colour`, else the first object's fill
+    when it is `Paint::Flat`: an inner bevel paints its band in it, as the
+    original's bevel node does; a non-flat first fill gives `None` (the
+    renderer lights the objects' own colours).
 
 ## The `.xar` attribute tag reconciliation
 
@@ -801,3 +809,13 @@ the digest recorded for that state serial.
       with a dense map instead of a HAMT.
 - [ ] Incremental checkpoints would need dirty tracking in `Tree`. Revisit
       the snapshot representation (HAMT or chunked) only then.
+- [ ] **The default join differs from the original's.** `default_for(
+      JoinType)` is `Join::Mitre`; the original registers `BevelledJoin`
+      as the document default (`Kernel/attr.cpp:1967-1980`; the
+      constructor says the same, `:1927-1931`), and a `.xar` never writes
+      the defaults. Found in XARA-T-0326: 21 of the corpus's 22 bevel
+      controllers have no join attribute in force, so their joins (and any
+      stroke without one) come from this default. Check against the
+      previews before changing it: it moves every stroke corner that
+      relies on the default, the goldens built on it and the `.xarast`
+      writer's "differs from default" output.
