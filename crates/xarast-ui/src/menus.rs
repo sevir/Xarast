@@ -242,9 +242,7 @@ impl AppMenu {
                 egui::ScrollArea::vertical()
                     .max_height(140.0)
                     .show(ui, |ui| {
-                        ui.label(
-                            egui::RichText::new(THIRD_PARTY_NOTICES).color(tokens.text_muted),
-                        );
+                        ui.label(egui::RichText::new(THIRD_PARTY_NOTICES).color(tokens.text_muted));
                     });
                 ui.add_space(8.0);
                 if ui.button("Close").clicked() {
@@ -523,8 +521,11 @@ mod tests {
                 "missing from the notices: {statement}"
             );
         }
-        assert!(THIRD_PARTY_NOTICES
-            .contains("This software is based in part on the work of the Independent JPEG Group."));
+        assert!(
+            THIRD_PARTY_NOTICES.contains(
+                "This software is based in part on the work of the Independent JPEG Group."
+            )
+        );
     }
 
     #[test]
