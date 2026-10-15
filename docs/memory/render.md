@@ -1944,7 +1944,7 @@ erosion removed most of it (`effect_shadow_feathered`).
   |---|---|---|
   | feather | its outline (`Outline { shadows: true }`) | content ∪ outline moved by `map` / grown by `spread`, opaque, unblurred |
   | bevel | its outline (`Outline { shadows: false }`) | its content only |
-  | shadow | its rendered result (`Rendered`, as before) | as drawn |
+  | shadow | its rendered result (wall, floor: the colour pass's alpha, XARA-T-0327; glow: the opaque pass, `Rendered`) | as drawn |
   What an effect contributes as an outline (`LayerEffect::outline_at`): a
   feather or an inner bevel its content's silhouette; an outer bevel its
   content plus its band (the bevel's own `apply` with an opaque colour, so
@@ -1987,6 +1987,75 @@ erosion removed most of it (`effect_shadow_feathered`).
   nested effect in an outline silhouette it contributes its content only
   (it draws nothing outside it), so `outline_at` treats it like an inner
   bevel; under an enclosing shadow it counts as rendered.
+
+### Shadows from rendered alpha (XARA-T-0327, 2026-10-16)
+
+TODO 33 closed: a wall or floor shadow is cast from its content's
+**rendered alpha**, no longer from an opaque silhouette pass.
+
+- **Facts from the original, verified** (facts only): `NEW_GLOW_SILHOUETTE`
+  is defined (`Kernel/nodeshad.cpp:193`), so the live
+  `RenderShadowedNodeOffscreen` is the one at `:3946-4148`. It renders
+  the controller's applied attributes (offscreen ones excluded) and then
+  the shadowed node (`RenderTreeAtomic`, `:3999-4011`) into a **32-bit**
+  offscreen region (`CreateOffscreenRR`, `:3773-3778`). The no-transparency
+  attributes it declares at `:3990-3991` are **never rendered** in that
+  version (the older one, `#ifndef NEW_GLOW_SILHOUETTE`, set them for a
+  glow at `:3878-3879`). `CBitmapShadow::MakeWallShadow` copies byte 3 of
+  each pixel into an 8-bit plane and blurs it (`Kernel/bshadow.cpp:245`
+  for blurs under the minimum, `:277`/`:296` otherwise). So a wall or
+  floor shadow's density is the subtree's rendered alpha, transparency
+  and nested effects included. A glow contours that bitmap with
+  `ContourBitmap` at threshold 0xFE (`nodeshad.cpp` glow branch after
+  `:4031`): any pixel not fully clear counts as solid, so a glow ignores
+  partial transparency.
+- **The rule** (`LayerEffect::casts_rendered_alpha`, used by
+  `render_fresh`): a shadow whose `spread` is not above 0 (wall, floor;
+  a NaN spread too) takes its silhouette from the colour pass's alpha; a
+  glow keeps the opaque pass (`silhouette_plane`, nested effects
+  `Rendered`). The opaque pass and the 0xFE threshold differ only for an
+  object at most 1/255 opaque (the original casts no glow for it, we do),
+  and in a glow's edge antialiasing. Feathers and bevels are untouched.
+- **Invariants kept**: the alpha is the same `render_region` output over
+  the same region, band grid and coverage edge as before, so invariant 23
+  holds; the effect cache's key already covers every op in the push … pop
+  range, which is all the alpha depends on (invariant 25). The
+  determinism, strip-independence and warm-cache tests pass unchanged.
+  Bonus: a wall or floor shadow renders one offscreen pass instead of
+  two.
+- **Evidence, against the embedded previews** (scratch `score.py`, 60 dpi
+  page render, registered, mean |Δ|; opaque pass → rendered alpha):
+  | File (shadows) | Pixels changed | Opaque | Alpha |
+  |---|---:|---:|---:|
+  | Groucho2 (81) | 680 | 12.44 | **12.42** |
+  | SoftShadow (3) | 0 | 10.49 | 10.49 |
+  | Girard_simple (9) | 0 | 5.22 | 5.22 |
+  | Watch4 (4) | 0 | 4.64 | 4.64 |
+  | testimp1 (1) | 0 | 6.55 | 6.55 |
+  Only Groucho2 has shadowed content that is not opaque (the red
+  lipstick's highlight): restricted to the preview pixels that changed
+  (178 px of a 113 × 125 preview), opaque 21.18 → alpha **19.08**. The
+  evidence agrees with the code reading, so the original's semantics
+  win. The non-corpus `filters/SVGFilter/samples/sample2.xar` and
+  `sample3.xar` (15 and 9 shadows) change a lot
+  (mean |Δ| 1.43 and 0.28) but carry no preview to judge by.
+- **Goldens**: none of the existing ones moved (every shadowed golden's
+  content is opaque, where coverage and alpha agree byte for byte). New
+  `effect_shadow_transparent` (an opaque square and a half-transparent
+  disc under one wall shadow) and
+  `golden_cpu.rs::a_half_transparent_object_casts_a_half_dark_shadow`
+  (darkness 200/255 beside the square, half of it beside the disc);
+  mutation-checked (the opaque pass fails both). Unit test
+  `a_wall_or_floor_casts_rendered_alpha_and_a_glow_the_opaque_pass`.
+- **Export**: SVG's shadow filter already read `SourceAlpha`, so it now
+  agrees with the raster: Groucho2 svg 6.87 → **6.81**; pdf (rasterised)
+  4.77, unchanged; the other shadowed files unchanged.
+- **SVG, feathered controllers (TODO 34, partly closed)**: a wall or glow
+  controller that owns a feather is now one filter
+  (`svg/effect.rs::feathered_shadow`) whose feather is cut from the
+  outline rule above; see `export.md`, "Shadows in SVG". A floor
+  controller's feather, and a feather on a group *around* a shadow
+  controller, still read the shadow as drawn.
 
 ## Invariants that must not be broken
 
@@ -2097,15 +2166,20 @@ erosion removed most of it (`effect_shadow_feathered`).
     growth. Clamping the region to the viewport feathers every object at
     the view's edge; starting coverage at the region's corner moves
     pixels by 1/255 between a repaint and a frame.
-24. **Effects are cut from the silhouette, not from alpha.** A feather or
-    a shadow of a transparent object is shaped by its outline; using its
-    alpha makes a half-transparent object feather to nothing. In a
-    feather's or a bevel's silhouette a **nested effect counts as its
-    outline** (`LayerEffect::outline_at`), never as its colour result: a
-    nested shadow opaque and unblurred (feather) or not at all (bevel); a
-    shadow's own silhouette sees nested effects as rendered ("Nested
-    effects in a silhouette pass"). (The original casts a shadow from its
-    subtree's *rendered alpha*, transparency included: TODO 33.)
+24. **Feathers, bevels and glows are cut from the silhouette; a wall or
+    floor shadow is cast from rendered alpha.** A feather of a
+    transparent object is shaped by its outline; using its alpha makes a
+    half-transparent object feather to nothing. In a feather's or a
+    bevel's silhouette a **nested effect counts as its outline**
+    (`LayerEffect::outline_at`), never as its colour result: a nested
+    shadow opaque and unblurred (feather) or not at all (bevel). A glow's
+    silhouette is the opaque pass with nested effects as rendered. A
+    **wall or floor shadow casts its content's rendered alpha**
+    (`LayerEffect::casts_rendered_alpha`: the colour pass's own alpha,
+    transparency and nested effects included), as the original does: a
+    half-transparent object casts a half-dark shadow ("Shadows from
+    rendered alpha"). Never give a wall shadow the opaque pass back, and
+    never give a feather or a bevel the alpha.
 25. **An effect's result depends on its key and nothing else.** Anything
     new an effect's pixels come to depend on (a resource kind, a view
     field, a configuration field, an input outside its push … pop range)
@@ -2225,8 +2299,8 @@ erosion removed most of it (`effect_shadow_feathered`).
 | 30 | Bevel cross-sections, lighting curve and the inner-bevel style swap are Xarast's own (`xarast_geom::bevel`): determine them empirically against the original in a VM (phase 13 D's gate) | XARA-US-0069 |
 | 31 | ~~Outer bevel joins: always round~~. **Done (XARA-T-0326)**: mitre (limit 10) and bevel joins from the applied join attribute; an inner band's concave corners still round | done |
 | 32 | ~~Bevel cost~~. **Done (XARA-T-0326)**: the feature transform is ~6× cheaper and uses 17 instead of 49 bytes a pixel; no lighting cache (it would only serve colour edits). What is left of the first frame is the bevelled content's two offscreen passes | done |
-| 33 | A shadow's own silhouette ignores transparency (invariant 24), but the original casts the *rendered alpha* of its subtree (`nodeshad.cpp:3999-4011`, `bshadow.cpp:245`): a 50 % transparent object casts a half-dark shadow there. Switching changes every shadow golden and the SoftShadow/Groucho2 numbers; decide against the previews | XARA-US-0069 |
-| 34 | SVG: a feather filter around a shadowed object reads `SourceAlpha` (the shadow as rendered), not the outline rule above; no corpus file has one (`export.md`, "Shadows in SVG") | XARA-US-0069 |
+| 33 | ~~A shadow's own silhouette ignores transparency~~. **Done 2026-10-16 (XARA-T-0327)**: a wall or floor shadow casts its content's rendered alpha, as the original does; a glow keeps the opaque pass (its 0xFE threshold); no golden moved, Groucho2 matches its preview better; see "Shadows from rendered alpha" | done |
+| 34 | SVG: a feather around a shadow reads `SourceAlpha` (the shadow as drawn), not the outline rule. **Partly done 2026-10-16 (XARA-T-0327)**: a wall or glow controller that owns a feather is one filter cut from the outlines (synthetic document: 2.69 → 0.68). Left: a floor controller's feather (its shadow is a derived copy) and a feather on a group around a shadow controller; no corpus file has either (`export.md`, "Shadows in SVG") | XARA-US-0069 |
 | 35 | Bevels the renderer still does differently: an inner band's concave corners always round (a mitre there needs a reach of ten widths inside the content); corners are found in the silhouette, so a mitre's point and a cut's position are as good as a line fit over 2–8 px (corners under ~16 px of edge on a side, e.g. small text, round); the bevel node's own transparency copy is not applied to a painted inner band | XARA-US-0069 |
 | 36 | The SVG bevel bake is resolution-dependent (`feDiffuseLighting` differentiates per filter pixel); a user-space chain is sketched in `xarast-format.md`, "Bevels" | XARA-US-0069 |
 | 24 | ~~`RampMapping::Sin` ignored; `ClipViewMode::Outside` dropped~~. **Done 2026-09-24**: `RampEase` (above) and the walker's outside clip (`app-core.md` decision 34); the renderer still clips only to a path's inside, on purpose | done (XARA-US-0017) |

@@ -81,7 +81,7 @@ same code. What Interchange changes, and where:
 | Background | none | `SvgOptions::background` → a `<rect>` over the viewBox, first in the body | `assemble` |
 | Ids | stable, the identity model | kept; `minify` drops those nothing refers to (`url(#…)`, `href="#…"`, `inkscape:current-layer`) plus comments and indentation | `interchange::project` |
 | Baked content | `xarast:generated` | unmarked (the attribute goes with the rest) | projection |
-| Shadows (XARA-T-0320, floor + feathered T-0324) | `xarast:shadow` + `filter="url(#f…)"` on the controller to a `<filter xarast:filter="shadow">`; floor/feathered: a derived `<g xarast:derived>` copy | the same, unmarked | `Emitter::bake_shadow`, `svg/effect.rs` |
+| Shadows (XARA-T-0320, floor + feathered T-0324, T-0327) | `xarast:shadow` + `filter="url(#f…)"` on the controller to a `<filter xarast:filter="shadow">` (a feathered wall or glow: the same filter feathers both); floor: a derived `<g xarast:derived>` copy | the same, unmarked | `Emitter::bake_shadow`, `svg/effect.rs` |
 | Feathers (XARA-T-0317) | `xarast:feather` + `filter="url(#f…)"` to a `<filter xarast:filter="feather">` | the same filter, unmarked | `Emitter::own_feather`, `svg/effect.rs` |
 
 **Why a projection pass instead of an `if` at every write.** The
@@ -244,7 +244,7 @@ Region: `effect_region(controller, blur + glow + max|offset|)`.
 `Stats::shadows_baked` feeds `Simplified { "wall and glow shadows drawn by
 an SVG filter (a Gaussian blur for the disc blur)" }`.
 
-**Floor shadows and feathered controllers (XARA-T-0324, 2026-10-15)**: a
+**Floor shadows and feathered controllers (XARA-T-0324, 2026-10-15; feathered wall and glow controllers are one filter since XARA-T-0327, below)**: a
 derived wrapper `<g xarast:derived="shadow">` with a `<use>` of the source
 (floor map `F·M·F⁻¹` as `matrix(…)`) and the shadow-only filter, placed
 before the object inside the controller; the reader skips `xarast:derived`
@@ -264,6 +264,44 @@ Groucho2 6.67 → **2.69**, SoftShadow 5.03 → **3.16**. Whole corpus: 118
 comparisons, 0 failures, both SVG limits dropped. What is left: the
 Gaussian's tails against the disc's hard support (as for feathers) and the
 shadows of text, whose region is the story's box ± 50 %.
+
+**Feathered wall and glow controllers (XARA-T-0327, 2026-10-16)**: the
+derived copy made the controller's feather read `SourceAlpha` with the
+shadow in it as drawn (blurred, at its darkness), so it eroded most of the
+shadow; the renderer cuts that feather from the object's outline and its
+moved (wall) or grown (glow) copy, unblurred and opaque (`render.md`,
+"Nested effects in a silhouette pass"). Now such a controller carries
+**one** filter, `effect::feathered_shadow` (`xarast:filter="shadow"`, so
+the reader drops it like any shadow filter): the shadow chain with its
+result `s`, `feMerge result="k"` of `s` under `SourceGraphic`, then the
+feather's silhouette `u` (wall: `feMerge` of `SourceAlpha` and its
+`feOffset` by the shadow's offset; glow: `SourceAlpha` dilated by the glow
+disc, which encloses the object), the feather's mask from `u`
+(`feather_mask`: disc erosion, blur, profile) and `feComposite in="k"
+operator="in"`. `xarast:feather` is still written on the controller; no
+feather filter and no derived copy are. `Stats::effects_baked` and
+`shadows_baked` count one each, as before. Unfeathered shadows write the
+same bytes as before. The silhouette is the object's *alpha*, not an
+opaque pass (a filter cannot tell coverage from transparency), so a
+transparent object's feather mask is weaker than the renderer's.
+
+Measured on a synthetic document (a feathered wall and a feathered floor
+controller, feather 12 pt, offset 8 pt, darkness 0.6; 144 dpi, paper,
+resvg against our PNG): wall half 2.69 → **0.68**, floor half 2.47
+unchanged. Left (`render.md` TODO 34): a **floor** controller's feather
+still reads its derived copy as drawn (no filter applies the floor's affine
+map), and a feather on a **group around** a shadow controller reads its
+whole `SourceGraphic`, shadow included (a filter cannot separate the
+shadow from the object; `feImage` of an element would, but Firefox does not
+support it). No corpus file has either (98 wall shadows, none feathered).
+
+**Shadows from rendered alpha (XARA-T-0327)**: the renderer now casts a
+wall or floor shadow from its content's rendered alpha, which is what
+the shadow filter's `SourceAlpha` always was: Groucho2 svg 6.87 →
+**6.81** (its lipstick's highlight), pdf 4.77 unchanged; SoftShadow,
+Girard_simple, Watch4 and testimp1 unchanged. A glow is still cast from
+an opaque pass by the renderer but from `SourceAlpha` in SVG, so a
+partly transparent object glows weaker in SVG (no corpus glows).
 
 ## Colour fidelity and regression (W11.5, W11.6, XARA-US-0060)
 

@@ -783,13 +783,15 @@ renderer draws the shadow) and `<g xarast:kind="live-source">`:
   drops both, and reads the shadow from `<xarast:shadow>`; the next save
   derives the same filter. All are counted in `Stats::shadows_baked`.
 - **The derived copy** (XARA-T-0324): a floor shadow (an SVG filter cannot
-  apply the affine map) and any shadow on a controller that also owns a
-  feather (one `filter` per element) are drawn by a wrapper `<g
+  apply the affine map) is drawn by a wrapper `<g
   xarast:derived="shadow" filter="url(#f…)"><use href="#<source id>"
   [transform="matrix(…)"]/></g>`, written in the controller after the
   `<xarast:shadow>` prelude, so it sits under the object and inside the
-  controller's own feather (which therefore feathers it, as the renderer
-  does). The filter is the shadow-only variant (`effect::Shadow
+  controller's own feather (which therefore feathers it, reading it as
+  drawn). Until XARA-T-0327 a feathered wall or glow controller had one
+  too; now its shadow and feather are one filter
+  (`effect::feathered_shadow`, `export.md` "Shadows in SVG"), with
+  `xarast:feather` still written on the controller. The filter is the shadow-only variant (`effect::Shadow
   { keep_source: false }`); the `<use>` carries the floor map conjugated by
   the frame flip (`F·M·F⁻¹`, points). **Reader rule: `children()` skips
   every element with an `xarast:derived` attribute**, so it is neither a node
