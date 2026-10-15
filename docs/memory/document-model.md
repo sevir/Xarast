@@ -880,14 +880,18 @@ the digest recorded for that state serial.
       booleans). The model keeps all four values (they round-trip).
       Where the original itself forces a rule (stroke shapes and brushes
       fill their outline non-zero, `Kernel/ppstroke.cpp:292`,
-      `ppvecstr.cpp:527`, `ppairbsh.cpp:539`; contours negative,
-      `Kernel/nodecntr.cpp:609`) Xarast has no such outline fill yet;
-      whoever adds one must set the rule there, not rely on the default.
+      `ppvecstr.cpp:527`, `ppairbsh.cpp:539`) Xarast has no such outline
+      fill yet; whoever adds one must set the rule there, not rely on the
+      default. Contour rings: the original fills each under a negative
+      rule whatever is in force (`Kernel/nodecntr.cpp:605-609`), so the
+      walker's `paint_contour` pushes `Negative` per ring, and
+      `contour::silhouette` resolves the source under its rule as drawn.
       Text glyph runs still fill non-zero in the walker, as before.
-      Measured (export 72 dpi, previews by the T-0248 registration): 9 of
-      59 PNGs change; preview |Δ| SimpleSphere 16.52 → **7.65** (its globe
-      is a wire frame, as the preview shows), Girard_simple 17.18 →
-      **9.53**, scope3 simple 25.16 → **16.07** (wood table, sky),
+      Measured against a1bc8ec (contours drawn; export 72 dpi, previews
+      by the T-0248 registration): 9 of 59 PNGs change, no contour ring
+      does; preview |Δ| SimpleSphere 16.52 → **7.65** (its globe is a
+      wire frame, as the preview shows), Girard_simple 14.34 → **4.70**,
+      scope3 simple 25.16 → **16.07** (wood table, sky),
       BLUECAR 6.24 → 5.58, GardenPlan 4.73 → 4.72, leafgirl 22.65 →
       22.67, JagSS100 / WATCH2 unchanged; **Watch4 15.66 → 16.55** (its
       wheels and rim open into rings — not attributed: it has 65 blends
@@ -895,4 +899,4 @@ the digest recorded for that state serial.
       render golden moved (the fill-rule goldens draw the sign rules
       non-zero, as before); export check 118 comparisons, 0 failures, no
       limit moved (largest moves: scope3 svg 1.26 → 2.23, Girard pdf
-      1.05 → 1.63). `.xarast`: see `xarast-format.md`.
+      1.09 → 1.67, WATCH2 pdf 2.37 → 2.69; Watch4 svg 1.13 → 0.75). `.xarast`: see `xarast-format.md`.
