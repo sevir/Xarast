@@ -383,13 +383,17 @@ impl BevelEffect {
                 || cov(x, y - 1) == 0
                 || cov(x, y + 1) == 0
         };
-        let feature: Vec<bool> = (0..width * height)
-            .map(|i| is_edge((i % width) as i64, (i / width) as i64))
-            .collect();
+        let mut feature = vec![false; width * height];
+        feature
+            .par_chunks_mut(width)
+            .enumerate()
+            .with_min_len(rows_per_task(width))
+            .for_each(|(y, row)| {
+                for (x, f) in row.iter_mut().enumerate() {
+                    *f = is_edge(x as i64, y as i64);
+                }
+            });
         let reach = r + 2.0;
-        let Some(nearest) = feature_transform(&feature, width, height, reach) else {
-            return;
-        };
         // The piece's inward normal and where the outline crosses it.
         let piece = |b: usize| -> ((f64, f64), (f64, f64)) {
             let (bx, by) = ((b % width) as i64, (b / width) as i64);
@@ -423,42 +427,45 @@ impl BevelEffect {
         let outer = self.outer;
         let style = self.style;
         // Each band pixel's distance across the band and the direction its
-        // face rises in.
-        let mut geo: Vec<Option<(f64, (f64, f64))>> = vec![None; width * height];
-        geo.par_chunks_mut(width)
-            .zip(nearest.par_chunks(width))
-            .enumerate()
-            .for_each(|(y, (row, near))| {
-                for (x, (g, b)) in row.iter_mut().zip(near).enumerate() {
-                    let Some(b) = *b else { continue };
-                    let a_cov = silhouette[y * width + x];
-                    if (!outer && a_cov == 0) || (outer && a_cov == 255) {
-                        continue;
-                    }
-                    let (n, e) = piece(b as usize);
-                    let p = (x as f64 + 0.5, y as f64 + 0.5);
-                    let v = (p.0 - e.0, p.1 - e.1);
-                    let along = v.0 * n.0 + v.1 * n.1;
-                    let across = (v.0 - along * n.0).hypot(v.1 - along * n.1);
-                    // Inside a piece's strip its normal holds (a face);
-                    // beyond it, round a corner (a join).
-                    let (d, up) = if n != (0.0, 0.0) && across <= 1.0 {
-                        let d = if outer { -along } else { along };
-                        (d.max(0.0), n)
-                    } else {
-                        let len = v.0.hypot(v.1);
-                        if len <= 0.0 {
-                            (0.0, n)
-                        } else {
-                            let dir = (v.0 / len, v.1 / len);
-                            (len, if outer { (-dir.0, -dir.1) } else { dir })
-                        }
-                    };
-                    if d <= r + 0.5 {
-                        *g = Some((d, up));
-                    }
+        // face rises in, `[d, up.x, up.y]`; `d` is NaN off the band. Single
+        // precision: 12 bytes a pixel rather than 32 (the region's largest
+        // plane after the colour; `docs/memory/perf.md`, "Bevel cost").
+        let mut geo: Vec<[f32; 3]> = vec![[f32::NAN, 0.0, 0.0]; width * height];
+        let found = nearest_features(&feature, width, height, reach, &mut geo, |x, y, b, g| {
+            let a_cov = silhouette[y * width + x];
+            if (!outer && a_cov == 0) || (outer && a_cov == 255) {
+                return;
+            }
+            let (n, e) = piece(b as usize);
+            let p = (x as f64 + 0.5, y as f64 + 0.5);
+            let v = (p.0 - e.0, p.1 - e.1);
+            let along = v.0 * n.0 + v.1 * n.1;
+            let across = (v.0 - along * n.0).hypot(v.1 - along * n.1);
+            // Inside a piece's strip its normal holds (a face); beyond it,
+            // round a corner (a join).
+            let (d, up) = if n != (0.0, 0.0) && across <= 1.0 {
+                let d = if outer { -along } else { along };
+                (d.max(0.0), n)
+            } else {
+                let len = v.0.hypot(v.1);
+                if len <= 0.0 {
+                    (0.0, n)
+                } else {
+                    let dir = (v.0 / len, v.1 / len);
+                    (len, if outer { (-dir.0, -dir.1) } else { dir })
                 }
-            });
+            };
+            if d <= r + 0.5 {
+                // A distance of at most MAX_BEVEL_PX + 3 device pixels and
+                // a unit vector.
+                // f32-ok: region-relative, bounded.
+                *g = [d as f32, up.0 as f32, up.1 as f32];
+            }
+        });
+        drop(feature);
+        if !found {
+            return;
+        }
         // Neighbouring faces' directions averaged over 3 × 3 (weights 1, 2,
         // 4): a piece's normal comes from a pixel stencil, and a pixel
         // either side of a strip's edge must not flicker between a face
@@ -467,11 +474,14 @@ impl BevelEffect {
         colour
             .par_chunks_mut(width * 4)
             .enumerate()
+            .with_min_len(rows_per_task(width))
             .for_each(|(y, row)| {
                 for (x, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-                    let Some((d, _)) = geo[y * width + x] else {
+                    let [d, ..] = geo[y * width + x];
+                    if d.is_nan() {
                         continue;
-                    };
+                    }
+                    let d = f64::from(d);
                     let mut acc = (0.0, 0.0);
                     for dy in -1i64..=1 {
                         for dx in -1i64..=1 {
@@ -479,10 +489,11 @@ impl BevelEffect {
                             if xx < 0 || yy < 0 || xx >= width as i64 || yy >= height as i64 {
                                 continue;
                             }
-                            if let Some((_, u)) = geo[yy as usize * width + xx as usize] {
+                            let [nd, ux, uy] = geo[yy as usize * width + xx as usize];
+                            if !nd.is_nan() {
                                 let w = f64::from(4 >> (dx.abs() + dy.abs()));
-                                acc.0 += w * u.0;
-                                acc.1 += w * u.1;
+                                acc.0 += w * f64::from(ux);
+                                acc.1 += w * f64::from(uy);
                             }
                         }
                     }
@@ -534,118 +545,165 @@ impl BevelEffect {
     }
 }
 
+/// Rows a parallel task takes at least: about 16 Ki pixels, so a small
+/// region (most bevels are a few hundred pixels across) is not split into
+/// tasks that cost more to schedule than to run.
+fn rows_per_task(width: usize) -> usize {
+    (16 * 1024 / width.max(1)).max(1)
+}
+
 /// The `Bevel` family's table, built once.
 fn bevel_lut() -> &'static BlendLut {
     static LUT: OnceLock<BlendLut> = OnceLock::new();
     LUT.get_or_init(|| build_blend_lut(BlendFamily::Bevel, LumaWeights::BT601))
 }
 
-/// For every pixel, the index of the nearest `feature` pixel (Euclidean,
-/// between pixel centres), or `None` when there is none within `reach`.
+/// For every pixel with a `feature` pixel within `reach` (Euclidean,
+/// between pixel centres), calls `emit(x, y, nearest, &mut out[y·w + x])`
+/// with the nearest one's index. `false` when the planes do not match or
+/// are too large to index.
 ///
 /// The exact separable transform: a sweep down and up each column finds
-/// each pixel's nearest feature in its column, then the lower envelope of
-/// parabolas along each row picks the nearest of those. Integer arithmetic
-/// throughout, so the result does not depend on how rows are split.
-fn feature_transform(
+/// each pixel's nearest feature in its column (blocks of columns in
+/// parallel), then the lower envelope of parabolas along each row picks the
+/// nearest of those (rows in parallel). Integer arithmetic throughout, so
+/// the result does not depend on how the work is split; nothing per pixel
+/// is kept beyond the column sweep's row index.
+fn nearest_features<T: Send>(
     feature: &[bool],
     width: usize,
     height: usize,
     reach: f64,
-) -> Option<Vec<Option<u32>>> {
-    if width * height > u32::MAX as usize || feature.len() != width * height {
-        return None;
+    out: &mut [T],
+    emit: impl Fn(usize, usize, u32, &mut T) + Sync,
+) -> bool {
+    const NONE: i32 = i32::MIN / 2;
+    /// Columns per block of the column sweep.
+    const BLOCK: usize = 64;
+    let n = width * height;
+    if n > u32::MAX as usize
+        || height > (i32::MAX / 2) as usize
+        || feature.len() != n
+        || out.len() != n
+    {
+        return false;
     }
-    const NONE: i64 = i64::MIN / 4;
-    // The row of the nearest feature in the same column, or NONE.
-    let mut col = vec![NONE; width * height];
-    let mut last = vec![NONE; width];
-    for y in 0..height {
-        for x in 0..width {
-            if feature[y * width + x] {
-                last[x] = y as i64;
-            }
-            col[y * width + x] = last[x];
-        }
+    if n == 0 {
+        return true;
     }
-    last.fill(NONE);
-    for y in (0..height).rev() {
-        for x in 0..width {
-            if feature[y * width + x] {
-                last[x] = y as i64;
+    // Per block of columns, row-major inside the block: the row of the
+    // nearest feature in the same column, or NONE.
+    let blocks: Vec<Vec<i32>> = (0..width.div_ceil(BLOCK))
+        .into_par_iter()
+        .map(|b| {
+            let x0 = b * BLOCK;
+            let bw = BLOCK.min(width - x0);
+            let mut col = vec![NONE; height * bw];
+            let mut last = [NONE; BLOCK];
+            for y in 0..height {
+                let f = &feature[y * width + x0..][..bw];
+                let c = &mut col[y * bw..][..bw];
+                for i in 0..bw {
+                    if f[i] {
+                        last[i] = y as i32;
+                    }
+                    c[i] = last[i];
+                }
             }
-            let i = y * width + x;
-            let yi = y as i64;
-            if last[x] != NONE && (col[i] == NONE || last[x] - yi < yi - col[i]) {
-                col[i] = last[x];
+            last = [NONE; BLOCK];
+            for y in (0..height).rev() {
+                let yi = y as i32;
+                let f = &feature[y * width + x0..][..bw];
+                let c = &mut col[y * bw..][..bw];
+                for i in 0..bw {
+                    if f[i] {
+                        last[i] = yi;
+                    }
+                    if last[i] != NONE && (c[i] == NONE || last[i] - yi < yi - c[i]) {
+                        c[i] = last[i];
+                    }
+                }
             }
-        }
-    }
+            col
+        })
+        .collect();
+    let col_at = |x: usize, y: usize| -> i32 {
+        let b = &blocks[x / BLOCK];
+        let bw = BLOCK.min(width - x / BLOCK * BLOCK);
+        b[y * bw + x % BLOCK]
+    };
     let reach2 = (reach * reach).ceil() as i64;
-    let mut out = vec![None; width * height];
-    out.par_chunks_mut(width).enumerate().for_each(|(y, row)| {
-        let yi = y as i64;
-        // f(x') = (y − row of x'’s column feature)², the parabolas'
-        // heights; columns with no feature have none.
-        let f = |x: usize| -> Option<i64> {
-            let r = col[y * width + x];
-            (r != NONE).then(|| (yi - r) * (yi - r))
-        };
-        // Lower envelope (Felzenszwalb–Huttenlocher), integer exact:
-        // `v` the parabolas' columns, `z` where each takes over, kept
-        // as rationals compared by cross-multiplication.
-        let mut v: Vec<usize> = Vec::with_capacity(width);
-        let mut z: Vec<(i64, i64)> = Vec::with_capacity(width + 1);
-        for q in 0..width {
-            let Some(fq) = f(q) else { continue };
-            loop {
-                let Some(&p) = v.last() else {
-                    v.push(q);
-                    z.push((i64::MIN / 4, 1));
-                    break;
+    out.par_chunks_mut(width)
+        .enumerate()
+        .with_min_len(rows_per_task(width))
+        .for_each_init(
+            || (Vec::with_capacity(width), Vec::with_capacity(width + 1)),
+            |(v, z): &mut (Vec<usize>, Vec<(i64, i64)>), (y, row)| {
+                v.clear();
+                z.clear();
+                let yi = y as i64;
+                // f(x') = (y − row of x'’s column feature)², the parabolas'
+                // heights; columns with no feature have none.
+                let f = |x: usize| -> Option<i64> {
+                    let r = col_at(x, y);
+                    (r != NONE).then(|| (yi - i64::from(r)) * (yi - i64::from(r)))
                 };
-                let fp = f(p).unwrap_or(0);
-                let (qi, pi) = (q as i64, p as i64);
-                // s = ((fq + q²) − (fp + p²)) / (2(q − p))
-                let num = (fq + qi * qi) - (fp + pi * pi);
-                let den = 2 * (qi - pi);
-                let (zn, zd) = *z.last().unwrap_or(&(i64::MIN / 4, 1));
-                // s <= z.last → drop p.
-                if (num as i128) * (zd as i128) <= (zn as i128) * (den as i128) {
-                    v.pop();
-                    z.pop();
-                    continue;
+                // Lower envelope (Felzenszwalb–Huttenlocher), integer exact:
+                // `v` the parabolas' columns, `z` where each takes over, kept
+                // as rationals compared by cross-multiplication.
+                for q in 0..width {
+                    let Some(fq) = f(q) else { continue };
+                    loop {
+                        let Some(&p) = v.last() else {
+                            v.push(q);
+                            z.push((i64::MIN / 4, 1));
+                            break;
+                        };
+                        let fp = f(p).unwrap_or(0);
+                        let (qi, pi) = (q as i64, p as i64);
+                        // s = ((fq + q²) − (fp + p²)) / (2(q − p))
+                        let num = (fq + qi * qi) - (fp + pi * pi);
+                        let den = 2 * (qi - pi);
+                        let (zn, zd) = *z.last().unwrap_or(&(i64::MIN / 4, 1));
+                        // s <= z.last → drop p.
+                        if (num as i128) * (zd as i128) <= (zn as i128) * (den as i128) {
+                            v.pop();
+                            z.pop();
+                            continue;
+                        }
+                        v.push(q);
+                        z.push((num, den));
+                        break;
+                    }
                 }
-                v.push(q);
-                z.push((num, den));
-                break;
-            }
-        }
-        if v.is_empty() {
-            return;
-        }
-        let mut k = 0usize;
-        for (x, o) in row.iter_mut().enumerate() {
-            let xi = x as i64;
-            while k + 1 < v.len() {
-                let (zn, zd) = z[k + 1];
-                // z[k+1] <= x → move on.
-                if (zn as i128) <= (xi as i128) * (zd as i128) {
-                    k += 1;
-                } else {
-                    break;
+                if v.is_empty() {
+                    return;
                 }
-            }
-            let p = v[k];
-            let fp = f(p).unwrap_or(0);
-            let dx = xi - p as i64;
-            if dx * dx + fp <= reach2 {
-                let ry = col[y * width + p];
-                *o = u32::try_from(ry as usize * width + p).ok();
-            }
-        }
-    });
-    Some(out)
+                let mut k = 0usize;
+                for (x, o) in row.iter_mut().enumerate() {
+                    let xi = x as i64;
+                    while k + 1 < v.len() {
+                        let (zn, zd) = z[k + 1];
+                        // z[k+1] <= x → move on.
+                        if (zn as i128) <= (xi as i128) * (zd as i128) {
+                            k += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    let p = v[k];
+                    let fp = f(p).unwrap_or(0);
+                    let dx = xi - p as i64;
+                    if dx * dx + fp <= reach2 {
+                        let ry = col_at(p, y) as usize;
+                        if let Ok(b) = u32::try_from(ry * width + p) {
+                            emit(x, y, b, o);
+                        }
+                    }
+                }
+            },
+        );
+    true
 }
 
 impl LayerEffect {
@@ -1245,7 +1303,14 @@ mod tests {
         let mut f = vec![false; w * h];
         f[0] = true; // (0, 0)
         f[3 * w + 6] = true; // (6, 3)
-        let t = feature_transform(&f, w, h, 100.0).unwrap();
+        let run = |f: &[bool], reach: f64| {
+            let mut t = vec![None; w * h];
+            assert!(nearest_features(f, w, h, reach, &mut t, |_, _, b, o| {
+                *o = Some(b);
+            }));
+            t
+        };
+        let t = run(&f, 100.0);
         for y in 0..h {
             for x in 0..w {
                 let d0 = x * x + y * y;
@@ -1256,14 +1321,49 @@ mod tests {
                 assert_eq!(gx.abs_diff(x).pow(2) + gy.abs_diff(y).pow(2), want_d);
             }
         }
-        let near = feature_transform(&f, w, h, 1.0).unwrap();
+        let near = run(&f, 1.0);
         assert!(near[2 * w + 3].is_none());
-        assert!(
-            feature_transform(&vec![false; w * h], w, h, 9.0)
-                .unwrap()
-                .iter()
-                .all(Option::is_none)
-        );
+        assert!(run(&vec![false; w * h], 9.0).iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn the_feature_transform_is_exact_across_column_blocks() {
+        // Wider than two blocks of the column sweep, features scattered by
+        // a fixed LCG: every distance equals the brute-force minimum.
+        let (w, h) = (150usize, 37usize);
+        let mut seed = 0x2545_f491_u32;
+        let f: Vec<bool> = (0..w * h)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                seed >> 24 < 3
+            })
+            .collect();
+        let feats: Vec<(usize, usize)> = (0..w * h)
+            .filter(|&i| f[i])
+            .map(|i| (i % w, i / w))
+            .collect();
+        assert!(feats.len() > 10);
+        let mut t = vec![None; w * h];
+        assert!(nearest_features(&f, w, h, 30.0, &mut t, |_, _, b, o| {
+            *o = Some(b);
+        }));
+        for y in 0..h {
+            for x in 0..w {
+                let best = feats
+                    .iter()
+                    .map(|&(fx, fy)| fx.abs_diff(x).pow(2) + fy.abs_diff(y).pow(2))
+                    .min()
+                    .unwrap_or(usize::MAX);
+                match t[y * w + x] {
+                    Some(b) => {
+                        let (gx, gy) = (b as usize % w, b as usize / w);
+                        assert!(f[b as usize]);
+                        assert_eq!(gx.abs_diff(x).pow(2) + gy.abs_diff(y).pow(2), best);
+                    }
+                    None => assert!(best > 900, "({x}, {y}) {best}"),
+                }
+            }
+        }
     }
 
     /// The bounding box of the pixels at least half covered.

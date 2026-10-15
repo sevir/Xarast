@@ -415,6 +415,40 @@ fn effects(c: &mut Criterion) {
             erode_plane(black_box(&mut p), w, h, 20.0);
         });
     });
+    // A bevel's lighting alone (no offscreen passes): the 64 px checkers
+    // are all outline, so most of the plane is band.
+    for (name, outer) in [
+        ("bevel_inner_r16_1024", false),
+        ("bevel_outer_r16_1024", true),
+    ] {
+        let bevel = xarast_render::LayerEffect::Bevel(Box::new(xarast_render::BevelEffect {
+            style: xarast_geom::bevel::BevelType::Round,
+            indent: 16.0,
+            outer,
+            light_angle: 315.0,
+            light_tilt: 45.0,
+            contrast: 0.75,
+            colour: Rgba8::BLACK,
+        }));
+        let colour: Vec<u8> = plane
+            .iter()
+            .flat_map(|a| [a / 2, a / 3, a / 4, *a])
+            .collect();
+        g.bench_function(name, |b| {
+            let mut c = colour.clone();
+            b.iter(|| {
+                c.copy_from_slice(&colour);
+                bevel.apply_at(
+                    black_box(&mut c),
+                    Some(&plane),
+                    w,
+                    h,
+                    xarast_render::Transform2D::scale(1.0),
+                    (0, 0),
+                );
+            });
+        });
+    }
     let mut scene = Scene::new();
     {
         let mut b = SceneBuilder::begin(&mut scene, RenderQuality::Final);
