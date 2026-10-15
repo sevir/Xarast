@@ -249,7 +249,7 @@ pub const ZOOM_STEP: f64 = std::f64::consts::SQRT_2;
 impl AppCommand {
     /// Every command, in menu order, then the tools in palette order.
     /// Tools reserved for later phases are not here: they have no key yet.
-    pub const ALL: [AppCommand; 62] = [
+    pub const ALL: [AppCommand; 64] = [
         AppCommand::Open,
         AppCommand::Import,
         AppCommand::Save,
@@ -297,6 +297,8 @@ impl AppCommand {
         AppCommand::Tool(ToolId::Fill),
         AppCommand::Tool(ToolId::Transparency),
         AppCommand::Tool(ToolId::Text),
+        AppCommand::Tool(ToolId::Blend),
+        AppCommand::Tool(ToolId::Contour),
         AppCommand::Tool(ToolId::Shadow),
         AppCommand::Tool(ToolId::Bevel),
         AppCommand::Action(ToolAction::Finish),
@@ -418,6 +420,9 @@ impl AppCommand {
         // `research/04 §4.6`: Ctrl+F2 shadow (`TOOL22`), Ctrl+F3 bevel
         // (`TOOL23`).
         const SHADOW_TOOL: &[KeyChord] = &[KeyChord::ctrl_f(2)];
+        // F7 blend (`TOOL16`), Ctrl+F7 contour (`TOOL24`).
+        const BLEND_TOOL: &[KeyChord] = &[KeyChord::f(7)];
+        const CONTOUR_TOOL: &[KeyChord] = &[KeyChord::ctrl_f(7)];
         const BEVEL_TOOL: &[KeyChord] = &[KeyChord::ctrl_f(3)];
         // The shape editor's keys (`research/04 §4.11`).
         const FINISH: &[KeyChord] = &[KeyChord::plain(ChordKey::Enter)];
@@ -486,6 +491,8 @@ impl AppCommand {
                 ToolId::Fill => FILL_TOOL,
                 ToolId::Transparency => TRANSP_TOOL,
                 ToolId::Text => TEXT,
+                ToolId::Blend => BLEND_TOOL,
+                ToolId::Contour => CONTOUR_TOOL,
                 ToolId::Shadow => SHADOW_TOOL,
                 ToolId::Bevel => BEVEL_TOOL,
             },
@@ -501,7 +508,8 @@ impl AppCommand {
                 | ToolAction::Cancel
                 | ToolAction::SelectAll
                 | ToolAction::ClosePath
-                | ToolAction::NaturalSize => NONE,
+                | ToolAction::NaturalSize
+                | ToolAction::RemoveEffect => NONE,
             },
             AppCommand::ConvertToShapes => CONVERT,
             AppCommand::Cut => CUT,
@@ -656,6 +664,8 @@ mod tests {
             (ToolId::Fill, "F5"),
             (ToolId::Transparency, "F6"),
             (ToolId::Text, "F8"),
+            (ToolId::Blend, "F7"),
+            (ToolId::Contour, "Ctrl+F7"),
             (ToolId::Shadow, "Ctrl+F2"),
             (ToolId::Bevel, "Ctrl+F3"),
         ] {

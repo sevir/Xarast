@@ -660,6 +660,21 @@ impl Session {
                 };
             }
         }
+        // A previewed outer contour reaches as far as its previewed width.
+        for (c, kind) in &self.preview.live {
+            if let xarast_doc::LiveKind::Contour(p) = kind
+                && let Some(parts) = xarast_doc::live::parts(&self.doc.tree, *c)
+            {
+                let r = crate::viewport::nodes_rect(&self.doc, [parts.source]).inflated(p.growth());
+                if !r.is_empty() {
+                    self.scene_ink = if self.scene_ink.is_empty() {
+                        r
+                    } else {
+                        self.scene_ink.union(r)
+                    };
+                }
+            }
+        }
         self.resolver_snapshot = None;
         Ok(stats)
     }

@@ -581,6 +581,42 @@ pub enum InfobarField {
     BevelTilt,
     /// How the bevel turns corners.
     BevelJoin,
+    /// How many rings a contour draws (phase 13, E6).
+    ContourSteps,
+    /// How far a contour's last ring lies from the outline.
+    ContourWidth,
+    /// Whether the contour lies outside or inside the object.
+    ContourSide,
+    /// How a contour's rings turn corners.
+    ContourJoin,
+    /// How colours run across a contour's rings.
+    ContourEffect,
+    /// The contour object profile's bias: where the rings bunch up.
+    ContourBias,
+    /// The contour object profile's gain.
+    ContourGain,
+    /// The contour attribute profile's bias: how its colours run.
+    ContourColourBias,
+    /// The contour attribute profile's gain.
+    ContourColourGain,
+    /// One ring at the full width drawn instead of the object.
+    ContourInset,
+    /// How many steps a blend draws between each pair (phase 13, F8).
+    BlendSteps,
+    /// How colours run across a blend's steps.
+    BlendEffect,
+    /// Whether a blend matches its ends' points one to one.
+    BlendOneToOne,
+    /// Whether a blend's steps are antialiased.
+    BlendAntialias,
+    /// The blend position profile's bias: where the steps bunch up.
+    BlendBias,
+    /// The blend position profile's gain.
+    BlendGain,
+    /// The blend attribute profile's bias: how its colours run.
+    BlendAttrBias,
+    /// The blend attribute profile's gain.
+    BlendAttrGain,
 }
 
 impl InfobarField {
@@ -641,7 +677,18 @@ impl InfobarField {
             InfobarField::BevelContrast => "Contrast",
             InfobarField::BevelLightAngle => "Light angle",
             InfobarField::BevelTilt => "Elevation",
-            InfobarField::BevelJoin => "Join",
+            InfobarField::BevelJoin | InfobarField::ContourJoin => "Join",
+            InfobarField::ContourSteps | InfobarField::BlendSteps => "Steps",
+            InfobarField::ContourWidth => "Width",
+            InfobarField::ContourSide => "Side",
+            InfobarField::ContourEffect | InfobarField::BlendEffect => "Colours",
+            InfobarField::ContourBias | InfobarField::BlendBias => "Bias",
+            InfobarField::ContourGain | InfobarField::BlendGain => "Gain",
+            InfobarField::ContourColourBias | InfobarField::BlendAttrBias => "Colour bias",
+            InfobarField::ContourColourGain | InfobarField::BlendAttrGain => "Colour gain",
+            InfobarField::ContourInset => "Inset path",
+            InfobarField::BlendOneToOne => "One to one",
+            InfobarField::BlendAntialias => "Antialias",
         }
     }
 
@@ -712,6 +759,32 @@ impl InfobarField {
             InfobarField::BevelLightAngle => "Direction the light travels, in degrees",
             InfobarField::BevelTilt => "Elevation of the light above the drawing, in degrees",
             InfobarField::BevelJoin => "How the bevel turns corners",
+            InfobarField::ContourSteps => "How many rings the contour draws",
+            InfobarField::ContourWidth => "How far the contour reaches from the outline",
+            InfobarField::ContourSide => "Whether the contour lies outside or inside the object",
+            InfobarField::ContourJoin => "How the contour's rings turn corners",
+            InfobarField::ContourEffect => "How colours run from the outline to the last ring",
+            InfobarField::ContourBias => "Bunches the rings towards the outline or the last ring",
+            InfobarField::ContourGain => "Bunches the rings towards the middle or the ends",
+            InfobarField::ContourColourBias => {
+                "Pushes the colour change towards the outline or the last ring"
+            }
+            InfobarField::ContourColourGain => {
+                "Pushes the colour change towards the middle or the ends"
+            }
+            InfobarField::ContourInset => "Draw one path at the full width instead of the object",
+            InfobarField::BlendSteps => "How many steps the blend draws between its objects",
+            InfobarField::BlendEffect => "How colours run from one object to the next",
+            InfobarField::BlendOneToOne => "Match the objects' points one to one",
+            InfobarField::BlendAntialias => "Draw the blend's steps antialiased",
+            InfobarField::BlendBias => "Bunches the steps towards the first or the last object",
+            InfobarField::BlendGain => "Bunches the steps towards the middle or the ends",
+            InfobarField::BlendAttrBias => {
+                "Pushes the colour change towards the first or the last object"
+            }
+            InfobarField::BlendAttrGain => {
+                "Pushes the colour change towards the middle or the ends"
+            }
         }
     }
 }
@@ -1181,6 +1254,9 @@ pub enum ToolAction {
     /// Resize the selected bitmap fills to their images' natural size
     /// (phase 10, T10.3.1).
     NaturalSize,
+    /// Remove the live effect the tool edits from the selection: a
+    /// contour or a blend (phase 13 E6, F8).
+    RemoveEffect,
 }
 
 impl ToolAction {
@@ -1200,6 +1276,7 @@ impl ToolAction {
             ToolAction::Break => "Break at points",
             ToolAction::Join => "Join ends",
             ToolAction::NaturalSize => "Natural size",
+            ToolAction::RemoveEffect => "Remove",
         }
     }
 }

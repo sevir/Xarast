@@ -105,6 +105,11 @@ pub struct WalkStats {
     /// Clouds and plasma tiles this walker has generated in its life: a
     /// redraw that regenerates none leaves it unchanged (phase 13 H5).
     pub procedural_generated: u64,
+    /// Contour rings, blend steps and moulded copies this walker has
+    /// regenerated in its life: a frame that changes nothing they derive
+    /// from leaves it unchanged, a drag frame adds one per controller it
+    /// changes (phase 13 A4, XARA-T-0316).
+    pub live_regenerated: u64,
 }
 
 impl WalkStats {
@@ -194,6 +199,13 @@ pub struct SceneWalker {
     /// The photo chains the frame being walked previews, by object
     /// ([`Preview::photo`]).
     photo_preview: Vec<(NodeId, xarast_doc::PhotoOps)>,
+    /// The live parameters the frame being walked previews, by controller
+    /// ([`Preview::live`]): a contour's or a blend's rings and steps are
+    /// regenerated with them.
+    live_preview: Vec<(NodeId, xarast_doc::LiveKind)>,
+    /// The nodes the frame moves and how ([`Preview::transform`]): a
+    /// blend whose end is moved regenerates from where it is drawn.
+    moved_preview: Option<(Vec<NodeId>, xarast_geom::Matrix)>,
     /// Device pixels per millipoint of the frame being walked.
     frame_scale: f64,
     /// Proxy images of previewed chains, kept while the same chain is
@@ -473,6 +485,8 @@ impl SceneWalker {
         self.resolver.begin_frame();
         self.stats = WalkStats::default();
         self.photo_preview.clone_from(&preview.photo);
+        self.live_preview.clone_from(&preview.live);
+        self.moved_preview.clone_from(&preview.transform);
         self.frame_scale = vp.scale();
         self.proxy_info.clear();
         for p in &mut self.proxies {
@@ -615,7 +629,10 @@ impl SceneWalker {
                         }
                         _ => {}
                     }
+                    // A controller drawn with previewed parameters may
+                    // reach beyond its committed bounds: never culled.
                     if let Some(c) = clip
+                        && !live_over.contains_key(&node)
                         && is_culled(doc, node, c, &attrs)
                     {
                         self.stats.culled += 1;
@@ -778,6 +795,7 @@ impl SceneWalker {
             self.procedural.end_walk(&mut self.resolver);
         }
         self.stats.procedural_generated = self.procedural.generated();
+        self.stats.live_regenerated = self.live.regenerated();
         // Ramps no scene of late has used go past the budget (a fill drag
         // makes one per frame); this frame's are never evicted.
         self.resolver.trim_ramps(RAMP_CACHE_BUDGET);
@@ -1305,6 +1323,40 @@ impl SceneWalker {
         b.finish_node(id, hash);
     }
 
+    /// A contour's or a blend's output as this frame draws it: with the
+    /// parameters the preview gives it and its ends where the preview
+    /// moves them, found in the cache when that state was drawn last,
+    /// else regenerated once (`xarast_doc::regen`, XARA-T-0316).
+    fn live_output(
+        &mut self,
+        doc: &Document,
+        controller: NodeId,
+    ) -> Option<(xarast_doc::RegenKey, Arc<xarast_doc::LiveOutput>)> {
+        let over = xarast_doc::RegenOverride {
+            kind: self
+                .live_preview
+                .iter()
+                .find(|(n, _)| *n == controller)
+                .map(|(_, k)| k),
+            moved: self
+                .moved_preview
+                .as_ref()
+                .map(|(nodes, matrix)| xarast_doc::Moved {
+                    nodes,
+                    matrix: *matrix,
+                }),
+        };
+        self.live.current_or_regenerate_with(
+            doc,
+            controller,
+            0.0,
+            over,
+            &mut |d: &Document, c: NodeId, dpi: f64| {
+                xarast_doc::regen::regenerate_with(d, c, dpi, over)
+            },
+        )
+    }
+
     /// Draws a contour's rings at its generated node `node`: regenerated
     /// (or found in the cache) from the controller above it, each painted
     /// with the attributes in force there, the generated node's own on
@@ -1322,12 +1374,7 @@ impl SceneWalker {
             return false;
         };
         // Contours are geometry: the same at every resolution.
-        let Some((key, out)) = self.live.current_or_regenerate(
-            doc,
-            controller,
-            0.0,
-            &mut xarast_doc::regen::regenerate,
-        ) else {
+        let Some((key, out)) = self.live_output(doc, controller) else {
             return false;
         };
         let xarast_doc::LiveOutput::Shapes(rings) = &*out else {
@@ -1408,12 +1455,7 @@ impl SceneWalker {
             return false;
         };
         // Blends are geometry: the same at every resolution.
-        let Some((key, out)) = self.live.current_or_regenerate(
-            doc,
-            controller,
-            0.0,
-            &mut xarast_doc::regen::regenerate,
-        ) else {
+        let Some((key, out)) = self.live_output(doc, controller) else {
             return false;
         };
         let xarast_doc::LiveOutput::Groups(groups) = &*out else {

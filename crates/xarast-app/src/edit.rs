@@ -149,6 +149,10 @@ pub enum ToolId {
     Transparency,
     /// Text. Phase 9.
     Text,
+    /// Blends between objects. Phase 13 (F8).
+    Blend,
+    /// Inner and outer contours. Phase 13 (E6).
+    Contour,
     /// Soft shadows: wall, floor and glow. Phase 13 (C7).
     Shadow,
     /// Bevels. Phase 13 (D6).
@@ -157,7 +161,7 @@ pub enum ToolId {
 
 impl ToolId {
     /// Every tool, in the order the palette shows them.
-    pub const ALL: [ToolId; 13] = [
+    pub const ALL: [ToolId; 15] = [
         ToolId::Selector,
         ToolId::ShapeEditor,
         ToolId::Rectangle,
@@ -169,6 +173,8 @@ impl ToolId {
         ToolId::Fill,
         ToolId::Transparency,
         ToolId::Text,
+        ToolId::Blend,
+        ToolId::Contour,
         ToolId::Shadow,
         ToolId::Bevel,
     ];
@@ -188,6 +194,8 @@ impl ToolId {
             ToolId::Fill => "fill",
             ToolId::Transparency => "transparency",
             ToolId::Text => "text",
+            ToolId::Blend => "blend",
+            ToolId::Contour => "contour",
             ToolId::Shadow => "shadow",
             ToolId::Bevel => "bevel",
         }
@@ -208,6 +216,8 @@ impl ToolId {
             ToolId::Fill => "Fill",
             ToolId::Transparency => "Transparency",
             ToolId::Text => "Text",
+            ToolId::Blend => "Blend",
+            ToolId::Contour => "Contour",
             ToolId::Shadow => "Shadow",
             ToolId::Bevel => "Bevel",
         }
@@ -240,6 +250,8 @@ impl ToolId {
                 | ToolId::Fill
                 | ToolId::Transparency
                 | ToolId::Text
+                | ToolId::Blend
+                | ToolId::Contour
                 | ToolId::Shadow
                 | ToolId::Bevel
         )
@@ -260,6 +272,8 @@ impl ToolId {
             | ToolId::Fill
             | ToolId::Transparency
             | ToolId::Text
+            | ToolId::Blend
+            | ToolId::Contour
             | ToolId::Shadow
             | ToolId::Bevel => None,
         }

@@ -127,9 +127,9 @@ fn object_box(doc: &xarast_doc::Document, n: NodeId) -> DocRect {
 
 /// The most objects whose contoured outline a size drag follows; more
 /// than this and the dashed box is drawn instead.
-const MAX_OUTLINED_OBJECTS: usize = 24;
+pub(crate) const MAX_OUTLINED_OBJECTS: usize = 24;
 /// The mitre limit of the outline preview (rounded joins make it moot).
-const CONTOUR_MITRE_LIMIT: f64 = 4.0;
+pub(crate) const CONTOUR_MITRE_LIMIT: f64 = 4.0;
 
 /// The clean regions of the objects a size drag outlines: what a bevel
 /// follows (its controller's source, or the object itself).
@@ -156,7 +156,7 @@ fn size_regions(doc: &xarast_doc::Document, sel: &[NodeId]) -> Vec<xarast_geom::
 }
 
 /// Adds a path's subpaths to the overlay as closed dashed polylines.
-fn push_outline(path: &xarast_geom::Path, px: f64, out: &mut Vec<OverlayShape>) {
+pub(crate) fn push_outline(path: &xarast_geom::Path, px: f64, out: &mut Vec<OverlayShape>) {
     let mut points: Vec<DocPoint> = Vec::new();
     let mut done = |points: &mut Vec<DocPoint>| {
         if points.len() > 1 {
@@ -179,7 +179,7 @@ fn push_outline(path: &xarast_geom::Path, px: f64, out: &mut Vec<OverlayShape>) 
     done(&mut points);
 }
 
-fn union(boxes: impl IntoIterator<Item = DocRect>) -> DocRect {
+pub(crate) fn union(boxes: impl IntoIterator<Item = DocRect>) -> DocRect {
     boxes
         .into_iter()
         .filter(|b| !b.is_empty())
@@ -188,7 +188,7 @@ fn union(boxes: impl IntoIterator<Item = DocRect>) -> DocRect {
 }
 
 /// The eight size handles of a box.
-fn size_handles(r: DocRect) -> [DocPoint; 8] {
+pub(crate) fn size_handles(r: DocRect) -> [DocPoint; 8] {
     let c = r.centre();
     [
         r.lo,
@@ -205,7 +205,7 @@ fn size_handles(r: DocRect) -> [DocPoint; 8] {
 /// The signed width a point gives relative to a box: inside, the distance
 /// to the nearest edge (an inner bevel); outside, minus the distance to
 /// the box (an outer one).
-fn signed_width(r: DocRect, p: DocPoint) -> f64 {
+pub(crate) fn signed_width(r: DocRect, p: DocPoint) -> f64 {
     let (x, y) = p.to_f64();
     let (x0, y0) = r.lo.to_f64();
     let (x1, y1) = r.hi.to_f64();
@@ -273,7 +273,7 @@ fn blob_at(vp: &crate::viewport::Viewport, centre: DocPoint, angle: f32) -> DocP
     Point::from_f64_round(cx - ux * LIGHT_BLOB_PX * px, cy - uy * LIGHT_BLOB_PX * px)
 }
 
-fn device_px(vp: &crate::viewport::Viewport) -> f64 {
+pub(crate) fn device_px(vp: &crate::viewport::Viewport) -> f64 {
     let s = vp.scale();
     if s > 0.0 && s.is_finite() {
         1.0 / s
@@ -494,7 +494,7 @@ fn bevel_edits(
     }
 }
 
-fn common<T: PartialEq + Clone>(mut it: impl Iterator<Item = T>) -> Option<T> {
+pub(crate) fn common<T: PartialEq + Clone>(mut it: impl Iterator<Item = T>) -> Option<T> {
     let first = it.next()?;
     it.all(|x| x == first).then_some(first)
 }

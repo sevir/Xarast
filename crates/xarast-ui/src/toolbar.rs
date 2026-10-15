@@ -66,7 +66,7 @@ impl ToolPalette {
             for (i, tool) in ToolId::ALL.into_iter().enumerate() {
                 // A gap between the editing tools, the view tools and the
                 // tools of later phases.
-                if matches!(tool, ToolId::Zoom | ToolId::Fill | ToolId::Shadow) && i > 0 {
+                if matches!(tool, ToolId::Zoom | ToolId::Fill | ToolId::Blend) && i > 0 {
                     ui.add_space(6.0);
                     ui.separator();
                     ui.add_space(4.0);
@@ -277,6 +277,38 @@ fn paint_icon(p: &egui::Painter, r: Rect, tool: ToolId, ink: Color32) {
         ToolId::Text => {
             p.line_segment([at(0.15, 0.15), at(0.85, 0.15)], Stroke::new(2.2_f32, ink));
             p.line_segment([at(0.5, 0.15), at(0.5, 0.9)], Stroke::new(2.2_f32, ink));
+        }
+        ToolId::Blend => {
+            // A small square turning into a large disc in three steps.
+            for (i, (x, y, rad)) in [
+                (0.2_f32, 0.8_f32, 0.1_f32),
+                (0.38, 0.62, 0.14),
+                (0.56, 0.44, 0.18),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let a = 0.35 + 0.2 * i as f32;
+                p.rect_stroke(
+                    Rect::from_center_size(at(x, y), Vec2::splat(2.0 * rad * r.width())),
+                    0.0,
+                    Stroke::new(1.2_f32, ink.gamma_multiply(a)),
+                    egui::StrokeKind::Middle,
+                );
+            }
+            p.circle_filled(at(0.74, 0.26), 0.2 * r.width(), ink);
+        }
+        ToolId::Contour => {
+            // Rings round a solid square.
+            for (i, g) in [0.08_f32, 0.2].into_iter().enumerate() {
+                p.rect_stroke(
+                    Rect::from_min_max(at(g, g), at(1.0 - g, 1.0 - g)),
+                    3.0,
+                    Stroke::new(1.3_f32, ink.gamma_multiply(0.45 + 0.25 * i as f32)),
+                    egui::StrokeKind::Middle,
+                );
+            }
+            p.rect_filled(Rect::from_min_max(at(0.32, 0.32), at(0.68, 0.68)), 1.5, ink);
         }
         ToolId::Shadow => {
             // A square casting a soft square down and to the right.
@@ -936,6 +968,8 @@ mod tests {
         assert_eq!(tool_tooltip(ToolId::Pen), "Pen (Shift+F5)");
         assert_eq!(tool_tooltip(ToolId::Freehand), "Freehand (F3)");
         assert_eq!(tool_tooltip(ToolId::Text), "Text (F8)");
+        assert_eq!(tool_tooltip(ToolId::Blend), "Blend (F7)");
+        assert_eq!(tool_tooltip(ToolId::Contour), "Contour (Ctrl+F7)");
         assert_eq!(tool_tooltip(ToolId::Shadow), "Shadow (Ctrl+F2)");
         assert_eq!(tool_tooltip(ToolId::Bevel), "Bevel (Ctrl+F3)");
         assert_eq!(tool_tooltip(ToolId::Fill), "Fill (F5)");
