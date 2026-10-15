@@ -2,13 +2,14 @@
 id: XARA-T-0331
 type: task
 title: "Winding rule: read TAG_WINDINGRULE as the original's enum and default to even-odd"
-status: in_progress
+status: done
 priority: high
 author: mcp
 labels: [document-model, xar, render, fidelity]
 created: 2026-10-15T20:25:53Z
-updated: 2026-10-15T20:25:53Z
+updated: 2026-10-15T21:24:50Z
 started: 2026-10-15T20:25:53Z
+closed: 2026-10-15T21:24:50Z
 ---
 
 ## Description
