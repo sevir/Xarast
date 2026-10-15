@@ -168,6 +168,7 @@ pub fn approximations(s: &Stats) -> String {
     add(s.strokes_approximated, "strokes");
     add(s.effects_approximated, "feathers");
     add(s.shadows_unbaked, "shadows");
+    add(s.bevels_unbaked, "bevels");
     add(s.images_unrenderable, "BMP images");
     add(s.images_missing, "missing images");
     add(s.texts, "text stories");

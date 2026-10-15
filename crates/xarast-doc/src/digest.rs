@@ -635,6 +635,7 @@ impl Canon for LiveNode {
                 h.f32(p.light_angle);
                 h.f32(p.light_tilt);
                 h.f32(p.contrast);
+                h.opt(&p.colour);
             }
             LiveKind::Mould(p) => {
                 h.u8(p.kind as u8);

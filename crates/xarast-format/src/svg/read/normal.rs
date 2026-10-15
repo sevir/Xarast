@@ -471,6 +471,27 @@ impl Nf<'_> {
                             hex(xarast_color::Rgba8 { a: 255, ..rgba })
                         )
                     }
+                    // A bevel's own colour the same way.
+                    (xarast_doc::LiveRole::Controller, xarast_doc::LiveKind::Bevel(bv))
+                        if bv.colour.is_some() =>
+                    {
+                        let c = bv.colour.clone().unwrap_or(xarast_color::Colour::Direct(
+                            xarast_color::ColourValue::BLACK,
+                        ));
+                        let rgba = c.resolve(&self.doc.resources.colours).to_rgba8();
+                        let reference = match &c {
+                            xarast_color::Colour::Indexed { id, tint: None } => {
+                                self.palette.get(id).cloned()
+                            }
+                            _ => None,
+                        };
+                        let mut p = (**bv).clone();
+                        p.colour = None;
+                        format!(
+                            "Bevel({p:?}) colour={} ref={reference:?}",
+                            hex(xarast_color::Rgba8 { a: 255, ..rgba })
+                        )
+                    }
                     (xarast_doc::LiveRole::Controller, _) => format!("{:?}", l.kind),
                     _ => l.kind.type_name().to_owned(),
                 };

@@ -413,6 +413,7 @@ fn compromises(s: &fsvg::Stats, svg: &str, failed_images: usize) -> Vec<Compromi
         ("arrowheads", s.arrows_unbaked),
         ("feathering", s.effects_approximated),
         ("shadows (recorded, not baked)", s.shadows_unbaked),
+        ("bevels (recorded, not baked)", s.bevels_unbaked),
     ];
     let simplified = [
         (

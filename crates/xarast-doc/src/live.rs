@@ -299,33 +299,162 @@ fn finite_or(v: f64, or: f64) -> f64 {
     if v.is_finite() { v } else { or }
 }
 
-/// Which sort of bevel.
+/// A bevel's style: the cross-section of its faces.
+///
+/// The fifteen styles, in the order and numbering of the `.xar` record
+/// (`TAG_BEVEL`'s first field; `research/03 §2.4 (k)`). The renderer's
+/// cross-section of each is Xarast's own (`xarast_geom::bevel`); the
+/// original's lives in its closed rasteriser.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default, Hash)]
+#[repr(u8)]
 pub enum BevelType {
-    /// A flat chamfer.
+    /// A flat chamfer (style 0).
     #[default]
-    Flat,
-    /// A rounded edge.
-    Round,
-    /// A concave edge.
-    Hollow,
+    Flat = 0,
+    /// A rounded edge (1).
+    Round = 1,
+    /// Half a round (2).
+    HalfRound = 2,
+    /// A picture frame (3).
+    Frame = 3,
+    /// Mesa, first variant (4).
+    Mesa1 = 4,
+    /// Mesa, second variant (5).
+    Mesa2 = 5,
+    /// Smooth, first variant (6).
+    Smooth1 = 6,
+    /// Smooth, second variant (7).
+    Smooth2 = 7,
+    /// A single point (8).
+    Point1 = 8,
+    /// Two points, variant a (9).
+    Point2a = 9,
+    /// Two points, variant b (10).
+    Point2b = 10,
+    /// Two ruffles, variant a (11).
+    Ruffle2a = 11,
+    /// Two ruffles, variant b (12).
+    Ruffle2b = 12,
+    /// Three ruffles, variant a (13).
+    Ruffle3a = 13,
+    /// Three ruffles, variant b (14).
+    Ruffle3b = 14,
 }
 
-/// Parameters of a bevel.
+impl BevelType {
+    /// Every style, in record order.
+    pub const ALL: [BevelType; 15] = [
+        BevelType::Flat,
+        BevelType::Round,
+        BevelType::HalfRound,
+        BevelType::Frame,
+        BevelType::Mesa1,
+        BevelType::Mesa2,
+        BevelType::Smooth1,
+        BevelType::Smooth2,
+        BevelType::Point1,
+        BevelType::Point2a,
+        BevelType::Point2b,
+        BevelType::Ruffle2a,
+        BevelType::Ruffle2b,
+        BevelType::Ruffle3a,
+        BevelType::Ruffle3b,
+    ];
+
+    /// The style a `.xar` record numbers `n`, if any.
+    #[must_use]
+    pub fn from_index(n: i64) -> Option<BevelType> {
+        usize::try_from(n)
+            .ok()
+            .and_then(|i| Self::ALL.get(i))
+            .copied()
+    }
+
+    /// The name `.xarast` writes (`research/06 §6.8.2`, extended to the
+    /// fifteen styles).
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            BevelType::Flat => "flat",
+            BevelType::Round => "round",
+            BevelType::HalfRound => "half-round",
+            BevelType::Frame => "frame",
+            BevelType::Mesa1 => "mesa",
+            BevelType::Mesa2 => "mesa-2",
+            BevelType::Smooth1 => "smooth",
+            BevelType::Smooth2 => "smooth-2",
+            BevelType::Point1 => "point",
+            BevelType::Point2a => "point-2a",
+            BevelType::Point2b => "point-2b",
+            BevelType::Ruffle2a => "ruffle-2a",
+            BevelType::Ruffle2b => "ruffle-2b",
+            BevelType::Ruffle3a => "ruffle-3a",
+            BevelType::Ruffle3b => "ruffle-3b",
+        }
+    }
+
+    /// The style `.xarast` spells `name`.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<BevelType> {
+        Self::ALL.iter().copied().find(|t| t.name() == name)
+    }
+}
+
+/// Parameters of a bevel (`research/02 §6.10`; the `.xar` record is
+/// `research/01`'s 4052).
+///
+/// The renderer computes the lit faces at the resolution shown, so the
+/// generated node stays empty, as a shadow's does.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BevelParams {
-    /// The bevel's profile shape.
+    /// The bevel's style (its cross-section).
     pub bevel_type: BevelType,
-    /// How far the bevel reaches in from the edge.
+    /// The bevel's width: how far it reaches in from the outline (inner)
+    /// or out from it (outer).
     pub indent: Mp,
     /// Whether the bevel is outside the object.
     pub outer: bool,
-    /// Direction of the light, in radians.
+    /// The light's direction, in degrees, as the original stores it.
     pub light_angle: f32,
-    /// Elevation of the light, in radians.
+    /// The light's tilt above the drawing's plane, in degrees.
     pub light_tilt: f32,
-    /// Contrast of the lighting.
+    /// The lighting contrast, `0.0..=1.0` (the original's percentage over
+    /// 100).
     pub contrast: f32,
+    /// The colour an outer bevel is painted in when its generated node
+    /// carries its own flat fill; `None` paints it in the fill the
+    /// controller's attributes give it. An inner bevel lights the object's
+    /// own colours.
+    pub colour: Option<Colour>,
+}
+
+impl Default for BevelParams {
+    /// The original's new bevel: flat, inner, 0.75 pt wide, light at 45°
+    /// tilted 45°, contrast 50 %.
+    fn default() -> BevelParams {
+        BevelParams {
+            bevel_type: BevelType::Flat,
+            indent: Mp::new(750),
+            outer: false,
+            light_angle: 45.0,
+            light_tilt: 45.0,
+            contrast: 0.5,
+            colour: None,
+        }
+    }
+}
+
+impl BevelParams {
+    /// How far an outer bevel reaches beyond its object; 0 for an inner
+    /// one (and for a negative width).
+    #[must_use]
+    pub fn growth(&self) -> Mp {
+        if self.outer {
+            Mp::new(self.indent.raw().max(0))
+        } else {
+            Mp::ZERO
+        }
+    }
 }
 
 /// Which sort of mould.

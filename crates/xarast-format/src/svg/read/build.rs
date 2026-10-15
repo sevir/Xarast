@@ -1003,16 +1003,15 @@ impl<'d, 'r, 'f> Reader<'d, 'r, 'f> {
                 colour: self.shadow_colour(g("colour"), g("colour-ref")),
             })),
             "bevel" => LiveKind::Bevel(Box::new(BevelParams {
-                bevel_type: match g("type") {
-                    Some("round") => BevelType::Round,
-                    Some("hollow") => BevelType::Hollow,
-                    _ => BevelType::Flat,
-                },
+                bevel_type: g("type").and_then(BevelType::from_name).unwrap_or_default(),
                 indent: mpv("indent"),
                 outer: g("direction") == Some("outer"),
-                light_angle: f("light-angle", 0.0),
-                light_tilt: f("light-elevation", 0.0),
+                light_angle: f("light-angle", 45.0),
+                light_tilt: f("light-elevation", 45.0),
                 contrast: f("contrast", 0.5),
+                colour: g("colour")
+                    .is_some()
+                    .then(|| self.shadow_colour(g("colour"), g("colour-ref"))),
             })),
             "mould" => LiveKind::Mould(Box::new(MouldParams {
                 kind: if g("type") == Some("perspective") {

@@ -1836,6 +1836,12 @@ impl<'d, 'b> Emitter<'d, 'b> {
                         shadow = Some(sh);
                         Some(self.shadow_colour(&sh.colour))
                     }
+                    LiveKind::Bevel(bv) => {
+                        // Not baked yet (§6.8.2): an external viewer draws
+                        // the object without its bevel.
+                        self.stats.bevels_unbaked += 1;
+                        bv.colour.as_ref().map(|c| self.shadow_colour(c))
+                    }
                     _ => None,
                 };
                 prelude = Some(live_params(&self.frame, &l.kind, colour));
@@ -2429,7 +2435,8 @@ fn live_name(k: &LiveKind) -> &'static str {
 
 /// The parametric element of a live effect (§6.8).
 ///
-/// `colour` is a shadow's colour as `Emitter::shadow_colour` spells it.
+/// `colour` is a shadow's colour, or a bevel's own colour, as
+/// `Emitter::shadow_colour` spells it.
 fn live_params(frame: &Frame, k: &LiveKind, colour: Option<(String, Option<String>)>) -> String {
     let profile = |p: xarast_geom::BiasGain| format!("{} {}", f64s(p.bias, 6), f64s(p.gain, 6));
     let mut s = String::new();
@@ -2504,32 +2511,24 @@ fn live_params(frame: &Frame, k: &LiveKind, colour: Option<(String, Option<Strin
         }
         LiveKind::Bevel(b) => {
             s.push_str("<xarast:bevel");
-            attr(
-                &mut s,
-                "xarast:type",
-                match b.bevel_type {
-                    xarast_doc::BevelType::Flat => "flat",
-                    xarast_doc::BevelType::Round => "round",
-                    xarast_doc::BevelType::Hollow => "hollow",
-                },
-            );
+            attr(&mut s, "xarast:type", b.bevel_type.name());
             attr(&mut s, "xarast:indent", &mp(i64::from(b.indent.raw())));
             attr(
                 &mut s,
                 "xarast:direction",
                 if b.outer { "outer" } else { "inner" },
             );
-            attr(
-                &mut s,
-                "xarast:light-angle",
-                &f64s(f64::from(b.light_angle), 6),
-            );
-            attr(
-                &mut s,
-                "xarast:light-elevation",
-                &f64s(f64::from(b.light_tilt), 6),
-            );
-            attr(&mut s, "xarast:contrast", &f64s(f64::from(b.contrast), 6));
+            // Shortest exact spellings, as a shadow's: a reload is bit for
+            // bit (the contrast is a percentage over 100 as an `f32`).
+            attr(&mut s, "xarast:light-angle", &f32s(b.light_angle));
+            attr(&mut s, "xarast:light-elevation", &f32s(b.light_tilt));
+            attr(&mut s, "xarast:contrast", &f32s(b.contrast));
+            if let Some((hex, reference)) = &colour {
+                attr(&mut s, "xarast:colour", hex);
+                if let Some(r) = reference {
+                    attr(&mut s, "xarast:colour-ref", r);
+                }
+            }
         }
         LiveKind::Mould(m) => {
             s.push_str("<xarast:mould");

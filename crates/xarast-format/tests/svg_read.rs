@@ -1637,3 +1637,91 @@ fn shadows_are_drawn_by_a_filter_that_the_reader_ignores() {
     assert!(!export.svg.contains("xarast"), "{}", export.svg);
     assert_eq!(export.svg.matches("<feMerge>").count(), 2);
 }
+
+/// Bevel controllers as the `.xar` importer builds them: every style, a
+/// contrast that is a percentage over 100 as an `f32`, odd angles, inner
+/// and outer, with no colour, a palette colour and a literal (XARA-T-0322).
+fn bevel_doc() -> Document {
+    let mut b = xarast_doc::builder::skeleton(BuildLimits::default()).unwrap();
+    let ink = b.define_colour(ColourDef::normal(ColourValue::rgb(0.6, 0.4, 0.2)).named("Wood"));
+    for (i, t) in xarast_doc::BevelType::ALL.into_iter().enumerate() {
+        let n = i32::try_from(i).unwrap();
+        let p = xarast_doc::BevelParams {
+            bevel_type: t,
+            indent: Mp::new(1_000 + 997 * n),
+            outer: i % 2 == 1,
+            light_angle: 300.0 + 3.0 * n as f32,
+            light_tilt: 32.0 + n as f32,
+            contrast: (f64::from(35 + n) / 100.0) as f32,
+            colour: match i % 3 {
+                0 => None,
+                1 => Some(Colour::Indexed {
+                    id: ink,
+                    tint: None,
+                }),
+                _ => Some(Colour::Direct(ColourValue::cmyk(0.1, 0.7, 0.2, 0.05))),
+            },
+        };
+        let kind = LiveKind::Bevel(Box::new(p));
+        let live = |role| {
+            NodeKind::Live(Box::new(LiveNode {
+                role,
+                kind: kind.clone(),
+                regen: RegenState::Clean,
+                name: None,
+            }))
+        };
+        b.node(live(LiveRole::Controller)).unwrap();
+        b.push_scope().unwrap();
+        b.attribute(AttrValue::LineWidth(Mp::new(500))).unwrap();
+        b.node(live(LiveRole::Generated)).unwrap();
+        b.node(live(LiveRole::Source)).unwrap();
+        b.push_scope().unwrap();
+        b.node(triangle(50_000 + 40_000 * n, 300_000)).unwrap();
+        b.push_scope().unwrap();
+        b.attribute(flat(rgb(0.9, 0.5, 0.1))).unwrap();
+        b.pop_scope();
+        b.pop_scope();
+        b.pop_scope();
+    }
+    b.finish().unwrap().0
+}
+
+#[test]
+fn a_bevel_reads_back_exactly_and_saves_to_the_same_bytes() {
+    let doc = bevel_doc();
+    let first = package(&doc, SvgOptions::default());
+    let svg = svg_of(&first);
+    assert!(svg.contains("xarast:type=\"ruffle-3b\""), "{svg}");
+    assert!(svg.contains("xarast:contrast=\".47\""), "{svg}");
+    assert!(svg.contains("xarast:colour-ref=\"#c-1\""), "{svg}");
+    let mut o = open(&first);
+    assert!(o.diagnostics.is_empty(), "{:?}", o.diagnostics);
+    same_text(&normal_form(&doc), &normal_form(&o.document));
+    let params: Vec<xarast_doc::BevelParams> = o
+        .document
+        .tree
+        .preorder(o.document.tree.root())
+        .filter_map(|n| match o.document.tree.kind(n) {
+            Some(NodeKind::Live(l)) if l.role == LiveRole::Controller => match &l.kind {
+                LiveKind::Bevel(p) => Some((**p).clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(params.len(), 15);
+    for (i, p) in params.iter().enumerate() {
+        let n = i32::try_from(i).unwrap();
+        assert_eq!(p.bevel_type, xarast_doc::BevelType::ALL[i]);
+        assert_eq!(p.outer, i % 2 == 1);
+        assert_eq!(p.contrast, (f64::from(35 + n) / 100.0) as f32);
+        assert_eq!(p.light_angle, 300.0 + 3.0 * n as f32);
+        assert_eq!(p.colour.is_some(), i % 3 != 0, "{i}");
+    }
+    assert!(matches!(
+        params[1].colour,
+        Some(Colour::Indexed { tint: None, .. })
+    ));
+    assert_eq!(first, resave(&mut o), "a fixed point");
+}

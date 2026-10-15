@@ -131,6 +131,18 @@ pub fn compute_bounds_with(tree: &Tree, id: NodeId, stroke_extent: xarast_geom::
                 _ => own,
             }
         }
+        // An outer bevel's faces lie outside its source, as far as its
+        // width reaches.
+        NodeKind::Live(l)
+            if l.role == crate::live::LiveRole::Controller
+                && matches!(&l.kind, crate::live::LiveKind::Bevel(p) if p.outer) =>
+        {
+            let own = union_children(tree, id, *attrs);
+            match &l.kind {
+                crate::live::LiveKind::Bevel(p) if !own.is_empty() => own.inflated(p.growth()),
+                _ => own,
+            }
+        }
         NodeKind::Document(_)
         | NodeKind::Chapter
         | NodeKind::Spread(_)
