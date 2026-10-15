@@ -50,6 +50,7 @@ pub mod hit;
 pub mod hit_index;
 pub mod matrix;
 pub mod measure;
+pub mod mould;
 pub mod mp;
 pub mod path;
 pub mod path_edit;
