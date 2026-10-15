@@ -1828,6 +1828,7 @@ impl<'d, 'b> Emitter<'d, 'b> {
         let mut el = El::new("g");
         let mut prelude = None;
         let mut shadow = None;
+        let mut bevel = None;
         match l.role {
             LiveRole::Controller => {
                 el.a("xarast:kind", kind);
@@ -1837,9 +1838,7 @@ impl<'d, 'b> Emitter<'d, 'b> {
                         Some(self.shadow_colour(&sh.colour))
                     }
                     LiveKind::Bevel(bv) => {
-                        // Not baked yet (§6.8.2): an external viewer draws
-                        // the object without its bevel.
-                        self.stats.bevels_unbaked += 1;
+                        bevel = Some(bv);
                         bv.colour.as_ref().map(|c| self.shadow_colour(c))
                     }
                     _ => None,
@@ -1872,7 +1871,62 @@ impl<'d, 'b> Emitter<'d, 'b> {
         if let Some(sh) = shadow {
             self.bake_shadow(n, &mut el, sh);
         }
+        if let Some(bv) = bevel {
+            self.bake_bevel(n, &mut el, bv);
+        }
         self.container(n, el, prelude);
+    }
+
+    /// Draws a controller's bevel in a browser (`svg/effect.rs`): a lighting
+    /// filter on the controller, derived from the parameters at every save
+    /// and ignored by the reader. An approximation of the renderer's faces
+    /// (`effect::bevel`); left unbaked, and reported, when the controller
+    /// also owns a feather (one `filter` per element).
+    fn bake_bevel(&mut self, n: NodeId, el: &mut El, bv: &xarast_doc::BevelParams) {
+        if el.has("filter") || bv.indent.raw() <= 0 {
+            self.stats.bevels_unbaked += 1;
+            return;
+        }
+        // An outer band's paint: its own colour, or the fill its generated
+        // node inherits (the first colour of a gradient).
+        let colour = bv.colour.clone().or_else(|| {
+            let generated = xarast_doc::live::parts(&self.doc.tree, n)?.generated?;
+            let a =
+                xarast_doc::attr::resolve_uncached(&self.doc.tree, generated, &self.doc.defaults);
+            let mut first = None;
+            let mut paint = a.fill().clone();
+            paint.for_each_value_mut(&mut |c| {
+                if first.is_none() {
+                    first = Some(c.clone());
+                }
+            });
+            first
+        });
+        let (hex, opacity) = match &colour {
+            Some(c) => {
+                let rgba = c.resolve(&self.doc.resources.colours).to_rgba8();
+                (self.shadow_colour(c).0, f64::from(rgba.a) / 255.0)
+            }
+            None => ("#000000".to_owned(), 0.0),
+        };
+        let reach = if bv.outer {
+            i64::from(bv.indent.raw())
+        } else {
+            0
+        };
+        let region = self.effect_region(n, Mp::new(i32::try_from(reach).unwrap_or(i32::MAX)));
+        let spec = effect::Bevel {
+            indent: f64::from(bv.indent.raw()) / 1000.0,
+            outer: bv.outer,
+            light_angle: f64::from(bv.light_angle),
+            light_tilt: f64::from(bv.light_tilt),
+            contrast: f64::from(bv.contrast),
+            colour: &hex,
+            opacity,
+        };
+        let id = effect::bevel(&spec, region).finish(&mut self.defs);
+        el.a("filter", format!("url(#{id})"));
+        self.stats.bevels_baked += 1;
     }
 
     /// Draws a controller's shadow in a browser (`svg/effect.rs`): a filter

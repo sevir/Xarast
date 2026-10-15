@@ -11,7 +11,8 @@
 //! order, and the registration in `<defs>` with
 //! `color-interpolation-filters="sRGB"` (mandatory, §6.8.1: the SVG default
 //! of `linearRGB` blurs visibly differently). An effect is a function that
-//! builds a chain; [`feather`] is the first.
+//! builds a chain; [`feather`] is the first, then [`shadow`] and
+//! [`bevel`].
 
 use super::defs::Defs;
 use super::num::{f64s, mp};
@@ -288,6 +289,110 @@ pub(crate) fn shadow(sh: &Shadow<'_>, region: Region) -> FilterChain {
     f
 }
 
+/// The height field's scale against the indent. `feDiffuseLighting`
+/// differentiates per filter pixel, so the lit slope depends on the
+/// resolution; 0.25 was the best of {0.1, 0.25, 0.3, 1} × σ ∈ {indent/2,
+/// /3, /5} on the corpus export at 72 dpi (Groucho2 svg 6.8 vs 8.2 at 1;
+/// testimp1 0.5 vs 0.6), `export.md` "Bevels in SVG".
+const SURFACE_SCALE: f64 = 0.25;
+
+/// A bevel's parameters, in the user units of the element it is set on
+/// (points).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Bevel<'a> {
+    /// The band's width.
+    pub indent: f64,
+    /// Whether the band lies outside the object.
+    pub outer: bool,
+    /// The light's direction of travel, degrees anticlockwise in the
+    /// document's frame (y up), as the model stores it.
+    pub light_angle: f64,
+    /// The light's height above the plane, degrees.
+    pub light_tilt: f64,
+    /// `0..=1`.
+    pub contrast: f64,
+    /// An outer band's `#rrggbb`.
+    pub colour: &'a str,
+    /// An outer band's opacity, `0..=1`.
+    pub opacity: f64,
+}
+
+/// A bevel (`research/06 §6.8.2`; the renderer's `LayerEffect::Bevel`):
+/// a height field from the silhouette blurred across the band (σ = half
+/// the indent), lit by `feDiffuseLighting` from the light
+/// (azimuth in SVG's y-down frame, the light sitting opposite its stored
+/// direction of travel, `render.md` "Bevels"), and the result applied as
+/// a ratio to the flat plane's lighting, scaled by the contrast: the
+/// object's own colours for an inner bevel, a band of the bevel's colour
+/// under the object (the silhouette grown by a disc) for an outer one.
+/// An approximation: the faces' cross-section is a blur's, whatever the
+/// style.
+pub(crate) fn bevel(b: &Bevel<'_>, region: Region) -> FilterChain {
+    let mut f = FilterChain::new("bevel", region);
+    let mut s = String::new();
+    let tilt = b.light_tilt.clamp(1.0, 90.0);
+    let flat = tilt.to_radians().sin();
+    let azimuth = (180.0 - b.light_angle).rem_euclid(360.0);
+    let c = b.contrast.clamp(0.0, 1.0);
+    let height = if b.outer {
+        morph_disc(
+            &mut s,
+            Radius {
+                x: b.indent,
+                y: b.indent,
+            },
+            "SourceAlpha",
+            true,
+        );
+        s.push_str("<feOffset dx=\"0\" dy=\"0\" result=\"g\"/>");
+        "g"
+    } else {
+        "SourceAlpha"
+    };
+    s.push_str("<feGaussianBlur");
+    attr(&mut s, "in", height);
+    attr(&mut s, "stdDeviation", &f64s(b.indent / 2.0, 4));
+    attr(&mut s, "result", "h");
+    s.push_str("/><feDiffuseLighting");
+    attr(&mut s, "in", "h");
+    attr(&mut s, "surfaceScale", &f64s(b.indent * SURFACE_SCALE, 4));
+    attr(&mut s, "diffuseConstant", "1");
+    attr(&mut s, "lighting-color", "#ffffff");
+    attr(&mut s, "result", "l");
+    s.push_str("><feDistantLight");
+    attr(&mut s, "azimuth", &f64s(azimuth, 4));
+    attr(&mut s, "elevation", &f64s(tilt, 4));
+    s.push_str("/></feDiffuseLighting>");
+    // out = paint × (1 − c + c·L / L_flat): unchanged where the surface is
+    // flat.
+    let lit_input = if b.outer {
+        s.push_str("<feFlood");
+        attr(&mut s, "flood-color", b.colour);
+        attr(&mut s, "flood-opacity", &f64s(b.opacity.clamp(0.0, 1.0), 4));
+        attr(&mut s, "result", "c");
+        s.push_str("/>");
+        "c"
+    } else {
+        "SourceGraphic"
+    };
+    s.push_str("<feComposite");
+    attr(&mut s, "in", lit_input);
+    attr(&mut s, "in2", "l");
+    attr(&mut s, "operator", "arithmetic");
+    attr(&mut s, "k1", &f64s(c / flat, 4));
+    attr(&mut s, "k2", &f64s(1.0 - c, 4));
+    attr(&mut s, "result", "p");
+    s.push_str("/>");
+    if b.outer {
+        s.push_str("<feComposite in=\"p\" in2=\"g\" operator=\"in\" result=\"s\"/>");
+        s.push_str("<feMerge><feMergeNode in=\"s\"/><feMergeNode in=\"SourceGraphic\"/></feMerge>");
+    } else {
+        s.push_str("<feComposite in=\"p\" in2=\"SourceAlpha\" operator=\"in\"/>");
+    }
+    f.push(&s);
+    f
+}
+
 /// Names the silhouette as the input of the first primitive that reads it.
 fn read(s: &mut String, input: &mut Option<&str>) {
     if let Some(i) = input.take() {
@@ -418,5 +523,47 @@ mod tests {
         };
         let s = written(shadow(&sh, Region::Object { margin: 0.5 }));
         assert!(s.contains("<feComposite in=\"c\" in2=\"SourceAlpha\" operator=\"in\""));
+    }
+
+    #[test]
+    fn a_bevel_lights_a_blurred_height_field_from_opposite_its_travel() {
+        let b = Bevel {
+            indent: 8.0,
+            outer: false,
+            light_angle: 315.0,
+            light_tilt: 45.0,
+            contrast: 0.5,
+            colour: "#000000",
+            opacity: 0.0,
+        };
+        let s = written(bevel(&b, Region::Object { margin: 0.5 }));
+        assert!(s.contains("xarast:filter=\"bevel\""));
+        assert!(s.contains("color-interpolation-filters=\"sRGB\""));
+        assert!(s.contains("stdDeviation=\"4\""), "{s}");
+        assert!(s.contains("surfaceScale=\"2\""), "{s}");
+        // Travelling to the lower right, so lit from the upper left: an
+        // azimuth of 225° in SVG's y-down frame.
+        assert!(s.contains("azimuth=\"225\" elevation=\"45\""), "{s}");
+        // Unchanged where flat: k1·L_flat + k2 = 1.
+        assert!(s.contains("k1=\".7071\" k2=\".5\""), "{s}");
+        assert!(s.contains("in2=\"SourceAlpha\" operator=\"in\""));
+        assert!(!s.contains("<feMerge>"));
+    }
+
+    #[test]
+    fn an_outer_bevel_grows_the_silhouette_and_goes_under_the_object() {
+        let b = Bevel {
+            indent: 4.0,
+            outer: true,
+            light_angle: 300.0,
+            light_tilt: 32.0,
+            contrast: 1.0,
+            colour: "#00ffff",
+            opacity: 1.0,
+        };
+        let s = written(bevel(&b, Region::Object { margin: 0.5 }));
+        assert_eq!(s.matches("operator=\"dilate\"").count(), 4, "{s}");
+        assert!(s.contains("flood-color=\"#00ffff\""));
+        assert!(s.contains("<feMergeNode in=\"s\"/><feMergeNode in=\"SourceGraphic\"/>"));
     }
 }

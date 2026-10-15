@@ -446,6 +446,10 @@ fn compromises(s: &fsvg::Stats, svg: &str, failed_images: usize) -> Vec<Compromi
             "wall and glow shadows drawn by an SVG filter (a Gaussian blur for the disc blur)",
             s.shadows_baked,
         ),
+        (
+            "bevels drawn by an SVG lighting filter (a blurred height field for the faces)",
+            s.bevels_baked,
+        ),
     ];
     let mut out: Vec<Compromise> = not_rendered
         .into_iter()

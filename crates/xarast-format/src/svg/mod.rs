@@ -295,9 +295,12 @@ pub struct Stats {
     /// Wall and glow shadows drawn by an SVG filter (`effect.rs`), plus
     /// their twin.
     pub shadows_baked: usize,
-    /// Bevels recorded (`<xarast:bevel>`) but not baked: an external
-    /// viewer draws the object without its bevel.
+    /// Bevels recorded (`<xarast:bevel>`) but not baked (their controller
+    /// also owns a feather): an external viewer draws the object without
+    /// its bevel.
     pub bevels_unbaked: usize,
+    /// Bevels drawn by an SVG lighting filter (`effect.rs`).
+    pub bevels_baked: usize,
     /// `ClipRegion` attributes, which nothing draws yet.
     pub clip_regions_ignored: usize,
     /// Non-attribute children of ink nodes, drawn before them as siblings.

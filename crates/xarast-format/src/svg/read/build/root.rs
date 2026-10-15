@@ -280,7 +280,7 @@ fn is_known_def(e: &Elem) -> bool {
         || (e.is(NS_SVG, "filter")
             && matches!(
                 xa(e, "filter"),
-                Some("transparency-mask" | "contone" | "feather" | "shadow")
+                Some("transparency-mask" | "contone" | "feather" | "shadow" | "bevel")
             ))
         || e.is(NS_XARAST, "document")
         || e.is(NS_XARAST, "palette")
