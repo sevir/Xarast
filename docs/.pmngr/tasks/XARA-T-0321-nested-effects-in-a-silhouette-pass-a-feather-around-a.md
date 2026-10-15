@@ -2,14 +2,15 @@
 id: XARA-T-0321
 type: task
 title: "Nested effects in a silhouette pass: a feather around a shadow erodes the shadow away"
-status: in_progress
+status: done
 priority: low
 parent: XARA-US-0069
 author: mcp
 labels: [phase-13, live-effects, render]
 created: 2026-09-24T21:04:11Z
-updated: 2026-10-15T15:37:55Z
+updated: 2026-10-15T16:10:02Z
 started: 2026-10-15T15:37:55Z
+closed: 2026-10-15T16:10:02Z
 ---
 
 ## Description
