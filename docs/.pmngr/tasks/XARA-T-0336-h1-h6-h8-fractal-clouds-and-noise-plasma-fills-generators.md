@@ -2,14 +2,15 @@
 id: XARA-T-0336
 type: task
 title: "H1–H6, H8 — Fractal (clouds) and noise (plasma) fills: generators, deterministic PRNG, cached materialisation, import and .xarast"
-status: in_progress
+status: done
 priority: medium
 parent: XARA-US-0071
 author: mcp
 labels: [phase-13, fills, image, xar, format]
 created: 2026-10-15T22:07:12Z
-updated: 2026-10-15T22:07:12Z
+updated: 2026-10-15T23:21:54Z
 started: 2026-10-15T22:07:12Z
+closed: 2026-10-15T23:21:54Z
 ---
 
 ## Description

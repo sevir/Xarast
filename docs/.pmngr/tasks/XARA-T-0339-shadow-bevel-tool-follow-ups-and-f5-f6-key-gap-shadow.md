@@ -2,13 +2,14 @@
 id: XARA-T-0339
 type: task
 title: "Shadow/bevel tool follow-ups and F5/F6 key gap: shadow colour, second shadow and 1–4/A keys, contoured bevel drag outline, wall-offset nudges, Fill/Transparency tools missing from AppCommand::ALL"
-status: backlog
+status: in_progress
 priority: medium
 parent: XARA-US-0069
 author: mcp
 labels: [phase-13, tools, app, ui]
 created: 2026-10-15T23:20:43Z
-updated: 2026-10-15T23:20:43Z
+updated: 2026-10-15T23:21:58Z
+started: 2026-10-15T23:21:58Z
 ---
 
 ## Description
