@@ -301,3 +301,35 @@ fn a_transformed_ellipse_is_hit_where_it_is_drawn() {
         near
     ));
 }
+
+#[test]
+fn regression_mitre_limit_one_self_overlapping_cubic() {
+    let mut b = Path::builder();
+    b.move_to(Point::raw(-1491, -6354));
+    b.cubic_to(
+        Point::raw(1236, 9796),
+        Point::raw(8540, -5241),
+        Point::raw(-3209, -1484),
+    );
+    let path = b.build();
+    let style = StrokeStyle {
+        width: Mp::new(1903),
+        cap_start: Cap::Butt,
+        cap_end: Cap::Butt,
+        join: Join::Mitre,
+        mitre_limit: 1.0,
+        dash: None,
+    };
+    let p = Point::raw(3684, -2160);
+    let r = 406.1087;
+    let got = hit_stroke_transformed(
+        &path,
+        Matrix::IDENTITY,
+        &style,
+        p,
+        HitTolerance::new(r, 0.0),
+    );
+    let outline = stroke_to_path(&path, &style, Tolerance(0.25)).expect("a real width");
+    let bez = closed(&outline.to_bez_path());
+    check(got, &bez, false, FillRule::NonZero, p.to_kurbo(), r).unwrap();
+}

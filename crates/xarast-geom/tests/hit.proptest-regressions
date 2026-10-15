@@ -1,0 +1,4 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+cc 1534a3f812d777f48d27fb7a81a0a515ebff48165181784fa3fb619fe16e76ca # shrinks to the stroke accuracy scaled with the pick radius (XARA-T-0191)

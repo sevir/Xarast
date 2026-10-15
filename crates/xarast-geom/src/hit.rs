@@ -371,7 +371,12 @@ pub fn hit_stroke_transformed(
         .with_miter_limit(mitre)
         .with_start_cap(kurbo_cap(style.cap_start))
         .with_end_cap(kurbo_cap(style.cap_end));
-    let accuracy = (flat_tolerance(r) / smax.max(f64::MIN_POSITIVE)).max(1e-3);
+    // The stroker's own curve accuracy is fixed at the renderer's quarter
+    // millipoint, not scaled with the pick radius: it is an error on the
+    // outline itself, on top of the flattening below, and with a wide stroke
+    // and a big pick a radius-scaled value drifts the outline by far more
+    // than the slack a hit is entitled to (XARA-T-0191).
+    let accuracy = (0.25 / smax.max(f64::MIN_POSITIVE)).max(1e-3);
     let outline = kurbo::stroke(
         piece.iter(),
         &stroke,

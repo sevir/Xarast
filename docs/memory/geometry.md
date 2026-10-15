@@ -369,6 +369,19 @@ with a segment too far away to matter, and the spurious cap there lies
 within that segment's own reach. An allocation-free pass over
 `Path::segments` answers the common miss first.
 
+**Invariant (XARA-T-0191): the stroker's accuracy in `hit_stroke` is a
+fixed 0.25 mp (the renderer's), never scaled with the pick radius.** It
+used to be `max(r/8, 0.25)`, the same figure as the edge flattening. But
+it is an error on the *outline itself*, stacked on the flattening: with
+a 1903 mp stroke and r = 406 the outline drifted ~50 mp, which is more
+than the slack the oracle (`stroke_matches_the_renderers_outline`) and
+a user are entitled to, so a pick inside the drawn stroke missed. The
+failing seed (mitre limit 1.0, a self-overlapping cubic) was a red
+herring: the join and self-overlap were irrelevant, only wide stroke +
+large radius mattered. The oracle was right; the hit-test was wrong.
+Regression: `hit.proptest-regressions` and
+`regression_mitre_limit_one_self_overlapping_cubic`.
+
 ### Bounds on hostile input
 
 A work limit (2·10^7 edge visits), an edge cap (2^21) and a dash cap
