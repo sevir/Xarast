@@ -8,7 +8,8 @@
 #
 #   ARCH          target architecture (default: the host's)
 #   OUTPUT_DIR    where the .AppImage lands (default: <repo>/dist)
-#   SKIP_BUILD    set to 1 to package an already-built binary
+#   XARAST_BUILD_ID  build id compiled into xarast (default: short commit hash)
+#   SKIP_BUILD   set to 1 to package an already-built binary
 #   UPDATE_INFO   zsync update information embedded in the image
 #   SIZE_LIMIT_MIB  fail above this many MiB (default: 80)
 #
@@ -37,6 +38,13 @@ if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
   if [[ "$arch" == "x86_64" ]]; then
     export RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=x86-64-v2"
   fi
+  # The commit names the build in crash reports and in
+  # `xarast --version --verbose`. A short hash only: no timestamp, so the
+  # same commit always yields the same bytes.
+  if [[ -z "${XARAST_BUILD_ID:-}" ]]; then
+    XARAST_BUILD_ID="$(git -C "$repo_root" rev-parse --short=12 HEAD 2>/dev/null || true)"
+  fi
+  export XARAST_BUILD_ID
   cargo build --release --locked -p xarast-shell --bin xarast
   cargo build --release --locked -p xarast-cli --bin xarast-thumbnailer
 fi
@@ -55,6 +63,7 @@ rm -rf "$appdir"
 mkdir -p "$appdir/usr/bin" \
          "$appdir/usr/share/applications" \
          "$appdir/usr/share/metainfo" \
+         "$appdir/usr/share/doc/xarast" \
          "$appdir/usr/share/mime/packages" \
          "$appdir/usr/share/thumbnailers"
 
@@ -70,6 +79,11 @@ install -m 644 "$repo_root/packaging/linux/es.digio.Xarast.metainfo.xml" \
                "$appdir/usr/share/metainfo/es.digio.Xarast.metainfo.xml"
 install -m 644 "$repo_root/packaging/linux/xarast.xml" \
                "$appdir/usr/share/mime/packages/xarast.xml"
+
+# The third-party notices the IJG licence (jpeg-encoder) requires a binary
+# distribution to carry; the same file the About box embeds.
+install -m 644 "$repo_root/packaging/THIRD-PARTY-NOTICES.txt" \
+               "$appdir/usr/share/doc/xarast/THIRD-PARTY-NOTICES.txt"
 
 icon_root="$repo_root/assets/icons/hicolor"
 [[ -d "$icon_root" ]] || { echo "icons missing; run 'cargo xtask icons'" >&2; exit 1; }

@@ -124,6 +124,16 @@ jobs:
           ./dist/Xarast-${{ matrix.arch }}.AppImage --version
           ./dist/Xarast-${{ matrix.arch }}.AppImage --selftest
 
+      # XARA-T-0194 and XARA-T-0309: the IJG sentence ships in the image's
+      # notices, and the build names its commit.
+      - name: Notices and build id
+        run: |
+          grep -qF "This software is based in part on the work of the Independent JPEG Group." \
+            build/AppDir/usr/share/doc/xarast/THIRD-PARTY-NOTICES.txt
+          out="$(./dist/Xarast-${{ matrix.arch }}.AppImage --version --verbose)"
+          echo "$out"
+          echo "$out" | grep -qE "^build: .* \($(git rev-parse --short=12 HEAD)\)$"
+
       - name: Report the glibc baseline
         run: |
           echo "Highest glibc symbol version required:"
