@@ -48,6 +48,7 @@ pub mod num;
 mod paint;
 pub mod pathdata;
 pub mod photo;
+pub mod procedural;
 pub mod read;
 mod style;
 mod text;
@@ -555,7 +556,11 @@ pub fn write_svg(doc: &Document, resources: &mut ResourceIndex, opts: &SvgOption
     let digest: [u8; 32] = e.foreign_hash.finalize().into();
     let count = e.foreign_count;
     let svg = assemble(&e, doc, view, opts, count, &digest, &font_css);
+    let baked = std::mem::take(&mut e.baker.files);
     drop(e);
+    for bytes in baked {
+        let _ = resources.insert(ResourceKind::Baked, "png", bytes);
+    }
     for bytes in font_files {
         let _ = resources.insert(ResourceKind::Font, "woff2", bytes);
     }

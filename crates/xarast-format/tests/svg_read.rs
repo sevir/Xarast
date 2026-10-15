@@ -1070,6 +1070,9 @@ fn what_svg_cannot_draw_reads_back_exactly() {
             flat(p1.clone()),
             stroke.clone(),
             AttrValue::TranspFill(TranspPaint::Fractal {
+                origin: Point::raw(1_000, 2_000),
+                axis_x: Point::raw(51_000, 2_500),
+                axis_y: Point::raw(1_500, 40_000),
                 params: params.clone(),
                 from: t(45, TranspMode::Mix),
                 to: t(255, TranspMode::Mix),
@@ -1088,6 +1091,9 @@ fn what_svg_cannot_draw_reads_back_exactly() {
         2,
         vec![
             AttrValue::Fill(FillGeometry::Noise {
+                origin: Point::raw(10_000, 20_000),
+                axis_x: Point::raw(90_000, 20_000),
+                axis_y: Point::raw(10_000, 80_000),
                 params: params.clone(),
                 from: p1.clone(),
                 to: p2.clone(),
@@ -1213,9 +1219,12 @@ fn what_svg_cannot_draw_reads_back_exactly() {
     let first = package(&doc, SvgOptions::default());
     let mut o = open(&first);
     assert!(o.diagnostics.is_empty(), "{:?}", o.diagnostics);
-    // A browser draws the contone fill through the writer's filter.
+    // A browser draws the contone fill through the writer's filter, and
+    // the noise fill's baked tile through another (XARA-T-0336).
     let svg = svg_of(&first);
-    assert_eq!(svg.matches("xarast:filter=\"contone\"").count(), 1, "{svg}");
+    assert_eq!(svg.matches("xarast:filter=\"contone\"").count(), 2, "{svg}");
+    assert!(svg.contains("xarast:baked-dpi="), "{svg}");
+    assert!(svg.contains("href=\"resources/baked/b3-"), "{svg}");
     assert!(svg.contains("<feFuncR type=\"table\""), "{svg}");
     for i in 0..7 {
         let (a, b) = (paint_slots(&doc, i), paint_slots(&o.document, i));

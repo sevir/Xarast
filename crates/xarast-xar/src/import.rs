@@ -2646,12 +2646,18 @@ impl<'o> Mapper<'o> {
                 }
             }
             FillKind::Fractal => Paint::Fractal {
+                origin: geo.start,
+                axis_x: geo.end,
+                axis_y: geo.end2.unwrap_or(geo.end),
                 params: Box::new(procedural(g.fractal.as_ref())),
                 from,
                 to,
                 profile: BiasGain::new(g.profile.0, g.profile.1),
             },
             FillKind::Noise => Paint::Noise {
+                origin: geo.start,
+                axis_x: geo.end,
+                axis_y: geo.end2.unwrap_or(geo.end),
                 params: Box::new(procedural(g.fractal.as_ref())),
                 from,
                 to,
@@ -2752,12 +2758,18 @@ impl<'o> Mapper<'o> {
                 }
             }
             FillKind::Fractal => TranspPaint::Fractal {
+                origin: geo.start,
+                axis_x: geo.end,
+                axis_y: geo.end2.unwrap_or(geo.end),
                 params: Box::new(procedural(g.fractal.as_ref())),
                 from,
                 to,
                 profile: BiasGain::new(g.profile.0, g.profile.1),
             },
             FillKind::Noise => TranspPaint::Noise {
+                origin: geo.start,
+                axis_x: geo.end,
+                axis_y: geo.end2.unwrap_or(geo.end),
                 params: Box::new(procedural(g.fractal.as_ref())),
                 from,
                 to,

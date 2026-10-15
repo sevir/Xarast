@@ -40,6 +40,8 @@ pub(crate) struct PaintCtx<'a> {
     pub palette: &'a std::collections::HashMap<xarast_color::ColourId, String>,
     /// Resolves a bitmap to its package path, when it has one.
     pub bitmap_href: &'a mut dyn FnMut(xarast_doc::BitmapId) -> Option<BitmapRef>,
+    /// Bakes the tiles of procedural fills.
+    pub baker: &'a mut super::procedural::Baker,
 }
 
 /// A bitmap that made it into the package.
@@ -904,39 +906,66 @@ pub(crate) fn colour_paint(
             flat_approx(mean(&cs), side)
         }
         FillGeometry::Fractal {
+            origin,
+            axis_x,
+            axis_y,
             params,
             from,
             to,
             profile,
         }
         | FillGeometry::Noise {
+            origin,
+            axis_x,
+            axis_y,
             params,
             from,
             to,
             profile,
         } => {
-            ctx.stats.fills_approximated += 1;
-            let kind = if matches!(paint, FillGeometry::Fractal { .. }) {
-                "fractal-clouds"
-            } else {
-                "noise"
-            };
+            let clouds = matches!(paint, FillGeometry::Fractal { .. });
+            let kind = if clouds { "fractal-clouds" } else { "noise" };
             let (a, b) = (rgba(from, t), rgba(to, t));
             let mut side = String::from("<xarast:fill");
             attr(&mut side, "xarast:type", kind);
+            let pts = [*origin, *axis_x, *axis_y].map(|p| pt_pair(ctx, p));
+            attr(&mut side, "xarast:points", &pts.join(" "));
             attr(&mut side, "xarast:colours", &join_hex(&[a, b]));
             refs_attr(
                 &mut side,
                 "xarast:colour-refs",
                 &colour_refs(&[from, to], ctx),
             );
-            procedural_attrs(&mut side, params, *profile);
+            procedural_attrs(&mut side, params, *profile, clouds);
             if tiling != Tiling::None {
                 attr(&mut side, "xarast:repeat", repeat_name(tiling));
             }
             effect_attr(&mut side, effect);
             side.push_str("/>");
-            flat_approx(mean(&[a, b]), side)
+            // The base draws the tile Xarast draws, baked (H8).
+            let Some((tile, dpi)) = super::procedural::fill_tile(paint)
+                .and_then(|f| f.procedural().map(|p| (p, f.baked_dpi(p.dim()))))
+            else {
+                ctx.stats.fills_approximated += 1;
+                return flat_approx(mean(&[a, b]), side);
+            };
+            let bm = ctx.baker.tile(&tile, Some(*profile));
+            let mut body = bitmap_pattern_head(ctx, *origin, *axis_x, *axis_y);
+            attr(&mut body, "xarast:generated", "fill-bake");
+            attr(&mut body, "xarast:baked-dpi", &f64s(dpi, 2));
+            let filter = contone_filter(ctx, from, to, effect);
+            bitmap_pattern_tail(&mut body, &bm, Some(&filter));
+            let id = ctx.defs.add('p', "pattern", &body);
+            ctx.stats.fills_baked += 1;
+            // The colours' mean alpha rides on the opacity, as for the flat
+            // base this replaced: the reader divides it back out of
+            // `fill-opacity` to recover the transparency.
+            PaintOut {
+                value: format!("url(#{id})"),
+                opacity: opacity_of(mean(&[a, b]).a),
+                sidecar: Some(side),
+                ..PaintOut::default()
+            }
         }
         FillGeometry::Bitmap {
             image,
@@ -1396,6 +1425,51 @@ pub(crate) fn transparency(
                 }
             }
         }
+        FillGeometry::Fractal {
+            origin,
+            axis_x,
+            axis_y,
+            from,
+            to,
+            ..
+        }
+        | FillGeometry::Noise {
+            origin,
+            axis_x,
+            axis_y,
+            from,
+            to,
+            ..
+        } if bounds.is_some()
+            && super::procedural::fill_tile(t).is_some_and(|f| f.procedural().is_some()) =>
+        {
+            // The tile as a luminance mask over the element's box, its
+            // levels from the twin's two (H8). The profile is the
+            // twin's: SVG draws the tile linearly.
+            let sidecar = Some(transparency_twin(ctx, t, tiling));
+            let tile = super::procedural::fill_tile(t).and_then(|f| f.procedural());
+            let mask = match (bounds, tile) {
+                (Some(b), Some(tile)) => {
+                    let bm = ctx.baker.tile(&tile, None);
+                    ctx.stats.fills_baked += 1;
+                    Some(bitmap_mask(
+                        ctx,
+                        &bm,
+                        *origin,
+                        *axis_x,
+                        *axis_y,
+                        b,
+                        (from.level, to.level),
+                    ))
+                }
+                _ => None,
+            };
+            TranspOut {
+                mask,
+                sidecar,
+                ..TranspOut::default()
+            }
+        }
         FillGeometry::Conical { from, to, .. }
         | FillGeometry::Fractal { from, to, .. }
         | FillGeometry::Noise { from, to, .. } => {
@@ -1587,15 +1661,18 @@ fn transparency_twin(ctx: &mut PaintCtx<'_>, t: &TranspPaint, tiling: Tiling) ->
             from,
             to,
             profile,
+            ..
         }
         | FillGeometry::Noise {
             params,
             from,
             to,
             profile,
+            ..
         } => {
             attr(&mut s, "xarast:values", &values(&[from, to]));
-            procedural_attrs(&mut s, params, *profile);
+            let clouds = matches!(t, FillGeometry::Fractal { .. });
+            procedural_attrs(&mut s, params, *profile, clouds);
         }
         FillGeometry::Bitmap {
             image,
@@ -1647,7 +1724,18 @@ fn procedural_attrs(
     s: &mut String,
     params: &xarast_doc::fill::ProceduralParams,
     profile: BiasGain,
+    clouds: bool,
 ) {
+    // The frozen generator the parameters are for (H6).
+    attr(
+        s,
+        "xarast:generator",
+        if clouds {
+            xarast_image::procedural::CLOUDS_GENERATOR
+        } else {
+            xarast_image::procedural::PLASMA_GENERATOR
+        },
+    );
     attr(s, "xarast:seed", &params.seed.to_string());
     attr(s, "xarast:graininess", &f32s(params.graininess));
     attr(s, "xarast:gravity", &f32s(params.gravity));

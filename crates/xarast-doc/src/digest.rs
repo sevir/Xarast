@@ -419,17 +419,26 @@ impl<S: Stop + Canon> Canon for FillGeometry<S> {
                 h.add(profile);
             }
             FillGeometry::Fractal {
+                origin,
+                axis_x,
+                axis_y,
                 params,
                 from,
                 to,
                 profile,
             }
             | FillGeometry::Noise {
+                origin,
+                axis_x,
+                axis_y,
                 params,
                 from,
                 to,
                 profile,
             } => {
+                h.add(origin);
+                h.add(axis_x);
+                h.add(axis_y);
                 h.add(&**params);
                 h.add(from);
                 h.add(to);

@@ -671,8 +671,18 @@ impl<'d> Reader<'d, '_, '_> {
                 });
                 let profile = profile_of(g("profile")).unwrap_or(BiasGain::IDENTITY);
                 let (from, to) = (c(0)?, c(1)?);
+                // Files written before XARA-T-0336 have no points: the
+                // fill is then degenerate and draws its start colour.
+                let (origin, axis_x, axis_y) = (
+                    pt(self, 0).unwrap_or_default(),
+                    pt(self, 1).unwrap_or_default(),
+                    pt(self, 2).unwrap_or_default(),
+                );
                 if kind == "noise" {
                     FillGeometry::Noise {
+                        origin,
+                        axis_x,
+                        axis_y,
                         params,
                         from,
                         to,
@@ -680,6 +690,9 @@ impl<'d> Reader<'d, '_, '_> {
                     }
                 } else {
                     FillGeometry::Fractal {
+                        origin,
+                        axis_x,
+                        axis_y,
                         params,
                         from,
                         to,
@@ -828,12 +841,18 @@ impl<'d> Reader<'d, '_, '_> {
                 }
             }
             "fractal-clouds" => FillGeometry::Fractal {
+                origin: pt(self, 0).unwrap_or_default(),
+                axis_x: pt(self, 1).unwrap_or_default(),
+                axis_y: pt(self, 2).unwrap_or_default(),
                 params: procedural(),
                 from: val(0),
                 to: val(1),
                 profile,
             },
             "noise" => FillGeometry::Noise {
+                origin: pt(self, 0).unwrap_or_default(),
+                axis_x: pt(self, 1).unwrap_or_default(),
+                axis_y: pt(self, 2).unwrap_or_default(),
                 params: procedural(),
                 from: val(0),
                 to: val(1),

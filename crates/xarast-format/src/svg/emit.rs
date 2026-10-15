@@ -256,6 +256,8 @@ pub(crate) struct Emitter<'d, 'b> {
     /// Every face the placed text is drawn with and the characters drawn
     /// with it: the fonts to embed (`research/06 §6.7` rule 2).
     pub fonts: BTreeMap<PlacedFace, BTreeSet<char>>,
+    /// The baked tiles of procedural fills (`super::procedural`).
+    pub baker: super::procedural::Baker,
 }
 
 impl<'d, 'b> Emitter<'d, 'b> {
@@ -312,6 +314,7 @@ impl<'d, 'b> Emitter<'d, 'b> {
             placer: opts.text.clone(),
             interchange: opts.dialect == super::SvgDialect::Interchange,
             fonts: BTreeMap::new(),
+            baker: super::procedural::Baker::new(opts.dialect == super::SvgDialect::Interchange),
         }
     }
 
@@ -1345,6 +1348,7 @@ impl<'d, 'b> Emitter<'d, 'b> {
             stats: &mut this.stats,
             palette: &this.palette,
             bitmap_href: &mut *this.bitmap_href,
+            baker: &mut this.baker,
         };
         let fill = match &fill_paint {
             Some(p) => colour_paint(&mut ctx, p, fill_tiling, effect, fill_box),

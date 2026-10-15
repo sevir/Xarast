@@ -336,8 +336,15 @@ pub enum FillGeometry<S: Stop> {
         /// The bias/gain profile.
         profile: BiasGain,
     },
-    /// A fractal.
+    /// A fractal (clouds): a generated grey tile mapped onto the
+    /// parallelogram like a contone bitmap (phase 13 H1).
     Fractal {
+        /// The tile's start corner: its first row starts here.
+        origin: Point,
+        /// The end of the tile's x axis.
+        axis_x: Point,
+        /// The end of the tile's y axis.
+        axis_y: Point,
         /// The generator's parameters.
         params: Box<ProceduralParams>,
         /// The value at zero.
@@ -347,8 +354,14 @@ pub enum FillGeometry<S: Stop> {
         /// The bias/gain profile.
         profile: BiasGain,
     },
-    /// Noise.
+    /// Noise (plasma), placed as [`FillGeometry::Fractal`].
     Noise {
+        /// The tile's start corner.
+        origin: Point,
+        /// The end of the tile's x axis.
+        axis_x: Point,
+        /// The end of the tile's y axis.
+        axis_y: Point,
         /// The generator's parameters.
         params: Box<ProceduralParams>,
         /// The value at zero.
@@ -503,7 +516,22 @@ impl<S: Stop> FillGeometry<S> {
                 v.push(*axis_y);
                 push_persp(&mut v, persp);
             }
-            FillGeometry::Fractal { .. } | FillGeometry::Noise { .. } => {}
+            FillGeometry::Fractal {
+                origin,
+                axis_x,
+                axis_y,
+                ..
+            }
+            | FillGeometry::Noise {
+                origin,
+                axis_x,
+                axis_y,
+                ..
+            } => {
+                v.push(*origin);
+                v.push(*axis_x);
+                v.push(*axis_y);
+            }
         }
         v
     }
@@ -515,9 +543,23 @@ impl<S: Stop> FillGeometry<S> {
     pub fn transform(&mut self, m: Matrix) {
         let go = |p: &mut Point| *p = m.transform_point(*p);
         match self {
-            FillGeometry::Flat { .. }
-            | FillGeometry::Fractal { .. }
-            | FillGeometry::Noise { .. } => {}
+            FillGeometry::Flat { .. } => {}
+            FillGeometry::Fractal {
+                origin,
+                axis_x,
+                axis_y,
+                ..
+            }
+            | FillGeometry::Noise {
+                origin,
+                axis_x,
+                axis_y,
+                ..
+            } => {
+                go(origin);
+                go(axis_x);
+                go(axis_y);
+            }
             FillGeometry::Linear {
                 start, end, persp, ..
             } => {

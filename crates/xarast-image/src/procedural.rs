@@ -180,6 +180,68 @@ pub fn clouds_dim(dpi: u32, u_len: f64, v_len: f64) -> Option<u32> {
     Some(d)
 }
 
+/// A procedural fill as a document holds it: its parameters as floats
+/// and the lengths of its two axes. [`FillTile::procedural`] turns it
+/// into the generator's input, choosing the tile size; the renderer and
+/// the `.xarast` writer both go through it, so they draw the same tile.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FillTile {
+    /// Clouds (`true`) or plasma.
+    pub clouds: bool,
+    /// The seed.
+    pub seed: i32,
+    /// Graininess.
+    pub graininess: f64,
+    /// Gravity (clouds only).
+    pub gravity: f64,
+    /// Squash (clouds only).
+    pub squash: f64,
+    /// The fill's resolution, 0 for the default.
+    pub dpi: u32,
+    /// Whether the fill tiles seamlessly (clouds only).
+    pub tileable: bool,
+    /// The length of the x axis, millipoints.
+    pub u_len: f64,
+    /// The length of the y axis, millipoints.
+    pub v_len: f64,
+}
+
+impl FillTile {
+    /// The generator's input, `None` for a degenerate parallelogram (an
+    /// axis under one millipoint), which the original does not generate.
+    #[must_use]
+    pub fn procedural(&self) -> Option<Procedural> {
+        let dim = clouds_dim(self.dpi, self.u_len, self.v_len)?;
+        Some(if self.clouds {
+            Procedural::Clouds(CloudsParams {
+                seed: self.seed,
+                graininess: fixed16(self.graininess),
+                gravity: fixed16(self.gravity),
+                squash: fixed16(self.squash),
+                tileable: self.tileable,
+                dim,
+            })
+        } else {
+            Procedural::Plasma(PlasmaParams {
+                seed: self.seed,
+                grain: fixed16(self.graininess),
+            })
+        })
+    }
+
+    /// The resolution the tile has on the fill, in dots per inch: its side
+    /// over the longer axis. What `.xarast` records as `xarast:baked-dpi`.
+    #[must_use]
+    pub fn baked_dpi(&self, dim: u32) -> f64 {
+        let longest = self.u_len.max(self.v_len);
+        if longest > 0.0 {
+            f64::from(dim) * 72_000.0 / longest
+        } else {
+            0.0
+        }
+    }
+}
+
 /// A power of two in `MIN_CLOUDS_DIM..=MAX_CLOUDS_DIM`.
 fn legal_dim(dim: u32) -> u32 {
     dim.clamp(MIN_CLOUDS_DIM, MAX_CLOUDS_DIM)

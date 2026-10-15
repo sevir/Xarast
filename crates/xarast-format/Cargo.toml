@@ -19,6 +19,9 @@ workspace = true
 xarast-doc = { path = "../xarast-doc" }
 xarast-geom = { path = "../xarast-geom" }
 xarast-color = { path = "../xarast-color" }
+# The clouds and plasma generators, for the baked base of a procedural
+# fill (phase 13 H8).
+xarast-image = { path = "../xarast-image" }
 zip = { workspace = true }
 quick-xml = { workspace = true }
 blake3 = { workspace = true }

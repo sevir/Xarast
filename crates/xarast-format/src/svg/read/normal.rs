@@ -755,6 +755,8 @@ impl Nf<'_> {
         }
         let refs = self.bitmaps.clone();
         let mut lookup = |id: BitmapId| refs.get(&id).cloned().flatten();
+        // The bake of a procedural fill is derived: only its twin counts.
+        let mut baker = crate::svg::procedural::Baker::new(true);
         let mut ctx = PaintCtx {
             colours: &self.doc.resources.colours,
             defs: &mut self.defs,
@@ -762,6 +764,7 @@ impl Nf<'_> {
             stats: &mut self.stats,
             palette: &self.palette,
             bitmap_href: &mut lookup,
+            baker: &mut baker,
         };
         let none = || PaintOut {
             value: "none".into(),
