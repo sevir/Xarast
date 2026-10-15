@@ -15,9 +15,12 @@
 
 use std::sync::Arc;
 
-use crate::backend::cpu::{CpuBackend, Offscreen, Resolver, materialise, render_region};
+use crate::backend::cpu::{
+    CpuBackend, Effects, Offscreen, Resolver, materialise, render_region, silhouette_plane,
+};
 use crate::blur::{self, Kernel};
 use crate::display_list::{DisplayList, ViewParams};
+use crate::effect::NestedSilhouette;
 use crate::precision::Transform2D;
 use crate::scene::{Scene, SceneNodeId, SceneOp};
 use crate::surface::{DeviceRect, DirtyRect};
@@ -31,9 +34,11 @@ pub enum LayerContent {
     /// SVG `SourceAlpha`).
     Alpha,
     /// One byte a pixel: the content's coverage, with every paint opaque
-    /// and every transparency ignored. What a feather or a shadow is cut
-    /// from: the original builds both from the object's outline, not from
-    /// how transparent it is.
+    /// and every transparency ignored, and nested effects as the outlines
+    /// they contribute (a shadow's moved outline included,
+    /// [`NestedSilhouette::Outline`]). What a feather is cut from: the
+    /// original builds it from the object's outline, not from how
+    /// transparent it is.
     Silhouette,
 }
 
@@ -183,41 +188,62 @@ pub fn render_subtree_to_layer(
     );
     let cfg = *backend.config();
     let luts = backend.luts();
-    let effects = materialise(
-        &dl,
-        dl.commands(),
-        res,
-        luts,
-        &cfg,
-        region,
-        ROWS,
-        left,
-        None,
-    );
+    // A silhouette sees nested effects as outlines, which it renders
+    // itself; their colour is not needed.
+    let effects = if request.content == LayerContent::Silhouette {
+        Effects::default()
+    } else {
+        materialise(
+            &dl,
+            dl.commands(),
+            res,
+            luts,
+            &cfg,
+            region,
+            ROWS,
+            left,
+            None,
+        )
+    };
     let target = Offscreen {
         region,
         rows_per_band: ROWS,
         left,
     };
-    let silhouette = request.content == LayerContent::Silhouette;
-    let rgba = render_region(
-        &dl,
-        dl.commands(),
-        res,
-        luts,
-        &cfg,
-        &effects,
-        target,
-        silhouette,
-        cancelled,
-    )?;
-    let pixel_width = 1.0 / transform.max_scale().max(1e-12);
-    let pixels = match request.content {
-        LayerContent::Colour => rgba,
-        LayerContent::Alpha | LayerContent::Silhouette => {
-            rgba.as_chunks::<4>().0.iter().map(|p| p[3]).collect()
+    let pixels = if request.content == LayerContent::Silhouette {
+        if cancelled() {
+            return None;
+        }
+        silhouette_plane(
+            &dl,
+            dl.commands(),
+            res,
+            luts,
+            &cfg,
+            target,
+            NestedSilhouette::Outline { shadows: true },
+            &effects,
+        )?
+    } else {
+        let rgba = render_region(
+            &dl,
+            dl.commands(),
+            res,
+            luts,
+            &cfg,
+            &effects,
+            target,
+            false,
+            cancelled,
+        )?;
+        match request.content {
+            LayerContent::Colour => rgba,
+            LayerContent::Alpha | LayerContent::Silhouette => {
+                rgba.as_chunks::<4>().0.iter().map(|p| p[3]).collect()
+            }
         }
     };
+    let pixel_width = 1.0 / transform.max_scale().max(1e-12);
     Some(LayerTarget {
         bounds: region,
         pixel_width,

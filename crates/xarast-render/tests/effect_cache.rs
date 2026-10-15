@@ -27,19 +27,20 @@ fn effect_cases() -> Vec<Case> {
         .into_iter()
         .filter(|c| c.name.starts_with("effect_"))
         .collect();
-    assert_eq!(cases.len(), 19, "the corpus's effect cases");
+    assert_eq!(cases.len(), 21, "the corpus's effect cases");
     cases
 }
 
 /// The corpus's shadow cases (XARA-T-0318): wall, floor, glow, a shadow
-/// whose object is outside the view, and a feathered shadow; and its bevel
-/// cases (XARA-T-0322), which read and paint beyond what they keep too.
+/// whose object is outside the view, a feathered shadow and a shadow in a
+/// bevel (XARA-T-0321); and its bevel cases (XARA-T-0322), which read and
+/// paint beyond what they keep too.
 fn shadow_cases() -> Vec<Case> {
     let cases: Vec<Case> = effect_cases()
         .into_iter()
         .filter(|c| c.name.starts_with("effect_shadow_") || c.name.starts_with("effect_bevel_"))
         .collect();
-    assert_eq!(cases.len(), 11, "the corpus's shadow and bevel cases");
+    assert_eq!(cases.len(), 13, "the corpus's shadow and bevel cases");
     cases
 }
 

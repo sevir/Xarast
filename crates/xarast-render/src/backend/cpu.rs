@@ -43,7 +43,7 @@ use xarast_geom::{Cap, FillRule, Join, StrokeStyle};
 use crate::backend::{BackendError, FrameTimings, LayerId, Rasterizer, RasterizerCaps};
 use crate::blend::{BlendFamily, BlendLuts, LumaWeights, TranspSource, Transparency, composite};
 use crate::display_list::{DisplayList, DrawCmd, DrawItem, ListParts, SCENE_PAINT};
-use crate::effect::LayerEffect;
+use crate::effect::{LayerEffect, NestedSilhouette};
 use crate::effect_cache::{Cover, EffectCache, Piece, Probe};
 use crate::paint::{FrameMap, GradMapping, ImageId, ImageRegistry, Paint, PaintSampler};
 use crate::path::PathRef;
@@ -774,14 +774,16 @@ fn render_fresh(
     };
     let mut colour = render_region(dl, inner, res, luts, cfg, &nested, target, false, &never)?;
     let silhouette = if effect.needs_silhouette() {
-        let sil = render_region(dl, inner, res, luts, cfg, &nested, target, true, &never)?;
-        Some(
-            sil.as_chunks::<4>()
-                .0
-                .iter()
-                .map(|p| p[3])
-                .collect::<Vec<u8>>(),
-        )
+        Some(silhouette_plane(
+            dl,
+            inner,
+            res,
+            luts,
+            cfg,
+            target,
+            effect.nested_silhouette(),
+            &nested,
+        )?)
     } else {
         None
     };
@@ -794,6 +796,134 @@ fn render_fresh(
         (region.x0, region.y0),
     );
     Some((region, colour))
+}
+
+/// The silhouette of `cmds` over `target.region`, one coverage byte per
+/// pixel: every paint opaque, and the effects among `cmds` seen as `mode`
+/// says (`crate::effect::NestedSilhouette`): their rendered result
+/// (`rendered`, the colour pass's own), or their outlines, rendered here.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "a band's state is genuinely this wide"
+)]
+pub(crate) fn silhouette_plane(
+    dl: &DisplayList,
+    cmds: &[DrawCmd],
+    res: &Resolver,
+    luts: &BlendLuts,
+    cfg: &CpuConfig,
+    target: Offscreen,
+    mode: NestedSilhouette,
+    rendered: &Effects,
+) -> Option<Vec<u8>> {
+    let outlines;
+    let effects = match mode {
+        NestedSilhouette::Rendered => rendered,
+        NestedSilhouette::Outline { shadows } => {
+            outlines = materialise_outlines(dl, cmds, res, luts, cfg, target, shadows);
+            &outlines
+        }
+    };
+    let never = || false;
+    let sil = render_region(dl, cmds, res, luts, cfg, effects, target, true, &never)?;
+    Some(sil.as_chunks::<4>().0.iter().map(|p| p[3]).collect())
+}
+
+/// [`materialise`] for a silhouette pass that sees nested effects as
+/// outlines: every outermost effect of `cmds` that reaches
+/// `target.region`, as the opaque outline it contributes
+/// (`LayerEffect::outline_at`). Never cached: the enclosing effect's
+/// result is.
+fn materialise_outlines(
+    dl: &DisplayList,
+    cmds: &[DrawCmd],
+    res: &Resolver,
+    luts: &BlendLuts,
+    cfg: &CpuConfig,
+    target: Offscreen,
+    shadows: bool,
+) -> Effects {
+    let mut out = Effects::default();
+    let mut i = 0;
+    while i < cmds.len() {
+        if let DrawCmd::PushEffect { .. } = cmds[i] {
+            let end = matching_pop(cmds, i);
+            let inner = &cmds[i + 1..end.min(cmds.len())];
+            let layer = render_outline(dl, &cmds[i], inner, res, luts, cfg, target, shadows);
+            out.spans.insert(i, (end, layer));
+            i = end + 1;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// One nested effect's outline over the pixels of `outer.region` it
+/// covers: its content's silhouette (its own nested effects seen as
+/// outlines too), rendered over those pixels plus its reach exactly as
+/// [`render_fresh`] renders its colour, then `LayerEffect::outline_at`.
+/// Opaque black, premultiplied.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "a band's state is genuinely this wide"
+)]
+fn render_outline(
+    dl: &DisplayList,
+    push: &DrawCmd,
+    inner: &[DrawCmd],
+    res: &Resolver,
+    luts: &BlendLuts,
+    cfg: &CpuConfig,
+    outer: Offscreen,
+    shadows: bool,
+) -> Option<EffectLayer> {
+    let DrawItem::PushEffect {
+        effect,
+        xf,
+        content,
+    } = dl.item(push)
+    else {
+        return None;
+    };
+    if content.is_empty() || outer.region.is_empty() {
+        return None;
+    }
+    let scale = xf.max_scale();
+    let reach = effect.reach_px(scale);
+    let growth = effect.growth_px(scale);
+    let keep = content.inflated(growth).intersection(outer.region);
+    if keep.is_empty() {
+        return None;
+    }
+    // The same region, band grid and coverage edge as `render_fresh`: the
+    // outline's pixels depend on the view alone (invariant 23).
+    let need = keep
+        .inflated(reach)
+        .intersection(content.inflated(reach.saturating_add(growth)));
+    let rpb = i32::try_from(outer.rows_per_band.max(1)).unwrap_or(i32::MAX);
+    let region = DeviceRect::new(need.x0, need.y0.div_euclid(rpb) * rpb, need.x1, need.y1);
+    if region.is_empty() {
+        return None;
+    }
+    let left = outer.left.min(dl.view().viewport.x0).saturating_sub(reach);
+    let target = Offscreen {
+        region,
+        rows_per_band: outer.rows_per_band,
+        left,
+    };
+    let mode = NestedSilhouette::Outline { shadows }.inside(effect);
+    let mut plane = silhouette_plane(dl, inner, res, luts, cfg, target, mode, &Effects::default())?;
+    let (w, h) = (region.width() as usize, region.height() as usize);
+    effect.outline_at(&mut plane, w, h, xf, (region.x0, region.y0), shadows);
+    let pixels: Vec<u8> = plane.iter().flat_map(|a| [0, 0, 0, *a]).collect();
+    Some(EffectLayer {
+        pieces: vec![Piece {
+            clip: keep,
+            rect: region,
+            pixels: Arc::new(pixels),
+        }],
+    })
 }
 
 /// Where an offscreen render goes: its device rectangle, the band grid its

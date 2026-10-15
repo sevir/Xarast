@@ -823,6 +823,153 @@ impl LayerEffect {
     }
 }
 
+/// How an effect's silhouette pass sees the effects nested inside it
+/// (`docs/memory/render.md`, "Nested effects in a silhouette pass").
+///
+/// The original builds a feather's and a bevel's silhouette from paths,
+/// not pixels: the subtree is converted to outlines and filled opaque, so
+/// a nested effect contributes the *outline* of what it draws, never its
+/// colour or its transparency. A shadow's silhouette is a render of its
+/// subtree, so a nested effect contributes what it draws, alpha included.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NestedSilhouette {
+    /// Nested effects composite their rendered result (a shadow).
+    Rendered,
+    /// Nested effects contribute their outline
+    /// ([`LayerEffect::outline_at`]); `shadows` says whether a nested
+    /// shadow's moved outline counts (a feather's silhouette) or only
+    /// what it shadows does (a bevel's).
+    Outline {
+        /// Whether a nested shadow contributes its moved outline.
+        shadows: bool,
+    },
+}
+
+impl NestedSilhouette {
+    /// The mode for the content of `effect` when `effect` itself is seen
+    /// in this mode: what a shadow shadows is converted without its own
+    /// nested shadows (the original starts a fresh conversion for it).
+    #[must_use]
+    pub const fn inside(self, effect: &LayerEffect) -> NestedSilhouette {
+        match (self, effect) {
+            (NestedSilhouette::Outline { .. }, LayerEffect::Shadow(_)) => {
+                NestedSilhouette::Outline { shadows: false }
+            }
+            (mode, _) => mode,
+        }
+    }
+}
+
+impl LayerEffect {
+    /// How this effect's own silhouette pass sees the effects it wraps.
+    ///
+    /// Facts from the original (facts only): a feather's silhouette is the
+    /// outer contour of its node's outlines, gathered by a path conversion
+    /// that includes shadows' outlines (`Kernel/fthrattr.cpp`,
+    /// `GenerateOuterContour`; `Kernel/nodecntr.cpp`,
+    /// `GenerateContourPathForNode` sets `SetDoShadowSilhouettes`); a
+    /// bevel's is a contour conversion that does not
+    /// (`Kernel/nodebev.cpp`, `ContourBecomeA`); a shadow renders its
+    /// subtree into a 32-bit offscreen bitmap and casts its alpha
+    /// (`Kernel/nodeshad.cpp`, `RenderShadowedNodeOffscreen`;
+    /// `Kernel/bshadow.cpp`, `MakeWallShadow` reads byte 3).
+    #[must_use]
+    pub const fn nested_silhouette(&self) -> NestedSilhouette {
+        match self {
+            LayerEffect::Feather { .. } => NestedSilhouette::Outline { shadows: true },
+            LayerEffect::Bevel(_) => NestedSilhouette::Outline { shadows: false },
+            LayerEffect::Shadow(_) => NestedSilhouette::Rendered,
+        }
+    }
+
+    /// The outline this effect contributes to an enclosing silhouette, in
+    /// place: `plane` holds its content's own silhouette (one coverage byte
+    /// per pixel, `width × height`, top-left pixel at device `origin`).
+    ///
+    /// * A feather contributes its content's outline: a path conversion
+    ///   ignores the feather.
+    /// * A shadow, when `shadows`, adds its outline moved as the shadow
+    ///   moves it (a wall's offset, a floor's squash and shear, a glow's
+    ///   growth), **unblurred and opaque**: the original applies the shadow
+    ///   transform to the outline and leaves the penumbra out
+    ///   (`Kernel/nodecont.cpp`, `NodeShadowController::DoBecomeA`,
+    ///   `ApplyShadowTransform`). Otherwise only its content counts: the
+    ///   shadow node itself converts to nothing (`NodeShadow::DoBecomeA`).
+    /// * An outer bevel adds its band (the bevel node converts to its own
+    ///   ink path, `NodeBevel::DoBecomeA`); an inner bevel's band lies
+    ///   inside its content.
+    pub fn outline_at(
+        &self,
+        plane: &mut [u8],
+        width: usize,
+        height: usize,
+        xf: Transform2D,
+        origin: (i32, i32),
+        shadows: bool,
+    ) {
+        if plane.len() != width * height || plane.is_empty() {
+            return;
+        }
+        match self {
+            LayerEffect::Feather { .. } => {}
+            LayerEffect::Shadow(s) => {
+                if !shadows {
+                    return;
+                }
+                let scale = xf.max_scale();
+                let mut moved = plane.to_vec();
+                let spread = s.spread_px(scale);
+                if spread > 0.0 {
+                    blur::dilate_plane(&mut moved, width, height, spread);
+                }
+                let map = Transform2D::new(s.map);
+                if map != Transform2D::IDENTITY {
+                    let back = xf
+                        .invert()
+                        .zip(map.invert())
+                        .map(|(d_inv, m_inv)| d_inv.then(m_inv).then(xf));
+                    moved = match back {
+                        Some(b) => warp(&moved, width, height, b, origin),
+                        // A singular map (a floor of height 0) casts nothing.
+                        None => vec![0; moved.len()],
+                    };
+                }
+                union_into(plane, &moved);
+            }
+            LayerEffect::Bevel(b) => {
+                if !b.outer {
+                    return;
+                }
+                // The band exactly as the bevel paints it, opaque.
+                let band = BevelEffect {
+                    colour: Rgba8 {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: 255,
+                    },
+                    ..(**b).clone()
+                };
+                let mut colour: Vec<u8> = plane.iter().flat_map(|a| [0, 0, 0, *a]).collect();
+                band.apply(&mut colour, plane, width, height, xf);
+                for (p, c) in plane.iter_mut().zip(colour.as_chunks::<4>().0) {
+                    *p = c[3];
+                }
+            }
+        }
+    }
+}
+
+/// `dst` over `src`, both coverage planes: what drawing two opaque shapes
+/// into one silhouette gives.
+fn union_into(dst: &mut [u8], src: &[u8]) {
+    for (d, s) in dst.iter_mut().zip(src) {
+        let (a, b) = (u32::from(*d), u32::from(*s));
+        let v = a + (b * (255 - a) + 127) / 255;
+        *d = u8::try_from(v.min(255)).unwrap_or(u8::MAX);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1116,6 +1263,106 @@ mod tests {
                 .unwrap()
                 .iter()
                 .all(Option::is_none)
+        );
+    }
+
+    /// The bounding box of the pixels at least half covered.
+    fn covered_box(plane: &[u8], w: usize) -> (usize, usize, usize, usize) {
+        let mut b = (usize::MAX, usize::MAX, 0, 0);
+        for (i, a) in plane.iter().enumerate() {
+            if *a >= 128 {
+                let (x, y) = (i % w, i / w);
+                b = (b.0.min(x), b.1.min(y), b.2.max(x + 1), b.3.max(y + 1));
+            }
+        }
+        b
+    }
+
+    #[test]
+    fn a_nested_wall_shadow_adds_its_moved_outline_unblurred_and_opaque() {
+        let (_, sil, w, h) = square_planes(false);
+        let e = shadow([1.0, 0.0, 0.0, 1.0, 10.0, 6.0], 12.0, 0.0, 8.0);
+        let mut plane = sil.clone();
+        e.outline_at(&mut plane, w, h, Transform2D::IDENTITY, (0, 0), true);
+        // The square and its copy moved by (10, 6), both fully opaque: no
+        // penumbra, no darkness.
+        assert_eq!(covered_box(&plane, w), (20, 20, 70, 66));
+        assert_eq!(plane[25 * w + 25], 255);
+        assert_eq!(plane[63 * w + 67], 255);
+        assert_eq!(plane[63 * w + 71], 0);
+        assert!(plane.iter().all(|a| *a == 0 || *a == 255));
+        // Seen by a bevel (no shadow outlines), only the object counts.
+        let mut plane = sil.clone();
+        e.outline_at(&mut plane, w, h, Transform2D::IDENTITY, (0, 0), false);
+        assert_eq!(plane, sil);
+    }
+
+    #[test]
+    fn a_nested_glow_grows_the_outline_by_its_width() {
+        let (_, sil, w, h) = square_planes(false);
+        let e = shadow([1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 0.0, 3.0, 8.0);
+        let mut plane = sil;
+        e.outline_at(&mut plane, w, h, Transform2D::IDENTITY, (0, 0), true);
+        // A glow's spread is its contour width: 3 px out on every side.
+        assert_eq!(covered_box(&plane, w), (17, 17, 63, 63));
+    }
+
+    #[test]
+    fn a_nested_feather_or_inner_bevel_contributes_its_content_and_an_outer_bevel_its_band() {
+        let (_, sil, w, h) = square_planes(false);
+        let feather = LayerEffect::Feather {
+            size: 12.0,
+            profile: Profile::IDENTITY,
+        };
+        let mut plane = sil.clone();
+        feather.outline_at(&mut plane, w, h, Transform2D::IDENTITY, (0, 0), true);
+        assert_eq!(plane, sil);
+        let bevel = |outer: bool| {
+            LayerEffect::Bevel(Box::new(BevelEffect {
+                style: BevelType::Flat,
+                indent: 5.0,
+                outer,
+                light_angle: 315.0,
+                light_tilt: 45.0,
+                contrast: 0.5,
+                colour: Rgba8 {
+                    r: 10,
+                    g: 20,
+                    b: 30,
+                    a: 40,
+                },
+            }))
+        };
+        let mut plane = sil.clone();
+        bevel(false).outline_at(&mut plane, w, h, Transform2D::IDENTITY, (0, 0), true);
+        assert_eq!(plane, sil);
+        // The band opaque whatever the bevel's colour, 5 px out.
+        let mut plane = sil;
+        bevel(true).outline_at(&mut plane, w, h, Transform2D::IDENTITY, (0, 0), true);
+        assert_eq!(covered_box(&plane, w), (15, 15, 65, 65));
+        assert_eq!(plane[40 * w + 16], 255);
+    }
+
+    #[test]
+    fn which_effects_see_nested_effects_as_outlines() {
+        let f = LayerEffect::Feather {
+            size: 1.0,
+            profile: Profile::IDENTITY,
+        };
+        let s = shadow([1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 0.0, 0.0, 1.0);
+        assert_eq!(
+            f.nested_silhouette(),
+            NestedSilhouette::Outline { shadows: true }
+        );
+        assert_eq!(s.nested_silhouette(), NestedSilhouette::Rendered);
+        // What a shadow shadows is converted afresh, without shadows.
+        assert_eq!(
+            f.nested_silhouette().inside(&s),
+            NestedSilhouette::Outline { shadows: false }
+        );
+        assert_eq!(
+            f.nested_silhouette().inside(&f),
+            NestedSilhouette::Outline { shadows: true }
         );
     }
 }

@@ -1401,7 +1401,7 @@ fn ellipse_path(cx: f64, cy: f64, r: f64) -> PathRef {
     PathRef::new(b.build())
 }
 
-/// Live effects through the offscreen pipeline (phase 13): 19 cases.
+/// Live effects through the offscreen pipeline (phase 13): 21 cases.
 ///
 /// Each exercises something the pipeline has to get right beyond the blur
 /// itself: the silhouette (a transparent object is feathered by its shape,
@@ -1411,10 +1411,12 @@ fn ellipse_path(cx: f64, cy: f64, r: f64) -> PathRef {
 /// squashed and sheared (a floor) or grows (a glow), and a shadow whose
 /// object is outside the view while the shadow is in it. The bevels add
 /// four styles inner and outer, a group lit by its shared outline, a
-/// tilted light and a bevel inside a shadow (XARA-T-0322).
+/// tilted light and a bevel inside a shadow (XARA-T-0322). Nesting in a
+/// silhouette pass (XARA-T-0321): a feather around a shadow and around an
+/// outer bevel sees their outlines, a bevel around a shadow its object's.
 fn effect_cases() -> Vec<Case> {
     type Draw = fn(&mut SceneBuilder<'_>);
-    let cases: [(&str, Draw); 19] = [
+    let cases: [(&str, Draw); 21] = [
         ("effect_bevel_flat_inner", |b| {
             b.push_effect(bevel_pt(BevelType::Flat, 8.0, false, 315.0, 0.5));
             b.fill(
@@ -1609,6 +1611,47 @@ fn effect_cases() -> Vec<Case> {
                 &rect_path(12.0, 12.0, 70.0, 70.0),
                 FillRule::NonZero,
                 Paint::Solid(rgb(40, 160, 200)),
+            );
+            b.pop_effect();
+            b.pop_effect();
+        }),
+        ("effect_shadow_in_bevel", |b| {
+            // A bevel around a shadowed object: the bevel's silhouette is
+            // the object's outline alone, the shadow contributes nothing
+            // (a contour conversion leaves shadows out), so the shadow is
+            // drawn whole and only the square is bevelled.
+            b.push_effect(bevel_pt(BevelType::Flat, 6.0, false, 315.0, 0.5));
+            b.push_effect(shadow_pt(
+                [1.0, 0.0, 0.0, 1.0, 10.0, 10.0],
+                14.2,
+                0.0,
+                8.0,
+                Rgba8 {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 140,
+                },
+            ));
+            b.fill(
+                SceneNodeId(10),
+                &rect_path(12.0, 12.0, 66.0, 66.0),
+                FillRule::NonZero,
+                Paint::Solid(rgb(200, 150, 90)),
+            );
+            b.pop_effect();
+            b.pop_effect();
+        }),
+        ("effect_bevel_outer_feathered", |b| {
+            // A feather around an outer bevel: the band is part of the
+            // feather's silhouette, so the band's own edge is what fades.
+            b.push_effect(feather(10.0, Profile::IDENTITY));
+            b.push_effect(bevel_pt(BevelType::Round, 8.0, true, 315.0, 0.6));
+            b.fill(
+                SceneNodeId(10),
+                &ellipse_path(48.0, 48.0, 28.0),
+                FillRule::NonZero,
+                Paint::Solid(rgb(60, 110, 200)),
             );
             b.pop_effect();
             b.pop_effect();
