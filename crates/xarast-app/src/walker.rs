@@ -1298,6 +1298,9 @@ impl SceneWalker {
             for a in ring.attrs.iter() {
                 attrs.push(Arc::new(a.clone()));
             }
+            // The original fills every ring under a negative rule, whatever
+            // is in force (`Kernel/nodecntr.cpp:605-609`): non-zero as drawn.
+            attrs.push(Arc::new(AttrValue::WindingRule(FillRule::Negative)));
             // Tags are `u32`, so the ring index above them keeps every
             // ring's id apart from every node's (and from a preview's,
             // which sets the top bit).

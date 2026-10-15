@@ -183,9 +183,11 @@ pub fn silhouette(doc: &Document, node: NodeId, include_line_widths: bool) -> Pa
     };
     let attrs = resolve_uncached(&doc.tree, node, &doc.defaults);
     let tol = Tolerance::BOOLEAN;
+    // The region as drawn: negative and positive fill non-zero
+    // (`FillRule::as_drawn`).
     let rule = match attrs.get(AttrSlot::WindingRule) {
-        AttrValue::WindingRule(r) => *r,
-        _ => FillRule::NonZero,
+        AttrValue::WindingRule(r) => r.as_drawn(),
+        _ => FillRule::EvenOdd,
     };
     let (closed, open) = split_closed(&path);
     let mut pieces: Vec<Path> = Vec::new();
