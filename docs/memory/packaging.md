@@ -215,3 +215,24 @@ The size with all of these linked in is recorded under **Size** above.
       shared GitHub runners, headless and CPU-only (see `perf.md`);
       XARA-T-0298.
 - [x] Re-measure the size budget with the phase 5 stack: 7.7 MiB (above).
+
+## Third-party notices and build id (XARA-T-0194, XARA-T-0309)
+
+- `packaging/THIRD-PARTY-NOTICES.txt` is the single source of the
+  section 4.1 statements (IJG sentence for `jpeg-encoder`). `xarast-ui`
+  embeds it with `include_str!` (`menus::THIRD_PARTY_NOTICES`, shown in a
+  scroll area in Help > About) and `build-appimage.sh` installs it as
+  `usr/share/doc/xarast/THIRD-PARTY-NOTICES.txt`. A unit test in
+  `menus.rs` parses the section 4.1 table of
+  `docs/11-licensing-and-clean-room.md` and requires each quoted
+  statement in the notices: adding a row there without updating the file
+  fails the test. The `appimage.yml` step "Notices and build id" greps
+  the AppDir copy. New packages (Windows/macOS) must ship the same file.
+- `build-appimage.sh` exports `XARAST_BUILD_ID` (default: 12-char commit
+  hash from `git rev-parse`; overridable) before compiling `xarast`.
+  `appimage.yml` is also the release workflow (`release: published`), so
+  releases are covered. `xarast --version --verbose` prints
+  `build: <version> (<id>)`; the same step checks it equals `HEAD`.
+- The `reproducible` job builds only `xarast-cli`/`xtask` and never sets
+  the id, so its export bytes are unaffected; the id is a commit hash, no
+  timestamp, so the same commit still builds the same binary.
