@@ -1886,15 +1886,15 @@ impl<'d, 'b> Emitter<'d, 'b> {
             RegenState::Deferred => el.a("xarast:regen", "deferred"),
         }
         self.own_feather(n, &mut el);
-        if let Some(sh) = shadow {
-            if let Some(copy) = self.bake_shadow(n, &mut el, sh) {
-                let pad = if self.pretty {
-                    format!("\n{}", " ".repeat(self.depth + 1))
-                } else {
-                    String::new()
-                };
-                prelude = Some(format!("{}{pad}{copy}", prelude.unwrap_or_default()));
-            }
+        if let Some(sh) = shadow
+            && let Some(copy) = self.bake_shadow(n, &mut el, sh)
+        {
+            let pad = if self.pretty {
+                format!("\n{}", " ".repeat(self.depth + 1))
+            } else {
+                String::new()
+            };
+            prelude = Some(format!("{}{pad}{copy}", prelude.unwrap_or_default()));
         }
         if let Some(bv) = bevel {
             self.bake_bevel(n, &mut el, bv);
