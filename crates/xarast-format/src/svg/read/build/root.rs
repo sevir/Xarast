@@ -275,12 +275,12 @@ fn is_known_def(e: &Elem) -> bool {
             "linearGradient" | "radialGradient" | "mask" | "pattern" | "clipPath" | "style"
         ))
         // The writer's own filters (a transparency mask, a contone ramp, a
-        // feather), derived from the twins; any other filter is foreign and
+        // feather, a shadow), derived from the twins; any other filter is foreign and
         // kept.
         || (e.is(NS_SVG, "filter")
             && matches!(
                 xa(e, "filter"),
-                Some("transparency-mask" | "contone" | "feather")
+                Some("transparency-mask" | "contone" | "feather" | "shadow")
             ))
         || e.is(NS_XARAST, "document")
         || e.is(NS_XARAST, "palette")

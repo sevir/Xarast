@@ -81,6 +81,7 @@ same code. What Interchange changes, and where:
 | Background | none | `SvgOptions::background` → a `<rect>` over the viewBox, first in the body | `assemble` |
 | Ids | stable, the identity model | kept; `minify` drops those nothing refers to (`url(#…)`, `href="#…"`, `inkscape:current-layer`) plus comments and indentation | `interchange::project` |
 | Baked content | `xarast:generated` | unmarked (the attribute goes with the rest) | projection |
+| Shadows (XARA-T-0320) | `xarast:shadow` + `filter="url(#f…)"` on the controller to a `<filter xarast:filter="shadow">` | the same filter, unmarked | `Emitter::bake_shadow`, `svg/effect.rs` |
 | Feathers (XARA-T-0317) | `xarast:feather` + `filter="url(#f…)"` to a `<filter xarast:filter="feather">` | the same filter, unmarked | `Emitter::own_feather`, `svg/effect.rs` |
 
 **Why a projection pass instead of an `if` at every write.** The
@@ -219,6 +220,47 @@ residual: the Gaussian's tails versus the disc's hard support (a thin
 feathered line fades a little more in SVG), and the renderer's soft
 erosion at antialiased edges.
 
+### Shadows in SVG (XARA-T-0320, 2026-10-15)
+
+A wall or glow shadow's **controller** `<g xarast:kind="shadow">` (it holds
+the object as its `live-source` child, so the filter's `SourceGraphic` is
+the object) carries `filter="url(#f…)"` to a filter built by
+`effect::shadow` from the shadow's parameters, in both dialects. Chain, in
+points, `feFlood` first (colour, `flood-opacity` = colour alpha × the
+walker's `opacity_level()/255`, i.e. `round(255·(1−(round(255(1−darkness)))/255))`),
+then:
+
+1. glow only: `SourceAlpha` dilated by the glow width as a disc (the
+   feather's four-rectangle union, `feBlend mode="lighten"` this time);
+2. `feGaussianBlur` σ = penumbra/4 (r = penumbra/2, σ = r/2 like the
+   feather; skipped at 0);
+3. wall only: `feOffset` by the offset in the SVG frame (skipped at 0);
+4. the profile as a 33-entry `feFuncA` table, `1 − P'(1 − a)` with the
+   bias **negated** (`P'`), as the renderer maps the blurred silhouette;
+5. `feComposite in="c" operator="in"` (the flood where that mask is), then
+   `feMerge` of it under `SourceGraphic`.
+
+Region: `effect_region(controller, blur + glow + max|offset|)`.
+`Stats::shadows_baked` feeds `Simplified { "wall and glow shadows drawn by
+an SVG filter (a Gaussian blur for the disc blur)" }`.
+
+**Not baked, still `NotRendered "shadows (recorded, not baked)"`**:
+- **Floor shadows.** The renderer maps the silhouette through an affine
+  map (vertical scale + shear) before blurring; a filter cannot transform
+  its input, so a floor needs a transformed copy of the object
+  (`<use>` with the map and a blur filter, §6.8.1) inside the empty
+  `generated` group, and the reader would have to ignore that copy. Not
+  done (follow-up; all 81 of Groucho2's are wall or glow)
+  (`shadow_doc` in `tests/svg_read.rs` pins the report).
+- A shadow whose controller also owns a feather: one `filter` per element,
+  and the renderer feathers the shadow with the object. No corpus file.
+
+**Measured** (72 dpi, paper, resvg, mean |Δ| against our PNG):
+Groucho2 6.67 → **2.69**, SoftShadow 5.03 → **3.16**. Whole corpus: 118
+comparisons, 0 failures, both SVG limits dropped. What is left: the
+Gaussian's tails against the disc's hard support (as for feathers) and the
+shadows of text, whose region is the story's box ± 50 %.
+
 ## Colour fidelity and regression (W11.5, W11.6, XARA-US-0060)
 
 ### Colour (T11.5.1–T11.5.5)
@@ -299,15 +341,15 @@ erosion at antialiased edges.
 Fixtures: colour-sheet svg 0.49 / pdf 0.50; features 0.23 / 0.87;
 synthetic 1.65 / 3.53 (gs; Poppler 8.9). Corpus (re-measured after
 XARA-T-0252): 59/59 each format; SVG median 0.70, PDF best-of-two median
-1.98; **17 file/format pairs above 4** (2 SVG: leafgirl, SoftShadow; 15
-PDF), each with a limit and a reason in `export-limits-corpus.txt`:
+1.98; **15 file/format pairs above 4** (1 SVG: leafgirl; 14
+PDF; SoftShadow svg left the list with XARA-T-0320), each with a limit and a reason in `export-limits-corpus.txt`:
 
 | Cause | Files (format: mean) |
 |---|---|
 | Bake ladder: conical/diamond/multi-colour fills | Fill Types simple (~~svg 19.7~~ 1.9 since XARA-US-0043, pdf 7.2), WATCH2 ~~svg 16.5~~ 0.7, WATCH (~~svg 5.1~~ 2.4, pdf 4.8) — SVG now bakes them into geometry (`xarast-format` `svg/bake.rs`, `xarast-format.md`) |
 | Bitmap fills: resvg tile seams / PDF rasterised + resampled | leafgirl (svg 11.4, pdf 7.7), TestBitmapFill pdf 5.6 |
 | ~~Feathers drawn by us, unfeathered in SVG~~ | feathers svg ~~20.15~~ **2.00**, Groucho2 svg ~~5.71~~ **2.01**, Watch4 1.43 → 1.13 since XARA-T-0317 (the feather is a filter, "Feathers in SVG" below); the limits 23.2 / 6.6 are gone. PDF rasterises each feather whole: feathers pdf 1.69, Groucho2 2.04 |
-| Shadows drawn by us, not baked in SVG (XARA-T-0318, 2026-09-24) | Groucho2 svg 5.71 → 10.04 (feathers unfiltered too) → **6.67** with the T-0317 feather filter merged (only the 81 shadows missing), SoftShadow svg 1.20 → 5.03 — `<xarast:shadow>` only (`Compromise::NotRendered` "shadows (recorded, not baked)"); limits **7.7** / 5.8 until the filter is baked with the feather's. PDF rasterises each shadow with its object over its growth: Groucho2 pdf 2.75, SoftShadow pdf 7.56 (gs; Poppler 8.11: its controllers hold the whole textured page, resampled by the viewers; limit 8.7), Girard 1.05, Watch4 0.80, testimp1 0.84. Corpus export check: 118 comparisons, 0 failures (qpdf not installed locally) |
+| ~~Shadows drawn by us, not baked in SVG~~ (XARA-T-0318, 2026-09-24; baked by XARA-T-0320, 2026-10-15) | Groucho2 svg 5.71 → 10.04 (feathers unfiltered too) → 6.67 with the T-0317 feather filter merged (only the 81 shadows missing) → **2.69** with the shadow filter ("Shadows in SVG" below); SoftShadow svg 1.20 → 5.03 → **3.16**; the limits 7.7 / 5.8 are gone. PDF rasterises each shadow with its object over its growth: Groucho2 pdf 2.75, SoftShadow pdf 7.56 (gs; Poppler 8.11: its controllers hold the whole textured page, resampled by the viewers; limit 8.7), Girard 1.05, Watch4 0.80, testimp1 0.84. Corpus export check: 118 comparisons, 0 failures (qpdf not installed locally) |
 | ~~Feathering as a blur~~ | SoftShadow ~~svg 4.1~~ **1.20** since XARA-T-0256: the excess was its four-colour Bleach transparencies, drawn flat; they are baked as masks now (`render.md`, "Meshes tile mirrored"); the limit is gone |
 | ~~Text on a path written straight in SVG~~ | TextCurve ~~svg 16.3~~ **3.06** since XARA-T-0252 (T9.5.6: each character placed and turned on the path, `x`/`y`/`rotate`), pdf 1.55; the limit is gone. What is left is the rainbow gradient on the text, written in the spread frame (`xarast-format.md`, text leftovers) |
 | Small text (5–9 px glyphs) as filled outlines | TextJust 13.7, ScaleTest2 9.6, SimpleText 8.6, ScaleTest 7.3, Paragraph 6.7, FontChangesInText 6.7, SuperSub 5.8, Rotated 5.5, ManualKern 5.0, Tracking 4.7, ProbeX16 4.2 (all pdf) — superseded by the row below since T11.4.7; `--text outlines` still gives these |

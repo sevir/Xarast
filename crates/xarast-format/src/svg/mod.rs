@@ -289,8 +289,12 @@ pub struct Stats {
     /// Feathers drawn by an SVG filter (`effect.rs`), plus their twin.
     pub effects_baked: usize,
     /// Shadows recorded (`<xarast:shadow>`) but not baked: an external
-    /// viewer draws the object without its shadow.
+    /// viewer draws the object without its shadow (floor shadows, and a
+    /// shadow whose controller is feathered).
     pub shadows_unbaked: usize,
+    /// Wall and glow shadows drawn by an SVG filter (`effect.rs`), plus
+    /// their twin.
+    pub shadows_baked: usize,
     /// `ClipRegion` attributes, which nothing draws yet.
     pub clip_regions_ignored: usize,
     /// Non-attribute children of ink nodes, drawn before them as siblings.

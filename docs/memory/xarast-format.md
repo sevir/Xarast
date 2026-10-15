@@ -741,8 +741,8 @@ back as one feather per member — caught by the corpus render round trip
   `<g>` the filter sees the unclipped content, so its fade follows the
   wrong outline; no corpus file has one. A wrapper `<g>` would fix it and
   needs a reader rule — not done.
-- **`svg/effect.rs` is the seam for other live effects** (shadow, glow,
-  bevel, §6.8): `FilterChain::new(kind, Region)`, `push` primitives,
+- **`svg/effect.rs` is the seam for other live effects** (shadow and glow
+  are on it since XARA-T-0320; bevel, §6.8): `FilterChain::new(kind, Region)`, `push` primitives,
   `finish(defs)`; mark the kind in `xarast:filter` and add it to the
   reader's derived list.
 
@@ -773,15 +773,22 @@ renderer draws the shadow) and `<g xarast:kind="live-source">`:
   palette colour when it resolves to the written value, as a flat fill's
   `xarast:fill-ref` does; a literal comes back as its 8-bit value, and the
   normal form states a shadow's colour that way (`hex` + reference).
-- **Not baked yet.** An external viewer draws the object without its
-  shadow; `Stats::shadows_unbaked` feeds `Compromise::NotRendered`
-  ("shadows (recorded, not baked)") in SVG export and the `convert`
-  summary. The filter chain belongs with the feather's (XARA-T-0317,
-  `svg/effect.rs`'s `FilterChain` on the working branch): σ = penumbra/4
-  (σ = r/2, r = penumbra/2), `feOffset` by the wall offset, a
-  `feMorphology dilate` for a glow, a transformed copy for a floor.
+- **The base layer draws it** (XARA-T-0320): wall and glow shadows carry
+  `filter="url(#f…)"` on the controller `<g>` to a `<filter
+  xarast:filter="shadow">` built by `svg/effect.rs` from the parameters
+  (chain, region, measurements: `export.md`, "Shadows in SVG"), in both
+  dialects. Derived, like the feather's: the reader recognises the def by
+  `xarast:filter` (`is_known_def`) and a `filter` attribute naming it
+  (`Reader::is_derived_filter`, which now accepts `feather` and `shadow`),
+  drops both, and reads the shadow from `<xarast:shadow>`; the next save
+  derives the same filter. Floor shadows, and a shadow on a controller that
+  also owns a feather, are not baked (`Stats::shadows_unbaked` →
+  `Compromise::NotRendered`, "shadows (recorded, not baked)"); the others
+  are counted in `Stats::shadows_baked`.
 - Pinned by `tests/svg_read.rs`,
-  `a_shadow_reads_back_exactly_and_saves_to_the_same_bytes`, and by the
+  `a_shadow_reads_back_exactly_and_saves_to_the_same_bytes`,
+  `shadows_are_drawn_by_a_filter_that_the_reader_ignores` (no baggage,
+  re-save identical, no `xarast` in interchange), and by the
   corpus round trip (59/59 normal form and byte-identical re-save, with
   the 98 shadows now in it).
 

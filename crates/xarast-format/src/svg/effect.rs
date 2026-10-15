@@ -109,8 +109,21 @@ const DISC_ANGLES: [f64; 4] = [11.25, 33.75, 56.25, 78.75];
 /// (opaque) colour channels, eroded by four rectangles whose union is
 /// close to the disc, the four combined with `darken`, and moved back.
 fn erode_disc(s: &mut String, r: Radius) {
+    morph_disc(s, r, "SourceAlpha", false);
+}
+
+/// [`erode_disc`] or its dual: with `grow`, `input`'s alpha is dilated by
+/// the union of the same rectangles, the per-channel maximum
+/// (`feBlend mode="lighten"`) standing in for the minimum. A glow grows
+/// the silhouette by a disc (`render.md`, "Shadows").
+fn morph_disc(s: &mut String, r: Radius, input: &str, grow: bool) {
+    let (operator, blend) = if grow {
+        ("dilate", "lighten")
+    } else {
+        ("erode", "darken")
+    };
     s.push_str("<feColorMatrix");
-    attr(s, "in", "SourceAlpha");
+    attr(s, "in", input);
     attr(s, "type", "matrix");
     attr(s, "values", "0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 0 1");
     attr(s, "result", "a");
@@ -123,7 +136,7 @@ fn erode_disc(s: &mut String, r: Radius) {
         };
         s.push_str("<feMorphology");
         attr(s, "in", "a");
-        attr(s, "operator", "erode");
+        attr(s, "operator", operator);
         attr(
             s,
             "radius",
@@ -135,17 +148,17 @@ fn erode_disc(s: &mut String, r: Radius) {
     s.push_str("<feBlend");
     attr(s, "in", "e0");
     attr(s, "in2", "e1");
-    attr(s, "mode", "darken");
+    attr(s, "mode", blend);
     attr(s, "result", "d");
     s.push_str("/><feBlend");
     attr(s, "in", "e2");
     attr(s, "in2", "d");
-    attr(s, "mode", "darken");
+    attr(s, "mode", blend);
     attr(s, "result", "d");
     s.push_str("/><feBlend");
     attr(s, "in", "e3");
     attr(s, "in2", "d");
-    attr(s, "mode", "darken");
+    attr(s, "mode", blend);
     s.push_str("/><feColorMatrix");
     attr(s, "type", "matrix");
     attr(s, "values", "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0");
@@ -186,6 +199,100 @@ pub(crate) fn feather(r: Radius, profile: xarast_geom::BiasGain, region: Region)
     s.push_str("/>");
     f.push(&s);
     f
+}
+
+/// A shadow's parameters, in the user units of the element it is set on
+/// (points; `offset` in the SVG frame, y down).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Shadow<'a> {
+    /// Wall shadows: how far the silhouette moves. Zero for a glow.
+    pub offset: (f64, f64),
+    /// The penumbra, the blur's diameter.
+    pub penumbra: f64,
+    /// Glow shadows: how far the silhouette grows before it is blurred.
+    pub glow: f64,
+    /// The profile with the bias already negated, as the renderer applies
+    /// it to the blurred silhouette.
+    pub profile: xarast_geom::BiasGain,
+    /// `#rrggbb`.
+    pub colour: &'a str,
+    /// The colour's alpha times the darkness, `0..=1`.
+    pub opacity: f64,
+}
+
+/// A wall or glow shadow (`research/06 §6.8.1`; the renderer's
+/// `LayerEffect::Shadow`): the silhouette (grown by the glow width, as a
+/// disc), blurred by σ = penumbra/4 (r = penumbra/2 for the disc, σ = r/2
+/// as for the feather), moved by the offset, shaped by the profile,
+/// painted in the colour at `opacity` and drawn **under** the object.
+pub(crate) fn shadow(sh: &Shadow<'_>, region: Region) -> FilterChain {
+    let mut f = FilterChain::new("shadow", region);
+    let mut s = String::new();
+    s.push_str("<feFlood");
+    attr(&mut s, "flood-color", sh.colour);
+    attr(
+        &mut s,
+        "flood-opacity",
+        &f64s(sh.opacity.clamp(0.0, 1.0), 4),
+    );
+    attr(&mut s, "result", "c");
+    s.push_str("/>");
+    // The first primitive that reads the silhouette names it; the rest
+    // read the previous result.
+    let mut input = Some("SourceAlpha");
+    if sh.glow > 1e-9 {
+        let r = Radius {
+            x: sh.glow,
+            y: sh.glow,
+        };
+        morph_disc(&mut s, r, "SourceAlpha", true);
+        input = None;
+    }
+    let sigma = sh.penumbra / 4.0;
+    if sigma > 1e-9 {
+        s.push_str("<feGaussianBlur");
+        read(&mut s, &mut input);
+        attr(&mut s, "stdDeviation", &f64s(sigma, 4));
+        s.push_str("/>");
+    }
+    if sh.offset != (0.0, 0.0) {
+        s.push_str("<feOffset");
+        read(&mut s, &mut input);
+        attr(&mut s, "dx", &f64s(sh.offset.0, 4));
+        attr(&mut s, "dy", &f64s(sh.offset.1, 4));
+        s.push_str("/>");
+    }
+    if sh.profile != xarast_geom::BiasGain::default() {
+        let d = (PROFILE_SAMPLES - 1) as f64;
+        let v: Vec<String> = (0..PROFILE_SAMPLES)
+            .map(|i| f64s(1.0 - sh.profile.map(1.0 - i as f64 / d), 4))
+            .collect();
+        s.push_str("<feComponentTransfer");
+        read(&mut s, &mut input);
+        s.push_str("><feFuncA");
+        attr(&mut s, "type", "table");
+        attr(&mut s, "tableValues", &v.join(" "));
+        s.push_str("/></feComponentTransfer>");
+    }
+    // No primitive read the silhouette (no blur, offset, glow or profile):
+    // the colour is painted where the object is.
+    s.push_str("<feComposite");
+    attr(&mut s, "in", "c");
+    if let Some(i) = input {
+        attr(&mut s, "in2", i);
+    }
+    attr(&mut s, "operator", "in");
+    attr(&mut s, "result", "s");
+    s.push_str("/><feMerge><feMergeNode in=\"s\"/><feMergeNode in=\"SourceGraphic\"/></feMerge>");
+    f.push(&s);
+    f
+}
+
+/// Names the silhouette as the input of the first primitive that reads it.
+fn read(s: &mut String, input: &mut Option<&str>) {
+    if let Some(i) = input.take() {
+        attr(s, "in", i);
+    }
 }
 
 #[cfg(test)]
@@ -246,5 +353,70 @@ mod tests {
         assert_eq!(v.len(), PROFILE_SAMPLES);
         assert_eq!((v[0], v[PROFILE_SAMPLES - 1]), (0.0, 1.0));
         assert!(v.windows(2).all(|p| p[0] <= p[1]));
+    }
+
+    #[test]
+    fn a_wall_shadow_blurs_by_a_quarter_of_the_penumbra_and_moves() {
+        let region = Region::User {
+            x0: 0,
+            y0: 0,
+            x1: 10_000,
+            y1: 5_000,
+        };
+        let sh = Shadow {
+            offset: (3.0, -2.0),
+            penumbra: 6.0,
+            glow: 0.0,
+            profile: BiasGain::IDENTITY,
+            colour: "#102030",
+            opacity: 0.5,
+        };
+        let s = written(shadow(&sh, region));
+        assert!(s.contains("xarast:filter=\"shadow\""));
+        assert!(
+            s.contains("flood-color=\"#102030\" flood-opacity=\".5\""),
+            "{s}"
+        );
+        assert!(
+            s.contains("<feGaussianBlur in=\"SourceAlpha\" stdDeviation=\"1.5\"/>"),
+            "{s}"
+        );
+        assert!(s.contains("<feOffset dx=\"3\" dy=\"-2\"/>"), "{s}");
+        assert!(!s.contains("feMorphology") && !s.contains("feFuncA"));
+        assert!(s.ends_with(
+            "<feMerge><feMergeNode in=\"s\"/><feMergeNode in=\"SourceGraphic\"/></feMerge></filter>"
+        ));
+    }
+
+    #[test]
+    fn a_glow_dilates_by_a_disc_before_the_blur() {
+        let sh = Shadow {
+            offset: (0.0, 0.0),
+            penumbra: 4.0,
+            glow: 2.0,
+            profile: BiasGain::new(0.5, 0.0),
+            colour: "#fff",
+            opacity: 1.0,
+        };
+        let s = written(shadow(&sh, Region::Object { margin: 0.5 }));
+        assert_eq!(s.matches("operator=\"dilate\"").count(), 4);
+        assert!(s.contains("mode=\"lighten\"") && !s.contains("mode=\"darken\""));
+        assert!(s.contains("<feGaussianBlur stdDeviation=\"1\"/>"), "{s}");
+        assert!(!s.contains("feOffset"));
+        assert!(s.contains("<feComponentTransfer><feFuncA"));
+    }
+
+    #[test]
+    fn a_shadow_with_nothing_to_blur_or_move_is_the_silhouette() {
+        let sh = Shadow {
+            offset: (0.0, 0.0),
+            penumbra: 0.0,
+            glow: 0.0,
+            profile: BiasGain::IDENTITY,
+            colour: "#000",
+            opacity: 1.0,
+        };
+        let s = written(shadow(&sh, Region::Object { margin: 0.5 }));
+        assert!(s.contains("<feComposite in=\"c\" in2=\"SourceAlpha\" operator=\"in\""));
     }
 }

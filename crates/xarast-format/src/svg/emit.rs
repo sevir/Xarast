@@ -1827,14 +1827,13 @@ impl<'d, 'b> Emitter<'d, 'b> {
         let kind = live_name(&l.kind);
         let mut el = El::new("g");
         let mut prelude = None;
+        let mut shadow = None;
         match l.role {
             LiveRole::Controller => {
                 el.a("xarast:kind", kind);
                 let colour = match &l.kind {
                     LiveKind::Shadow(sh) => {
-                        // Not baked yet (§6.8.1): an external viewer draws
-                        // the object without its shadow.
-                        self.stats.shadows_unbaked += 1;
+                        shadow = Some(sh);
                         Some(self.shadow_colour(&sh.colour))
                     }
                     _ => None,
@@ -1864,7 +1863,57 @@ impl<'d, 'b> Emitter<'d, 'b> {
             RegenState::Deferred => el.a("xarast:regen", "deferred"),
         }
         self.own_feather(n, &mut el);
+        if let Some(sh) = shadow {
+            self.bake_shadow(n, &mut el, sh);
+        }
         self.container(n, el, prelude);
+    }
+
+    /// Draws a controller's shadow in a browser (`svg/effect.rs`): a filter
+    /// on the controller, which holds the object, that paints the shadow
+    /// under it. Derived from the parameters at every save and ignored by
+    /// the reader.
+    ///
+    /// Left unbaked, and reported: a floor shadow (a filter cannot map the
+    /// silhouette through an affine map), and any shadow whose controller
+    /// also owns a feather (one `filter` per element; the renderer
+    /// feathers the shadow along with the object, which no corpus file
+    /// does).
+    fn bake_shadow(&mut self, n: NodeId, el: &mut El, sh: &xarast_doc::ShadowParams) {
+        if sh.kind == xarast_doc::ShadowKind::Floor || el.has("filter") {
+            self.stats.shadows_unbaked += 1;
+            return;
+        }
+        let pt = |v: i64| v as f64 / 1000.0;
+        let (dx, dy) = match sh.kind {
+            xarast_doc::ShadowKind::Wall => {
+                let (dx, dy) = self.frame.vec(Vector::new(sh.offset.x, sh.offset.y));
+                (pt(dx), pt(dy))
+            }
+            _ => (0.0, 0.0),
+        };
+        let glow = match sh.kind {
+            xarast_doc::ShadowKind::Glow => f64::from(sh.glow_width.raw().max(0)),
+            _ => 0.0,
+        };
+        let blur = f64::from(sh.blur.raw().max(0));
+        let rgba = sh.colour.resolve(&self.doc.resources.colours).to_rgba8();
+        let (hex, _) = self.shadow_colour(&sh.colour);
+        let reach = blur + glow + (dx.abs().max(dy.abs()) * 1000.0).ceil();
+        let region = self.effect_region(n, Mp::from_f64_round(reach.min(1e9)));
+        let spec = effect::Shadow {
+            offset: (dx, dy),
+            penumbra: blur / 1000.0,
+            glow: glow / 1000.0,
+            // The renderer maps the blurred silhouette through the profile
+            // with its bias negated.
+            profile: xarast_geom::BiasGain::new(-sh.profile.bias, sh.profile.gain),
+            colour: &hex,
+            opacity: f64::from(rgba.a) / 255.0 * f64::from(sh.opacity_level()) / 255.0,
+        };
+        let id = effect::shadow(&spec, region).finish(&mut self.defs);
+        el.a("filter", format!("url(#{id})"));
+        self.stats.shadows_baked += 1;
     }
 
     /// A text story (`research/06 §6.7`, `svg/text.rs`): `<text>` with one

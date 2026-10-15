@@ -167,12 +167,12 @@ impl<'d, 'r, 'f> Reader<'d, 'r, 'f> {
     }
 
     /// Whether `v` (a `filter` value) names a filter the writer derives
-    /// from the model (`xarast:filter="feather"`, `svg/effect.rs`): the
+    /// from the model (`xarast:filter="feather"` or `"shadow"`, `svg/effect.rs`): the
     /// parameters are read from their twin and the filter is dropped.
     fn is_derived_filter(&self, v: &str) -> bool {
-        self.by_ref(v)
-            .and_then(|k| self.elem(k))
-            .is_some_and(|f| f.is(NS_SVG, "filter") && xa(f, "filter") == Some("feather"))
+        self.by_ref(v).and_then(|k| self.elem(k)).is_some_and(|f| {
+            f.is(NS_SVG, "filter") && matches!(xa(f, "filter"), Some("feather" | "shadow"))
+        })
     }
 
     /// The element an `href`/`url()` names.

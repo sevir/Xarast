@@ -1599,3 +1599,41 @@ fn a_shadow_reads_back_exactly_and_saves_to_the_same_bytes() {
     assert_eq!(params[2].glow_width, Mp::new(3_000));
     assert_eq!(first, resave(&mut o), "a fixed point");
 }
+
+/// A wall and a glow shadow are drawn by a filter on their controller
+/// (XARA-T-0320), a floor one stays recorded only; the reader drops the
+/// filters and the next save derives them again.
+#[test]
+fn shadows_are_drawn_by_a_filter_that_the_reader_ignores() {
+    let doc = shadow_doc();
+    let native =
+        xarast_format::svg::write_svg(&doc, &mut ResourceIndex::new(), &SvgOptions::default());
+    let s = &native.svg;
+    assert_eq!(s.matches("xarast:filter=\"shadow\"").count(), 2, "{s}");
+    assert_eq!(native.stats.shadows_baked, 2);
+    assert_eq!(native.stats.shadows_unbaked, 1, "the floor shadow");
+    // The wall: σ = 5.25/4 and the offset; the glow dilates before it blurs.
+    assert!(s.contains("stdDeviation=\"1.3125\""), "{s}");
+    assert!(s.contains("<feOffset dx=\"2.22\" dy=\"3.75\"/>"), "{s}");
+    assert_eq!(s.matches("operator=\"dilate\"").count(), 4, "{s}");
+
+    let r = read(s);
+    assert_eq!(r.stats.foreign_attributes, 0, "the filter is not baggage");
+    let again = xarast_format::svg::write_svg(
+        &r.document,
+        &mut ResourceIndex::new(),
+        &SvgOptions::default(),
+    );
+    assert_eq!(*s, again.svg, "the filter is derived, not carried");
+
+    let export = xarast_format::svg::write_svg(
+        &doc,
+        &mut ResourceIndex::new(),
+        &SvgOptions {
+            dialect: xarast_format::svg::SvgDialect::Interchange,
+            ..SvgOptions::default()
+        },
+    );
+    assert!(!export.svg.contains("xarast"), "{}", export.svg);
+    assert_eq!(export.svg.matches("<feMerge>").count(), 2);
+}
