@@ -39,6 +39,7 @@
 #![deny(missing_docs)]
 #![doc(html_no_source)]
 
+pub mod bevel;
 pub mod boolean;
 pub mod fit;
 pub mod fixed;
