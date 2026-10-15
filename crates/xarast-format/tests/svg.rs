@@ -19,7 +19,7 @@ use xarast_doc::{
 };
 use xarast_format::svg::{Stats, SvgOptions, write_svg};
 use xarast_format::{ResourceIndex, SaveOptions, WriteOptions, XarastReader, save_to};
-use xarast_geom::{BiasGain, Mp, Path, Point, Vector};
+use xarast_geom::{BiasGain, Join, Mp, Path, Point, Vector};
 
 fn rgb(r: f32, g: f32, b: f32) -> Colour {
     Colour::Direct(ColourValue::rgb(r, g, b))
@@ -424,7 +424,8 @@ fn a_thumbnail_given_to_save_is_written_and_never_carried_from_the_source() {
 }
 
 /// Two groups of ten rectangles with the same red fill and blue 2 pt
-/// stroke; the second also holds a rectangle with no stroke.
+/// stroke; the second also holds a rectangle with no stroke. The strokes
+/// are mitred, SVG's initial join, so the join is never written.
 fn groups_fixture() -> Document {
     let mut b = xarast_doc::builder::skeleton(BuildLimits::default()).unwrap();
     for g in 0..2 {
@@ -436,6 +437,7 @@ fn groups_fixture() -> Document {
         }))
         .unwrap();
         b.attribute(AttrValue::LineWidth(Mp::new(2_000))).unwrap();
+        b.attribute(AttrValue::JoinType(Join::Mitre)).unwrap();
         for i in 0..10 {
             b.node(rect_shape(i * 20_000, g * 50_000, 10_000, 10_000))
                 .unwrap();

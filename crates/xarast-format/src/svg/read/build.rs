@@ -105,6 +105,10 @@ pub(super) struct Reader<'d, 'r, 'f> {
     claimed: HashSet<u32>,
     chapters: Vec<Chapter>,
     max_path: usize,
+    /// The joins the reader itself put in force on the way down (a bevel
+    /// controller's `xarast:join`), innermost last. A stroke whose join
+    /// equals the model's default is written out explicitly under one.
+    pub(super) joins: Vec<Join>,
 }
 
 fn attr<'e>(e: &'e Elem, ns: &str, local: &str) -> Option<&'e str> {
@@ -948,17 +952,56 @@ impl<'d, 'r, 'f> Reader<'d, 'r, 'f> {
         }
         self.b.push_scope()?;
         self.own_feather(e)?;
+        let scoped = self.own_join(kind, params)?;
         let pk = kind.to_owned();
-        self.children(
+        let res = self.children(
             e,
             &cctx,
             &|c| &*c.ns == NS_XARAST && *c.local == *pk,
             0,
             &mut bag,
-        )?;
+        );
+        if scoped {
+            self.joins.pop();
+        }
+        res?;
         self.b.pop_scope();
         self.store(node, bag);
         Ok(())
+    }
+
+    /// A bevel's join (`xarast:join`) as an attribute on its controller,
+    /// where the renderer resolves it, when it differs from the join already
+    /// in force. No `xarast:join` is a mitre, SVG's initial join (what a
+    /// file written before the model's default became bevelled meant).
+    /// Returns whether it pushed onto `joins`.
+    fn own_join(&mut self, kind: &str, params: Option<&Elem>) -> Result<bool, SvgReadError> {
+        if kind != "bevel" {
+            return Ok(false);
+        }
+        let join = match params.and_then(|p| xa(p, "join")) {
+            Some("round") => Join::Round,
+            Some("bevel") => Join::Bevel,
+            _ => Join::Mitre,
+        };
+        if join == self.join_in_force() {
+            return Ok(false);
+        }
+        self.b.attribute(AttrValue::JoinType(join))?;
+        self.joins.push(join);
+        Ok(true)
+    }
+
+    /// The join in force at the element being read, from the reader's own
+    /// attributes (`joins`) or the model's default.
+    pub(super) fn join_in_force(&self) -> Join {
+        match self.joins.last() {
+            Some(j) => *j,
+            None => match default_for(xarast_doc::AttrSlot::JoinType) {
+                AttrValue::JoinType(j) => j,
+                _ => Join::Bevel,
+            },
+        }
     }
 
     fn live_kind(&mut self, kind: &str, p: Option<&Elem>, ctx: &Ctx) -> LiveKind {

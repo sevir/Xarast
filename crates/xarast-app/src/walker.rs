@@ -1852,7 +1852,7 @@ fn stroke_style_of<'a>(get: impl Fn(AttrSlot) -> &'a AttrValue) -> StrokeStyle {
     };
     let join = match get(AttrSlot::JoinType) {
         AttrValue::JoinType(j) => *j,
-        _ => Join::Mitre,
+        _ => Join::Bevel,
     };
     let mitre_limit = match get(AttrSlot::MitreLimit) {
         AttrValue::MitreLimit(m) => (m.to_f64() / f64::from(Mp::PER_PT)).max(1.0),
@@ -2205,7 +2205,7 @@ fn bevel_of(doc: &Document, node: NodeId) -> Option<(LayerEffect, Mp)> {
         .get(AttrSlot::JoinType)
     {
         AttrValue::JoinType(j) => *j,
-        _ => Join::Mitre,
+        _ => Join::Bevel,
     };
     let effect = LayerEffect::Bevel(Box::new(xarast_render::BevelEffect {
         style: p.bevel_type,

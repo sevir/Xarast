@@ -1840,6 +1840,21 @@ impl<'d, 'b> Emitter<'d, 'b> {
         (crate::svg::paint::hex(rgba), reference)
     }
 
+    /// The join in force where the renderer resolves a bevel's (the
+    /// walker's `bevel_of`): at the controller's generated child, else at
+    /// the controller.
+    fn join_at(&self, n: NodeId) -> Join {
+        let at = xarast_doc::live::parts(&self.doc.tree, n)
+            .and_then(|parts| parts.generated)
+            .unwrap_or(n);
+        match xarast_doc::attr::resolve_uncached(&self.doc.tree, at, &self.doc.defaults)
+            .get(AttrSlot::JoinType)
+        {
+            AttrValue::JoinType(j) => *j,
+            _ => Join::Bevel,
+        }
+    }
+
     fn live(&mut self, n: NodeId, l: &LiveNode) {
         self.stats.live += 1;
         let kind = live_name(&l.kind);
@@ -1861,7 +1876,8 @@ impl<'d, 'b> Emitter<'d, 'b> {
                     }
                     _ => None,
                 };
-                prelude = Some(live_params(&self.frame, &l.kind, colour));
+                let join = matches!(l.kind, LiveKind::Bevel(_)).then(|| self.join_at(n));
+                prelude = Some(live_params(&self.frame, &l.kind, colour, join));
             }
             LiveRole::Source => {
                 el.a("xarast:kind", "live-source");
@@ -2548,8 +2564,13 @@ fn live_name(k: &LiveKind) -> &'static str {
 /// The parametric element of a live effect (§6.8).
 ///
 /// `colour` is a shadow's colour, or a bevel's own colour, as
-/// `Emitter::shadow_colour` spells it.
-fn live_params(frame: &Frame, k: &LiveKind, colour: Option<(String, Option<String>)>) -> String {
+/// `Emitter::shadow_colour` spells it; `join` is a bevel's join in force.
+fn live_params(
+    frame: &Frame,
+    k: &LiveKind,
+    colour: Option<(String, Option<String>)>,
+    join: Option<Join>,
+) -> String {
     let profile = |p: xarast_geom::BiasGain| format!("{} {}", f64s(p.bias, 6), f64s(p.gain, 6));
     let mut s = String::new();
     match k {
@@ -2635,6 +2656,11 @@ fn live_params(frame: &Frame, k: &LiveKind, colour: Option<(String, Option<Strin
             attr(&mut s, "xarast:light-angle", &f32s(b.light_angle));
             attr(&mut s, "xarast:light-elevation", &f32s(b.light_tilt));
             attr(&mut s, "xarast:contrast", &f32s(b.contrast));
+            // Always written: a reader takes no join as a mitre, SVG's
+            // initial value, while the model's default is bevelled.
+            if let Some(j) = join {
+                attr(&mut s, "xarast:join", join_name(j));
+            }
             if let Some((hex, reference)) = &colour {
                 attr(&mut s, "xarast:colour", hex);
                 if let Some(r) = reference {

@@ -35,7 +35,7 @@ use xarast_format::{
     OpenOptions, PackageWriter, ResourceIndex, SaveOptions, WriteOptions, XarastReader,
     open_reader, save_opened_to, save_to,
 };
-use xarast_geom::{BiasGain, Matrix, Mp, Path, Point, Vector};
+use xarast_geom::{BiasGain, Join, Matrix, Mp, Path, Point, Vector};
 
 /// A colour 8-bit sRGB holds exactly: what a key stop can carry.
 fn rgb(r: f32, g: f32, b: f32) -> Colour {
@@ -1781,4 +1781,123 @@ fn a_bevel_reads_back_exactly_and_saves_to_the_same_bytes() {
         Some(Colour::Indexed { tint: None, .. })
     ));
     assert_eq!(first, resave(&mut o), "a fixed point");
+}
+
+/// The join in force at `n`.
+fn join_at(doc: &Document, n: xarast_doc::NodeId) -> AttrValue {
+    resolve_uncached(&doc.tree, n, &doc.defaults)
+        .get(AttrSlot::JoinType)
+        .clone()
+}
+
+/// Bevel controllers with the default (bevelled), a mitre and a round join
+/// in force, each over a stroked triangle with its own bevelled join: the
+/// mitre controller's child has to say so explicitly (XARA-T-0329).
+fn bevel_join_doc() -> Document {
+    let mut b = xarast_doc::builder::skeleton(BuildLimits::default()).unwrap();
+    for (i, join) in [None, Some(Join::Mitre), Some(Join::Round)]
+        .into_iter()
+        .enumerate()
+    {
+        let n = i32::try_from(i).unwrap();
+        let kind = LiveKind::Bevel(Box::new(xarast_doc::BevelParams {
+            bevel_type: xarast_doc::BevelType::ALL[0],
+            indent: Mp::new(2_000),
+            outer: true,
+            light_angle: 300.0,
+            light_tilt: 45.0,
+            contrast: 0.5,
+            colour: None,
+        }));
+        let live = |role| {
+            NodeKind::Live(Box::new(LiveNode {
+                role,
+                kind: kind.clone(),
+                regen: RegenState::Clean,
+                name: None,
+            }))
+        };
+        b.node(live(LiveRole::Controller)).unwrap();
+        b.push_scope().unwrap();
+        if let Some(j) = join {
+            b.attribute(AttrValue::JoinType(j)).unwrap();
+        }
+        b.node(live(LiveRole::Generated)).unwrap();
+        b.node(live(LiveRole::Source)).unwrap();
+        b.push_scope().unwrap();
+        b.node(triangle(50_000 + 60_000 * n, 300_000)).unwrap();
+        b.push_scope().unwrap();
+        b.attribute(flat(rgb(0.9, 0.5, 0.1))).unwrap();
+        b.attribute(AttrValue::StrokeColour(Paint::Flat {
+            value: rgb(0.0, 0.0, 1.0),
+        }))
+        .unwrap();
+        b.attribute(AttrValue::JoinType(Join::Bevel)).unwrap();
+        b.pop_scope();
+        b.pop_scope();
+        b.pop_scope();
+    }
+    b.finish().unwrap().0
+}
+
+/// Each controller's generated node and each triangle, in document order.
+fn bevel_join_nodes(doc: &Document) -> (Vec<xarast_doc::NodeId>, Vec<xarast_doc::NodeId>) {
+    let t = &doc.tree;
+    let generated = t
+        .preorder(t.root())
+        .filter(|n| matches!(t.kind(*n), Some(NodeKind::Live(l)) if l.role == LiveRole::Generated))
+        .collect();
+    let shapes = t
+        .preorder(t.root())
+        .filter(|n| matches!(t.kind(*n), Some(NodeKind::Shape(_) | NodeKind::Path(_))))
+        .collect();
+    (generated, shapes)
+}
+
+#[test]
+fn a_bevel_s_join_and_its_children_s_joins_read_back() {
+    let doc = bevel_join_doc();
+    let first = package(&doc, SvgOptions::default());
+    let svg = svg_of(&first);
+    for j in ["bevel", "miter", "round"] {
+        assert!(svg.contains(&format!("xarast:join=\"{j}\"")), "{svg}");
+    }
+    let mut o = open(&first);
+    assert!(o.diagnostics.is_empty(), "{:?}", o.diagnostics);
+    let (g0, s0) = bevel_join_nodes(&doc);
+    let (g1, s1) = bevel_join_nodes(&o.document);
+    assert_eq!((g1.len(), s1.len()), (3, 3));
+    for (a, b) in g0.iter().zip(&g1) {
+        assert_eq!(join_at(&doc, *a), join_at(&o.document, *b));
+    }
+    for (a, b) in s0.iter().zip(&s1) {
+        assert_eq!(join_at(&o.document, *b), AttrValue::JoinType(Join::Bevel));
+        assert_eq!(join_at(&doc, *a), join_at(&o.document, *b));
+    }
+    assert_eq!(first, resave(&mut o), "a fixed point");
+}
+
+#[test]
+fn no_join_written_is_a_mitre_as_when_the_default_was_one() {
+    // Before XARA-T-0329 the model's default join was a mitre and was never
+    // written: a stroke without `stroke-linejoin` and a bevel without
+    // `xarast:join` still read as mitres.
+    let doc = bevel_join_doc();
+    let svg = svg_of(&package(&doc, SvgOptions::default()));
+    let old = svg
+        .replace(" xarast:join=\"bevel\"", "")
+        .replace(" xarast:join=\"round\"", "")
+        .replace(" stroke-linejoin=\"bevel\"", "")
+        .replace("stroke-linejoin:bevel;", "")
+        .replace(";stroke-linejoin:bevel", "");
+    assert!(
+        !old.contains("join=\"bevel") && !old.contains("linejoin"),
+        "{old}"
+    );
+    let r = read(&old);
+    let (generated, shapes) = bevel_join_nodes(&r.document);
+    assert_eq!((generated.len(), shapes.len()), (3, 3));
+    for n in generated.iter().chain(&shapes) {
+        assert_eq!(join_at(&r.document, *n), AttrValue::JoinType(Join::Mitre));
+    }
 }

@@ -327,6 +327,7 @@ pub(crate) fn build(
         placeholder: None,
         claimed: HashSet::new(),
         chapters: Vec::new(),
+        joins: Vec::new(),
         max_path: opts.build.max_points_per_path,
     };
     if unsupported_css > 0 {

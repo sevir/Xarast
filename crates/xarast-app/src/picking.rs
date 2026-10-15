@@ -150,7 +150,7 @@ fn stroke_style(attrs: &AttrStack) -> StrokeStyle {
     };
     let join = match attrs.get(AttrSlot::JoinType) {
         AttrValue::JoinType(j) => *j,
-        _ => Join::Mitre,
+        _ => Join::Bevel,
     };
     let mitre_limit = match attrs.get(AttrSlot::MitreLimit) {
         AttrValue::MitreLimit(m) => (m.to_f64() / f64::from(Mp::PER_PT)).max(1.0),

@@ -684,7 +684,9 @@ pub fn default_for(slot: AttrSlot) -> AttrValue {
         AttrSlot::FillEffect => AttrValue::FillEffect(FillEffect::Fade),
         AttrSlot::LineWidth => AttrValue::LineWidth(Mp::new(250)),
         AttrSlot::WindingRule => AttrValue::WindingRule(FillRule::NonZero),
-        AttrSlot::JoinType => AttrValue::JoinType(Join::Mitre),
+        // The original registers bevelled joins as the document default
+        // (`Kernel/attr.cpp:1967-1980`), and a `.xar` never writes it.
+        AttrSlot::JoinType => AttrValue::JoinType(Join::Bevel),
         AttrSlot::Quality => AttrValue::Quality(Quality::Full),
         AttrSlot::DashPattern => AttrValue::DashPattern(Arc::new(DashPattern::default())),
         AttrSlot::StartCap => AttrValue::LineCap(Cap::Butt),

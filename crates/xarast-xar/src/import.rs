@@ -2916,6 +2916,11 @@ mod tests {
             [join(0), join(1), join(2), join(3)],
             [Join::Mitre, Join::Round, Join::Bevel, Join::Round]
         );
+        // An object with no join record strokes bevelled, as in the original.
+        assert_eq!(
+            xarast_doc::default_for(xarast_doc::AttrSlot::JoinType),
+            AttrValue::JoinType(Join::Bevel)
+        );
     }
 
     #[test]

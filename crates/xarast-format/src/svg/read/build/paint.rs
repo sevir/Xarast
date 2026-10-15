@@ -1262,10 +1262,17 @@ impl<'d> Reader<'d, '_, '_> {
             Some("square") => push(out, AttrValue::LineCap(Cap::Square)),
             _ => {}
         }
-        match cs.get("stroke-linejoin") {
-            Some("round") => push(out, AttrValue::JoinType(Join::Round)),
-            Some("bevel") => push(out, AttrValue::JoinType(Join::Bevel)),
-            _ => {}
+        // No `stroke-linejoin` is SVG's initial value, a mitre, whatever the
+        // model's default (bevelled, as the original's): files written when
+        // the model's default was a mitre mean the same.
+        let join = match cs.get("stroke-linejoin") {
+            Some("round") => Join::Round,
+            Some("bevel") => Join::Bevel,
+            _ => Join::Mitre,
+        };
+        if join != self.join_in_force() {
+            out.retain(|x| x.slot() != Some(xarast_doc::AttrSlot::JoinType));
+            out.push(AttrValue::JoinType(join));
         }
         let mitre = cs
             .get("stroke-miterlimit")
