@@ -667,6 +667,44 @@ impl Command for SetFillGeometry {
     }
 }
 
+/// Gives a clouds or plasma fill a new seed: the original's `Randomise`
+/// (`research/03 §2.8.3`, phase 13 H5). Everything else about the fill is
+/// kept, so only the generated pattern changes.
+///
+/// The seed is the caller's, not drawn here: a command must replay to the
+/// same document (undo/redo, journals), so the user interface draws the
+/// random number and the command records it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RandomiseFill {
+    /// The object.
+    pub node: NodeId,
+    /// Interior or outline.
+    pub slot: PaintSlot,
+    /// Colour or transparency.
+    pub channel: FillChannel,
+    /// The new seed.
+    pub seed: i32,
+}
+
+impl Command for RandomiseFill {
+    fn label(&self) -> &'static str {
+        "Randomise Fill"
+    }
+
+    fn run(&self, tx: &mut Tx<'_>) -> Result<(), EditError> {
+        let seed = self.seed;
+        edit_fill(tx, self.node, self.slot, self.channel, |v| {
+            on_both!(v, |g| match g {
+                FillGeometry::Fractal { params, .. } | FillGeometry::Noise { params, .. } => {
+                    params.seed = seed;
+                    Ok(())
+                }
+                _ => Err("only a fractal or noise fill has a seed"),
+            })
+        })
+    }
+}
+
 /// Moves one fill handle to a document point: the fill tool's drag.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MoveFillControl {

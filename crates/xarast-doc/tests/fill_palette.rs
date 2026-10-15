@@ -1095,3 +1095,56 @@ fn the_resolver_memo_follows_the_palette_epoch() {
         value: red(),
     };
 }
+
+// ─────────────────────────── phase 13 H5 ────────────────────────────
+
+/// `Randomise` changes the seed of a clouds or plasma fill and nothing
+/// else, undoably; a fill without a seed refuses it untouched.
+#[test]
+fn randomise_reseeds_a_procedural_fill_and_nothing_else() {
+    use xarast_doc::{ProceduralParams, RandomiseFill};
+    let mut fx = fixture(2);
+    let mut bus = CommandBus::new();
+    let params = ProceduralParams {
+        seed: 7,
+        ..ProceduralParams::default()
+    };
+    let noise = FillGeometry::Noise {
+        origin: Point::raw(0, 0),
+        axis_x: Point::raw(1_500, 0),
+        axis_y: Point::raw(0, 1_500),
+        params: Box::new(params),
+        from: red(),
+        to: blue(),
+        profile: BiasGain::IDENTITY,
+    };
+    let set = SetFillGeometry {
+        node: fx.objects[1],
+        slot: PaintSlot::Fill,
+        value: FillValue::Colour(noise.clone()),
+    };
+    bus.dispatch(&mut fx.doc, &set).expect("set");
+    let cmd = RandomiseFill {
+        node: fx.objects[1],
+        slot: PaintSlot::Fill,
+        channel: FillChannel::Colour,
+        seed: 123_456,
+    };
+    assert_eq!(round_trip(&mut fx.doc, &mut bus, &cmd), "Randomise Fill");
+    let mut expect = noise;
+    if let FillGeometry::Noise { params, .. } = &mut expect {
+        params.seed = 123_456;
+    }
+    assert_eq!(colour_fill(&fx.doc, fx.objects[1]), expect);
+    // Object 0's linear fill has no seed.
+    let before = fx.doc.canonical_digest();
+    let r = bus.dispatch(
+        &mut fx.doc,
+        &RandomiseFill {
+            node: fx.objects[0],
+            ..cmd
+        },
+    );
+    assert!(matches!(r, Err(EditError::FillEdit(_))), "{r:?}");
+    assert_eq!(fx.doc.canonical_digest(), before);
+}

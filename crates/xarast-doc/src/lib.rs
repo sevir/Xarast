@@ -103,8 +103,8 @@ pub use fill::{
 };
 pub use fill_edit::{
     FillChannel, FillHandle, FillValue, InsertStop, MoveFillControl, MoveStop, PaintSlot,
-    RemoveStop, SetFillEffect, SetFillGeometry, SetFillProfile, SetRampMapping, SetStopValue,
-    SetTiling, SetTranspMode, StopTarget, StopValue,
+    RandomiseFill, RemoveStop, SetFillEffect, SetFillGeometry, SetFillProfile, SetRampMapping,
+    SetStopValue, SetTiling, SetTranspMode, StopTarget, StopValue,
 };
 pub use fill_mutate::{FillShape, MutateFill, MutationLoss, mutate_fill};
 pub use foreign::{ForeignAttr, ForeignBaggage, ForeignChild, ForeignChildKind, ForeignMarks};
