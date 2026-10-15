@@ -121,7 +121,8 @@ the budgets file records; both tiers passed, 12/12 and 27/27):
 | `open-10k` (open + Final first paint) | pr | median ms | 140 | — | 70 | 62–80 | st |
 | `open-10k-rss` | pr | MiB | 104 | — | 81 | 78–84 | — |
 | `save-10k` (app save job) | pr | median ms | 110 | — | 55 | 53–59 | st |
-| `render-10k` (full Final frame) | pr | median ms | 5 | — | 2.1 | 2.0–3.2 | mt |
+| `render-10k` (whole-frame raster, `--whole`) | pr | median ms | 28 | — | 13.4 | 12.4–14.6 | mt |
+| `render-10k-reuse` (pixel-reuse path, no raster) | pr | median ms | 5 | — | 2.1 | 2.0–3.2 | mt |
 | `pan-10k` (Draft, scheduler) | pr | p95 ms | 16 | 16 | 1.0 | 0.86–1.0 | mt |
 | `export-10k` (PNG 4000 × 5543) | pr | median ms | 3000 | 3000 | 240 | 239–273 | mt |
 | `export-10k-rss` | pr | MiB | 552 | — | 440 | 433–446 | — |
@@ -135,7 +136,8 @@ the budgets file records; both tiers passed, 12/12 and 27/27):
 | `open-100k` | nightly | median ms | 1750 | — | 865 | 828 | st |
 | `open-100k-rss` | nightly | MiB | 672 | — | 535 | 534 | — |
 | `save-100k` | nightly | median ms | 1100 | — | 550 | 558 | st |
-| `render-100k` | nightly | median ms | 50 | — | 24.8 | 23.7 | mt |
+| `render-100k` (whole-frame raster, `--whole`) | nightly | median ms | 220 | — | 108 | 101–112 | mt |
+| `render-100k-reuse` (pixel-reuse path, no raster) | nightly | median ms | 50 | — | 24.8 | 23.7 | mt |
 | `pan-100k` (fit) | nightly | p95 / p99 ms | 16 / 24 | 16 / 24 | 4.8 / 6.3 | 4.4 / 4.5 | mt |
 | `pan-100k-rss` | nightly | MiB | 1536 | 1536 | 285 | 285 | — |
 | `pan-100k-zoomed` (3×, CPU tier) | nightly | p95 ms | 33 | 16 (GPU) | 16.5 | 20.5 | mt |
@@ -160,13 +162,19 @@ the budgets file records; both tiers passed, 12/12 and 27/27):
   scene epoch to defeat reuse, but since XARA-T-0221 the render thread
   diffs the scenes instead, finds no damage in an unchanged scene and
   reuses every pixel: after the first frame each "frame" is ~0.4–2 ms of
-  plumbing. `render-10k` (ref 2.1 ms) and `render-100k` (24.8 ms, the
-  first frame dominates less at 100k) were calibrated in that state.
-  `render --whole` flips one level of the pasteboard between frames,
-  which the planner treats as a full frame: 10k is then 12–15 ms here
-  at load ~15. The two old gates were left as they are (they still
-  catch a regression in the reuse path); re-basing them on `--whole` is
-  a separate decision. The effect gates use `--whole`.
+  plumbing. The old `render-10k` (2.1 ms) and `render-100k` (24.8 ms)
+  were calibrated in that state, i.e. they were **reuse-path
+  measurements**; they are kept as `render-10k-reuse` / `render-100k-reuse`
+  (same limits) and `render-10k` / `render-100k` now run
+  `render --whole`, which flips one pasteboard level between frames so
+  the planner treats each as a full frame (XARA-T-0319). Re-baselined
+  2026-10-15 on the dev box (24 threads, load 10-12 from two parallel
+  builds, so noisy): median of 5 runs x 7 frames, 10k 12.4-14.6 ms
+  (median 13.4), 100k 101-112 ms (median 108). Limits are ~2x the
+  measurement (28 and 220 ms), per the margin policy, and scale with `mt`.
+  The product budget (25 ms at 100k on 8 cores + iGPU) is not gated: the
+  CPU tier is ~4x over it. Re-measure on a quiet reference machine and
+  tighten if the numbers drop. The effect gates also use `--whole`.
 - **Known breaches, gated on regression only:** ProbeX16 open-to-first-
   paint 0.75 s vs 500 ms (XARA-T-0009), ProbeX16 app save 1.08–1.28 s vs
   1 s (XARA-T-0215: the snapshot restore), the CPU tier's zoomed pan

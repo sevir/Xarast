@@ -42,7 +42,8 @@ startup-rss      pr,nightly peak_rss_mib      32   none -    19.2 -- startup --r
 open-10k         pr,nightly median_ms         140  st   -    70   -- open --nodes 25000 --runs 7
 open-10k-rss     pr,nightly peak_rss_mib      104  none -    81   -- open --nodes 25000 --runs 7
 save-10k         pr,nightly median_ms         110  st   -    55   -- save --nodes 25000 --runs 5
-render-10k       pr,nightly median_ms         5    mt   -    2.1  -- render --nodes 25000 --runs 7
+render-10k       pr,nightly median_ms         28   mt   -    13.4 -- render --whole --nodes 25000 --runs 7 # whole-frame raster (XARA-T-0319)
+render-10k-reuse pr,nightly median_ms         5    mt   -    2.1  -- render --nodes 25000 --runs 7 # pixel-reuse path, no raster (was render-10k)
 pan-10k          pr,nightly p95_ms            16   mt   16   1.0  -- pan --nodes 25000 --iterations 120
 export-10k       pr,nightly median_ms         3000 mt   3000 240  -- export --nodes 25000 --runs 3
 export-10k-rss   pr,nightly peak_rss_mib      552  none -    440  -- export --nodes 25000 --runs 3
@@ -72,7 +73,8 @@ photo-converge-24mpx     nightly    converge_median_ms     700 mt -  320 -- phot
 open-100k        nightly    median_ms         1750 st   -    865  -- open --nodes 250000 --runs 7
 open-100k-rss    nightly    peak_rss_mib      672  none -    535  -- open --nodes 250000 --runs 7
 save-100k        nightly    median_ms         1100 st   -    550  -- save --nodes 250000 --runs 5
-render-100k      nightly    median_ms         50   mt   -    24.8 -- render --nodes 250000 --runs 7
+render-100k      nightly    median_ms         220  mt   -    108  -- render --whole --nodes 250000 --runs 7 # whole-frame raster (XARA-T-0319)
+render-100k-reuse nightly   median_ms         50   mt   -    24.8 -- render --nodes 250000 --runs 7 # pixel-reuse path, no raster (was render-100k)
 pan-100k         nightly    p95_ms            16   mt   16   4.8  -- pan --nodes 250000 --iterations 200
 pan-100k-p99     nightly    p99_ms            24   mt   24   6.3  -- pan --nodes 250000 --iterations 200
 pan-100k-rss     nightly    peak_rss_mib      1536 none 1536 285  -- pan --nodes 250000 --iterations 200
