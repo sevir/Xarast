@@ -287,6 +287,86 @@ fn file_seeds() -> Vec<(String, Vec<u8>)> {
             .finish()
     }));
 
+    // Clouds and plasma fills and transparencies (XARA-T-0336): one of each
+    // well formed, one with every parameter at an extreme (graininess and
+    // gravity at the top of `FIXED16`, squash at the bottom, a negative
+    // dpi, collapsed axes), and one cut short in its parameters.
+    out.push(("procedural-fills".into(), {
+        let coords = |v: &mut Vec<u8>, pts: [i32; 6]| {
+            for p in pts {
+                v.extend_from_slice(&p.to_le_bytes());
+            }
+        };
+        let ints = |v: &mut Vec<u8>, xs: &[i32]| {
+            for x in xs {
+                v.extend_from_slice(&x.to_le_bytes());
+            }
+        };
+        let tail = |v: &mut Vec<u8>, tileable: u8| {
+            v.push(tileable);
+            for f in [0.25f64, -0.5] {
+                v.extend_from_slice(&f.to_le_bytes());
+            }
+        };
+        let pts = [0, 0, 50_000, 0, 0, 40_000];
+        let flat = [7, 7, 7, 7, 7, 7];
+        // seed, graininess, gravity, squash, dpi.
+        let normal = [12_345, 5 << 16, 0, 0, 96];
+        let extreme = [i32::MIN, i32::MAX, i32::MAX, i32::MIN, -1];
+        let fractal = |pts: [i32; 6], p: [i32; 5]| {
+            let mut v = Vec::new();
+            coords(&mut v, pts);
+            ints(&mut v, &[-2, -3]);
+            ints(&mut v, &p);
+            tail(&mut v, 1);
+            v
+        };
+        let noise = |pts: [i32; 6], p: [i32; 5]| {
+            let mut v = Vec::new();
+            coords(&mut v, pts);
+            ints(&mut v, &[-2, -3]);
+            ints(&mut v, &[p[1], p[0], p[4]]);
+            tail(&mut v, 0);
+            v
+        };
+        let fractal_t = |pts: [i32; 6], p: [i32; 5]| {
+            let mut v = Vec::new();
+            coords(&mut v, pts);
+            v.extend_from_slice(&[0, 255, 1]);
+            ints(&mut v, &p);
+            tail(&mut v, 0);
+            v
+        };
+        let noise_t = |pts: [i32; 6], p: [i32; 5]| {
+            let mut v = Vec::new();
+            coords(&mut v, pts);
+            v.extend_from_slice(&[30, 200, 3]);
+            ints(&mut v, &[p[1], p[0], p[4]]);
+            tail(&mut v, 1);
+            v
+        };
+        let mut b = XarBuilder::new().record(40, &[]).down();
+        for (pts, p, cut) in [
+            (pts, normal, usize::MAX),
+            (flat, extreme, usize::MAX),
+            (pts, extreme, 30),
+        ] {
+            let short = |v: Vec<u8>| v[..v.len().min(cut)].to_vec();
+            b = b
+                .record(116, &minimal_payload(116))
+                .down()
+                .record(159, &short(fractal(pts, p)))
+                .record(4011, &short(noise_t(pts, p)))
+                .up()
+                .record(116, &minimal_payload(116))
+                .down()
+                .record(4010, &short(noise(pts, p)))
+                .record(172, &short(fractal_t(pts, p)))
+                .up();
+        }
+        b.up().end_of_file().finish()
+    }));
+
     // Contours: an outer contour (negative width) whose contour node comes
     // first with its own fill, an inner one with the node last, a rainbow
     // inset path, a record that stops before its profiles, a colour type
