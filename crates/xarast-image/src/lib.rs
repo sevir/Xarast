@@ -19,6 +19,7 @@ mod model;
 pub mod orient;
 pub mod photo;
 pub mod pixels;
+pub mod procedural;
 pub mod sniff;
 pub mod xar;
 

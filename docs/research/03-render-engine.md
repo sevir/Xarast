@@ -706,6 +706,132 @@ displacement := noise - attraction
 The result is a bitmap painted with the normal tiling machinery. The Perlin noise
 (`Kernel/noise1.cpp`, `noisef.cpp`) is application code too.
 
+### 2.8.1 Clouds (`FILLSHAPE_CLOUDS`): the complete generator
+
+Everything below is readable kernel source (XARA-T-0336); nothing of it is in
+CDraw. The facts are restated as a specification; Xarast's `xarast-image`
+`procedural` module is written from this section.
+
+**Lattice and bitmap.** The fractal lives on a virtual square lattice of side
+L = 2²⁸ (`MAX_FRACTAL_COORD`, `fracfill.cpp:127`). The bitmap is a square of
+side D, a power of two, 8 bits per pixel, an ascending grey palette; pixel
+(px, py) is lattice point (px · 2ᴱ, py · 2ᴱ) with E = 28 − log₂ D
+(`DoFill`, `fracfill.cpp:582-600`). Pixel row 0 is the bitmap's first stored
+row, which the plotter puts at the fill's `StartPoint` (§2.8 "Orientation"):
+x runs towards `EndPoint`, y towards `EndPoint2`.
+
+**Size D** (`FillGeometryAttribute::GenerateFractalBitmap`,
+`fillval.cpp:389-505`). `dpi` 0 means 96 (`AttrFillGeometry::FractalDPI`,
+`fillattr.cpp:287`); above 72000 it is 72000. A pixel is p = ⌊72000 / dpi⌋
+millipoints. w = ⌊|Start − End|⌋ / p and h = ⌊|Start − End2|⌋ / p in integer
+division (distances truncated to whole millipoints), each 0 becoming 2.
+D is the smallest power of two ≥ 4 that is ≥ both w and h
+(`GetDimension`, `fracfill.cpp:533-539`), then capped at **256**
+(`AttrFillGeometry::MaxFractalSize`, `fillattr.cpp:288`). A fill whose
+`Start` equals `End` or `End2` is not generated (`RecalcFractal`,
+`fillval.cpp:3358-3362`). The bitmap's own resolution is recomputed from D
+as D · 72000 / max(w, h in millipoints) (`fillval.cpp:490`); the corpus'
+stored `dpi` values (20 to 2487, varying with the fill's size) look like
+that value, so reloading gives D back, but the path from the bitmap to the
+attribute was not traced.
+
+**Integer parameters** (constructor, `fracfill.cpp:441-490`). The maximum
+potential M = 65535. Graininess and gravity arrive as 16.16 fixed point:
+
+| Name | Value |
+|---|---|
+| G (both axes) | ⌊graininess · 8 + 0.5⌋, clamped to 0..0xffff |
+| Γ (both axes) | ⌊gravity · M⌋ |
+| squash > 0 | x axis only: Γₓ = ⌊gravity · M / squash⌋, Gₓ = ⌊(graininess · 8 + 0.5) / squash⌋ (16.16 arithmetic, floored) |
+| squash < 0 | the same on the y axis with −squash |
+| corners forced to zero | gravity ≠ 0 |
+| coordinate mask K | 2²⁸ − 1 when tileable, else all ones |
+
+**PRNG** (`DoRand`, `fracfill.cpp:180-184`; described in the source as the
+generator of the ARM data manual, p. 2-51). A 33-bit state: a 32-bit word s
+and a carry bit c. One step, in 32-bit unsigned arithmetic:
+t = (s ≫ 1) ⊕ (c ≪ 31); c = s & 1; t = t ⊕ (s ≪ 12); s = t ⊕ (t ≫ 20).
+The output is s. Seeding sets s = seed, c = 1 (`SetSeed`, `fracfill.cpp:147-151`).
+
+**Corners** (`DoFill`, `fracfill.cpp:616-660`). Four outputs give
+rᵢ = (((out ≫ 16) · M) + 2¹⁵) ≫ 16. If tileable and gravity = 0, r₀ = 0.
+Otherwise a contrast stretch: d₁ = |r₀ − r₂|, d₂ = |r₁ − r₃|; if d₁ < d₂ the
+pair is (0, 2), else (1, 3); a is the index of the pair's lower value, b the
+other; e = (M − d₁) − d₂; if e > 0, r_a −= e / 2 and r_b += e / 2 (truncating).
+The root square (0, 0)–(L, L) then starts with corner potentials, in the
+order bottom-left (0,0), top-left (0,L), top-right (L,L), bottom-right (L,0):
+all 0 when gravity ≠ 0; all r₀ when tileable; else r₀, r₁, r₂, r₃.
+
+**Subdivision** (`SubDivide`, `fracfill.cpp:290-404`) of the square
+(x₁,y₁)–(x₂,y₂) with corner potentials p₁₁ (x₁,y₁), p₁₂ (x₁,y₂),
+p₂₂ (x₂,y₂), p₂₁ (x₂,y₁) and a "plot" flag:
+
+1. With pixel coordinates v ≫ E: if the flag is set and (x₁, y₁) is inside
+   the bitmap, that pixel becomes 255 − (p₁₁ ≫ 8).
+2. If the square is under two pixels on both sides, stop.
+3. The level ℓ goes up by one; xₕ = (x₁ + x₂) ≫ 1, yₕ likewise.
+4. Edge midpoints, in this order, with coordinates masked by K: bottom
+   A(p₁₁, p₂₁, xₕ, y₁; Gₓ, Γₓ); right A(p₂₁, p₂₂, x₂, yₕ; G_y, Γ_y);
+   top A(p₁₂, p₂₂, xₕ, y₂; Gₓ, Γₓ); left A(p₁₁, p₁₂, x₁, yₕ; G_y, Γ_y).
+5. Centre = (sum of the four + 2) ≫ 2. At ℓ = 1 only: M when gravity ≠ 0,
+   else M − p₁₁ when tileable.
+6. Recurse into bottom-left (flag clear: its corner is already drawn),
+   bottom-right, top-right, top-left (flag set), each with its own corners;
+   then ℓ goes down by one.
+
+Every pixel is written exactly once, as the bottom-left corner of a
+one-pixel square.
+
+**Midpoint A(pa, pb, x, y; G, Γ)** at level ℓ (`Adjust`,
+`fracfill.cpp:213-262`), in 32-bit arithmetic that wraps:
+
+1. h = pa ⊕ (pb ≪ 16) ⊕ rotl(x, 16) ⊕ y ⊕ seed ⊕ 0xABCD1234.
+2. One PRNG step on (s = h, c = 1).
+3. r = (x ⊕ x≫5 ⊕ x≫10 ⊕ x≫15 ⊕ x≫20 ⊕ x≫25 ⊕ x≫30 ⊕ y ⊕ y≫5 ⊕ … ⊕ y≫30) & 31;
+   h = rotl(h, r).
+4. A second PRNG step, carrying c over from the first.
+5. If squash ≠ 0 and x = y = 0, h = 0.
+6. v = ((G · (h ≫ₛ 17)) ≫ₛ ℓ) − (Γ ≫ₛ 2ℓ) + ((pa + pb + 1) ≫ 1), with ≫ₛ
+   an arithmetic shift of the signed word; clamp v to 0..M.
+
+Edge cases the source leaves to the compiler: a rotation by 0 is the
+identity; Γ ≫ 2ℓ for 2ℓ ≥ 32 cannot occur (ℓ ≤ log₂ 256 = 8). An assembler
+variant of `Adjust` (`FASTFRACTALADJUST`, `fracfill.cpp:215`) is behind a
+macro that nothing in the tree defines.
+
+### 2.8.2 Plasma (`FILLSHAPE_PLASMA`): the noise generator
+
+`NoiseFractalFill::DoFill(scale, seed, bitmap)` (`noisef.cpp:272-319`) over
+`NoiseGen1` (`noise1.cpp`):
+
+* The bitmap is always **256 × 256**, 8 bits, grey (`GenerateNoiseBitmap`,
+  `fillval.cpp:572`); neither the fill's `dpi` nor its `tileable` flag
+  reaches the generator. `scale` is the fill's graininess.
+* **The table**: 50 × 50 floats (`TABLEWIDTH`, `noise1.cpp:115`), filled in
+  order with `rand() / RAND_MAX` after `srand(seed)` (`SeedTable`,
+  `noise1.cpp:176-187`). This is the **C library's** generator, so the
+  original's plasma differs between platforms.
+* **Pixel (i, j)** samples u = (i + ½)/256, v = (j + ½)/256 (accumulated in
+  steps of 1/256 from ½/256) and is written as ⌊n · 255 + 0.5⌋.
+* **Sample n(u, v)** (`VNoise1D`, `noise1.cpp:227-318`), in 32-bit floats:
+  S = ⌊scale⌋, and n = 0 when S < 1. xf = u · S, a = ⌊xf⌋, f = xf − a; the
+  quadratic B-spline weights are w₀ = 0.5 − f + f²/2, w₁ = 0.5 + f − f²,
+  w₂ = f²/2; likewise in y. The three lattice indices a, a+1, a+2 are taken
+  modulo S (so the tile wraps), with the third forced to 1 when S = 1, and
+  then modulo 50 when S > 50. n = Σⱼ w_yj · (Σᵢ w_xi · T[xᵢ + 50 · yⱼ]),
+  rows summed in order j = 0, 1, 2.
+* Row j = 0 is the first stored row, at the fill's `StartPoint`.
+
+### 2.8.3 Cache, randomise, persistence
+
+The generated bitmap is cached by the full parameter set and D
+(`CacheFractalData` / `IsSameAsCachedFractal`, `fillval.h:317-318`;
+`GetGlobalFractalList()->CheckFractalBitmap`, `fillval.cpp:470`), is never
+saved (`SetAsFractal`, `bitmap.h:573`), and `Randomise()` only draws a new
+seed (`fillval.h:274`). The corpus (`docs/memory/xar-import.md`,
+"Fractal and noise fills") holds no fill with gravity or squash other
+than 0.
+
 ## 2.9 Live effects: which part CDraw did
 
 | Effect | Geometry / control (Kernel) | The part CDraw does |
