@@ -5686,6 +5686,7 @@ dependencies = [
  "xarast-io",
  "xarast-render",
  "xarast-text",
+ "xarast-unwind",
  "xarast-xar",
 ]
 
@@ -5869,6 +5870,7 @@ dependencies = [
  "subsetter",
  "unicode-bidi",
  "xarast-geom",
+ "xarast-unwind",
 ]
 
 [[package]]
@@ -5889,6 +5891,10 @@ dependencies = [
  "xarast-geom",
  "xarast-render",
 ]
+
+[[package]]
+name = "xarast-unwind"
+version = "0.0.1"
 
 [[package]]
 name = "xarast-xar"

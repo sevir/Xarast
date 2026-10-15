@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 xarast-geom = { path = "../xarast-geom" }
+xarast-unwind = { path = "../xarast-unwind" }
 xarast-color = { path = "../xarast-color" }
 xarast-doc = { path = "../xarast-doc" }
 xarast-render = { path = "../xarast-render" }

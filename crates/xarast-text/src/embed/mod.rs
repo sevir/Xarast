@@ -203,9 +203,14 @@ fn subset(data: &FaceData, glyphs: &[u16]) -> Result<Vec<u8>, EmbedError> {
     let remapper = subsetter::GlyphRemapper::new_from_glyphs_sorted(glyphs);
     let bytes = data.bytes();
     let index = data.index();
-    std::panic::catch_unwind(|| subsetter::subset(bytes, index, &remapper))
-        .map_err(|_| EmbedError::Subset("the subsetter panicked".into()))?
+    catch_subsetter(|| subsetter::subset(bytes, index, &remapper))?
         .map_err(|e| EmbedError::Subset(e.to_string()))
+}
+
+/// Runs `f` and turns a panic in it into an error. The panic is marked
+/// as expected, so the application's hook writes no crash report for it.
+fn catch_subsetter<T>(f: impl FnOnce() -> T) -> Result<T, EmbedError> {
+    xarast_unwind::expect_panics(f).map_err(|_| EmbedError::Subset("the subsetter panicked".into()))
 }
 
 /// A PDF name token: printable ASCII without delimiters.
@@ -421,6 +426,27 @@ pub fn with_fs_type(font: &[u8], fs: u16) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_caught_subsetter_panic_is_marked_expected_for_the_hook() {
+        use std::sync::{Arc, Mutex};
+        // What a hook would see on this thread: the marker at each panic.
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let me = std::thread::current().id();
+        let previous = std::panic::take_hook();
+        let s = Arc::clone(&seen);
+        std::panic::set_hook(Box::new(move |_| {
+            if std::thread::current().id() == me {
+                s.lock().unwrap().push(xarast_unwind::panics_expected());
+            }
+        }));
+        let r = catch_subsetter(|| -> u8 { panic!("a hostile font") });
+        drop(std::panic::take_hook());
+        std::panic::set_hook(previous);
+        assert!(matches!(r, Err(EmbedError::Subset(_))));
+        assert_eq!(*seen.lock().unwrap(), [true], "the hook ran once, expected");
+        assert!(!xarast_unwind::panics_expected(), "the scope is closed");
+    }
 
     #[test]
     fn fs_type_bits_give_the_documented_rights() {

@@ -20,6 +20,7 @@ complex-scripts = ["parley/complex-scripts"]
 
 [dependencies]
 xarast-geom = { path = "../xarast-geom" }
+xarast-unwind = { path = "../xarast-unwind" }
 kurbo = { workspace = true }
 parley = { workspace = true }
 fontique = { workspace = true }

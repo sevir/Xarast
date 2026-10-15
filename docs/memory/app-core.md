@@ -665,10 +665,15 @@ half is `ui.md` shell decision 43.
   lines. Hand-written TOML (no new dependency). The hook takes the
   context and log locks with `try_lock`, so a panic inside them cannot
   deadlock it. A panic inside `expect_panics` (the image decoder and the
-  gallery thumbnailer, which used to call `catch_unwind` directly) writes
-  no report. `xarast-text`'s font-subsetter `catch_unwind` cannot use it
-  (no dependency on `xarast-app`), so a caught subsetter panic still
-  writes a spurious report.
+  gallery thumbnailer) writes no report. The thread-local marker lives in
+  the dependency-free `xarast-unwind` crate (`expect_panics`,
+  `panics_expected`); `xarast_app::crash::expect_panics` forwards to it
+  and the hook asks `panics_expected()`. So low-level crates mark their
+  own caught panics too (`xarast-text`'s font subsetter does) without
+  depending on `xarast-app`. Rule: every `catch_unwind` that swallows a
+  panic must go through `xarast_unwind::expect_panics`; only
+  `run_guarded` (fatal worker panics, must report) and a test in the
+  shell's `viewer.rs` use bare `catch_unwind`. XARA-T-0310.
 - **Privacy rule.** Every string entering a report goes through
   `redact` (an absolute or `~/` path with two or more slashes becomes
   `…/basename`). A `String` panic payload (built at run time) also goes

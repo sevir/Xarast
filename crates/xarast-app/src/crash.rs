@@ -45,7 +45,6 @@
 //! directory; the interface shows its path and offers to copy it. There is
 //! no telemetry and no upload, with or without consent.
 
-use std::cell::Cell;
 use std::collections::{BTreeMap, VecDeque};
 use std::io::Write as _;
 use std::panic::{AssertUnwindSafe, PanicHookInfo};
@@ -434,11 +433,6 @@ fn unix_now() -> u64 {
 // ---------------------------------------------------------------------------
 // The hook
 
-thread_local! {
-    /// How many [`expect_panics`] scopes this thread is inside.
-    static EXPECTED: Cell<u32> = const { Cell::new(0) };
-}
-
 fn last_report_slot() -> &'static Mutex<Option<PathBuf>> {
     static LAST: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
     LAST.get_or_init(|| Mutex::new(None))
@@ -452,7 +446,7 @@ fn last_report_slot() -> &'static Mutex<Option<PathBuf>> {
 pub fn install_panic_hook(dir: PathBuf) {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        if EXPECTED.with(Cell::get) == 0 {
+        if !xarast_unwind::panics_expected() {
             let report = CrashReport::from_panic(info);
             match report.write(&dir) {
                 Ok(path) => {
@@ -479,16 +473,14 @@ pub fn last_report() -> Option<PathBuf> {
 
 /// Runs `f`, catching a panic the caller is prepared for (a decoder given
 /// hostile bytes). Such a panic is logged by the hook chain as usual but
-/// is not a crash: no report is written.
+/// is not a crash: no report is written. The marker is shared with the
+/// libraries below this crate through [`xarast_unwind`].
 ///
 /// # Errors
 ///
 /// The panic's payload, as [`std::panic::catch_unwind`] returns it.
 pub fn expect_panics<R>(f: impl FnOnce() -> R) -> std::thread::Result<R> {
-    EXPECTED.with(|c| c.set(c.get() + 1));
-    let r = std::panic::catch_unwind(AssertUnwindSafe(f));
-    EXPECTED.with(|c| c.set(c.get().saturating_sub(1)));
-    r
+    xarast_unwind::expect_panics(f)
 }
 
 // ---------------------------------------------------------------------------

@@ -183,7 +183,8 @@ export (subset `CIDFont`s). Nothing else decides licences or subsets.
   `cmap` and `OS/2` because a PDF CID font brings its own maps. Glyphs are
   handed to it sorted with `.notdef` first, so **new gid = index in the
   kept list**; composite components it adds go after them. Panics inside
-  it are caught (`catch_unwind`) and become `EmbedError::Subset`: the
+  it are caught (`xarast_unwind::expect_panics`, so the app's panic hook
+  writes no crash report) and become `EmbedError::Subset`: the
   input is a system font, not ours to trust.
 - **PDF program** (`FontDb::pdf_font`): TrueType → the whole subset file
   (`FontFile2`, `CIDFontType2`, `CIDToGIDMap /Identity`); CFF → the bare
