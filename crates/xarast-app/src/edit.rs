@@ -149,11 +149,15 @@ pub enum ToolId {
     Transparency,
     /// Text. Phase 9.
     Text,
+    /// Soft shadows: wall, floor and glow. Phase 13 (C7).
+    Shadow,
+    /// Bevels. Phase 13 (D6).
+    Bevel,
 }
 
 impl ToolId {
     /// Every tool, in the order the palette shows them.
-    pub const ALL: [ToolId; 11] = [
+    pub const ALL: [ToolId; 13] = [
         ToolId::Selector,
         ToolId::ShapeEditor,
         ToolId::Rectangle,
@@ -165,6 +169,8 @@ impl ToolId {
         ToolId::Fill,
         ToolId::Transparency,
         ToolId::Text,
+        ToolId::Shadow,
+        ToolId::Bevel,
     ];
 
     /// A stable, lower-case identifier for preferences and shortcuts.
@@ -182,6 +188,8 @@ impl ToolId {
             ToolId::Fill => "fill",
             ToolId::Transparency => "transparency",
             ToolId::Text => "text",
+            ToolId::Shadow => "shadow",
+            ToolId::Bevel => "bevel",
         }
     }
 
@@ -200,6 +208,8 @@ impl ToolId {
             ToolId::Fill => "Fill",
             ToolId::Transparency => "Transparency",
             ToolId::Text => "Text",
+            ToolId::Shadow => "Shadow",
+            ToolId::Bevel => "Bevel",
         }
     }
 
@@ -230,6 +240,8 @@ impl ToolId {
                 | ToolId::Fill
                 | ToolId::Transparency
                 | ToolId::Text
+                | ToolId::Shadow
+                | ToolId::Bevel
         )
     }
 
@@ -247,7 +259,9 @@ impl ToolId {
             | ToolId::Freehand
             | ToolId::Fill
             | ToolId::Transparency
-            | ToolId::Text => None,
+            | ToolId::Text
+            | ToolId::Shadow
+            | ToolId::Bevel => None,
         }
     }
 

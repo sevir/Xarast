@@ -229,7 +229,7 @@ pub fn in_render_order(doc: &Document, nodes: &[NodeId]) -> Vec<NodeId> {
 }
 
 /// What each of `nodes` inherits at its position, in one pass per parent.
-fn inherited_batch(doc: &Document, nodes: &[NodeId]) -> HashMap<NodeId, ResolvedAttrs> {
+pub(crate) fn inherited_batch(doc: &Document, nodes: &[NodeId]) -> HashMap<NodeId, ResolvedAttrs> {
     let mut by_parent: HashMap<NodeId, HashSet<NodeId>> = HashMap::new();
     for n in nodes {
         if let Some(p) = doc.tree.links(*n).parent {
@@ -286,7 +286,7 @@ fn leading_slots(doc: &Document, node: NodeId) -> [bool; ATTR_SLOT_COUNT] {
 /// `localise`: gives `node` an attribute child for every slot where what
 /// it inherited (`was`) differs from what it inherits now (`now`), unless
 /// it sets that slot itself.
-fn materialise(
+pub(crate) fn materialise(
     tx: &mut Tx<'_>,
     node: NodeId,
     was: &ResolvedAttrs,
@@ -309,7 +309,7 @@ fn materialise(
     Ok(())
 }
 
-fn no_remap(_: &mut AttrValue) {}
+pub(crate) fn no_remap(_: &mut AttrValue) {}
 
 /// Moves `node` to `anchor`/`how`, keeping its appearance.
 fn relocate(

@@ -1035,6 +1035,7 @@ impl Session {
     fn settle_infobar_drag(&mut self) -> Changed {
         if self.infobar_drag.take().is_some() {
             self.preview.attrs.clear();
+            self.preview.live.clear();
             Changed::DOCUMENT | Changed::UI | Changed::SELECTION
         } else {
             Changed::empty()
@@ -1065,6 +1066,7 @@ impl Session {
                     return Ok(Changed::empty());
                 };
                 self.preview.attrs.clear();
+                self.preview.live.clear();
                 Ok(self.infobar_edit(field, value)? | Changed::DOCUMENT | Changed::UI)
             }
             InfobarDrag::Cancel => Ok(self.settle_infobar_drag()),
@@ -1158,10 +1160,36 @@ impl Session {
                 } => Some(*layer),
                 _ => None,
             };
-            match self.apply_edit(cmd) {
+            // A live-effect edit wraps or unwraps objects: the selection
+            // follows them to their controller, or to the objects a
+            // removed controller leaves.
+            let live = match &cmd {
+                EditCommand::Live { edits } => {
+                    let selection: Vec<xarast_doc::NodeId> = self.edit.selection().collect();
+                    let removed = crate::live_edit::removed_members(&self.doc, &selection, edits);
+                    Some((selection, removed))
+                }
+                _ => None,
+            };
+            let outcome = match self.apply_edit(cmd) {
+                Err(SessionError::Edit(e))
+                    if live.is_some() && e == crate::structure::NOTHING_TO_DO =>
+                {
+                    Ok(None)
+                }
+                other => other,
+            };
+            match outcome {
                 Ok(Some(_)) => {
                     applied = true;
                     changed |= Changed::DOCUMENT | Changed::UI;
+                    if let Some((selection, removed)) = &live {
+                        let now = crate::live_edit::reselect(&self.doc, selection, removed);
+                        if &now != selection {
+                            self.edit.select(now, SelectMode::Replace);
+                            changed |= Changed::SELECTION;
+                        }
+                    }
                     // A new object is selected, as the original does: the
                     // tool that drew it then edits it.
                     if let Some(layer) = created_on

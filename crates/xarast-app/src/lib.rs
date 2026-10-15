@@ -64,6 +64,7 @@
 
 pub mod app;
 pub mod autosave;
+pub mod bevel_tool;
 pub mod bitmap_gallery;
 pub mod colour_bar;
 pub mod colour_editor;
@@ -81,6 +82,7 @@ pub mod geometry;
 pub mod headless;
 pub mod import;
 pub mod intent;
+pub mod live_edit;
 pub mod locks;
 pub mod node_edit;
 pub mod ops;
@@ -98,6 +100,7 @@ pub mod save;
 pub mod schedule;
 pub mod selector;
 pub mod session;
+pub mod shadow_tool;
 pub mod shapes;
 pub mod snap;
 pub mod structure;

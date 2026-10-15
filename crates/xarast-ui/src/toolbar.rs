@@ -66,7 +66,7 @@ impl ToolPalette {
             for (i, tool) in ToolId::ALL.into_iter().enumerate() {
                 // A gap between the editing tools, the view tools and the
                 // tools of later phases.
-                if matches!(tool, ToolId::Zoom | ToolId::Fill) && i > 0 {
+                if matches!(tool, ToolId::Zoom | ToolId::Fill | ToolId::Shadow) && i > 0 {
                     ui.add_space(6.0);
                     ui.separator();
                     ui.add_space(4.0);
@@ -277,6 +277,47 @@ fn paint_icon(p: &egui::Painter, r: Rect, tool: ToolId, ink: Color32) {
         ToolId::Text => {
             p.line_segment([at(0.15, 0.15), at(0.85, 0.15)], Stroke::new(2.2_f32, ink));
             p.line_segment([at(0.5, 0.15), at(0.5, 0.9)], Stroke::new(2.2_f32, ink));
+        }
+        ToolId::Shadow => {
+            // A square casting a soft square down and to the right.
+            for (i, a) in [0.15_f32, 0.3, 0.5].into_iter().enumerate() {
+                let g = 0.04 * (2 - i) as f32;
+                p.rect_filled(
+                    Rect::from_min_max(at(0.32 - g, 0.32 - g), at(0.92 + g, 0.92 + g)),
+                    2.0,
+                    ink.gamma_multiply(a),
+                );
+            }
+            p.rect_filled(Rect::from_min_max(at(0.08, 0.08), at(0.68, 0.68)), 0.0, ink);
+        }
+        ToolId::Bevel => {
+            // A square seen from above: a lit and a shaded rim round a face.
+            let (o0, o1, i0, i1) = (at(0.08, 0.08), at(0.92, 0.92), at(0.3, 0.3), at(0.7, 0.7));
+            let ne = pos2(o1.x, o0.y);
+            let sw = pos2(o0.x, o1.y);
+            let ine = pos2(i1.x, i0.y);
+            let isw = pos2(i0.x, i1.y);
+            p.add(egui::Shape::convex_polygon(
+                vec![o0, ne, ine, i0],
+                ink.gamma_multiply(0.35),
+                Stroke::NONE,
+            ));
+            p.add(egui::Shape::convex_polygon(
+                vec![o0, i0, isw, sw],
+                ink.gamma_multiply(0.35),
+                Stroke::NONE,
+            ));
+            p.add(egui::Shape::convex_polygon(
+                vec![ne, o1, i1, ine],
+                ink,
+                Stroke::NONE,
+            ));
+            p.add(egui::Shape::convex_polygon(
+                vec![sw, isw, i1, o1],
+                ink,
+                Stroke::NONE,
+            ));
+            p.rect_stroke(Rect::from_min_max(o0, o1), 0.0, s, egui::StrokeKind::Middle);
         }
     }
 }
@@ -879,6 +920,8 @@ mod tests {
         assert_eq!(tool_tooltip(ToolId::Pen), "Pen (Shift+F5)");
         assert_eq!(tool_tooltip(ToolId::Freehand), "Freehand (F3)");
         assert_eq!(tool_tooltip(ToolId::Text), "Text (F8)");
+        assert_eq!(tool_tooltip(ToolId::Shadow), "Shadow (Ctrl+F2)");
+        assert_eq!(tool_tooltip(ToolId::Bevel), "Bevel (Ctrl+F3)");
         assert_eq!(tool_tooltip(ToolId::Fill), "Fill (F5)");
         assert_eq!(tool_tooltip(ToolId::Transparency), "Transparency (F6)");
     }

@@ -210,6 +210,10 @@ pub struct Preview {
     /// evaluates it on a reduced level of the master (the *proxy*), never
     /// at full resolution; the release commits the chain as one step.
     pub photo: Vec<(NodeId, xarast_doc::PhotoOps)>,
+    /// Live controllers drawn with parameters other than their own: a
+    /// shadow or a bevel being dragged or slid (phase 13 C7, D6). The
+    /// value is exactly what the release commits.
+    pub live: Vec<(NodeId, xarast_doc::LiveKind)>,
 }
 
 /// Text shown in a story as if it had been typed at `at`, without being
@@ -243,6 +247,7 @@ impl Preview {
         self.attrs.clear();
         self.text = None;
         self.photo.clear();
+        self.live.clear();
     }
 
     /// Whether there is nothing to apply.
@@ -253,6 +258,7 @@ impl Preview {
             && self.attrs.is_empty()
             && self.text.is_none()
             && self.photo.is_empty()
+            && self.live.is_empty()
     }
 
     /// The previewed nodes as a set, for the walker's lookups.
@@ -539,6 +545,40 @@ pub enum InfobarField {
     TextTabMove(u16),
     /// Remove the tab stop with this index (dragged off the text ruler).
     TextTabRemove(u16),
+    /// The shadow's type: none, wall, floor or glow (phase 13, C7).
+    ShadowType,
+    /// A wall shadow's horizontal offset.
+    ShadowX,
+    /// A wall shadow's vertical offset.
+    ShadowY,
+    /// The shadow's blur (penumbra).
+    ShadowBlur,
+    /// The shadow's transparency, in per cent (100 − darkness).
+    ShadowTransparency,
+    /// The shadow profile's bias, −1 to 1.
+    ShadowBias,
+    /// The shadow profile's gain, −1 to 1.
+    ShadowGain,
+    /// A floor shadow's angle from the vertical, in degrees.
+    ShadowAngle,
+    /// A floor shadow's height, in per cent of the object's.
+    ShadowHeight,
+    /// A glow's width.
+    GlowWidth,
+    /// The bevel's style, or none (phase 13, D6).
+    BevelType,
+    /// Whether the bevel is inside or outside the object.
+    BevelSide,
+    /// The bevel's width.
+    BevelIndent,
+    /// The bevel's contrast, in per cent.
+    BevelContrast,
+    /// The direction the bevel's light travels, in degrees.
+    BevelLightAngle,
+    /// The bevel light's elevation above the drawing, in degrees.
+    BevelTilt,
+    /// How the bevel turns corners.
+    BevelJoin,
 }
 
 impl InfobarField {
@@ -583,6 +623,22 @@ impl InfobarField {
             InfobarField::TextTabAdd => "Add tab stop",
             InfobarField::TextTabMove(_) => "Tab stop",
             InfobarField::TextTabRemove(_) => "Remove tab stop",
+            InfobarField::ShadowType | InfobarField::BevelType => "Type",
+            InfobarField::ShadowX => "X",
+            InfobarField::ShadowY => "Y",
+            InfobarField::ShadowBlur => "Blur",
+            InfobarField::ShadowTransparency => "Transparency",
+            InfobarField::ShadowBias => "Bias",
+            InfobarField::ShadowGain => "Gain",
+            InfobarField::ShadowAngle => "Angle",
+            InfobarField::ShadowHeight => "Height",
+            InfobarField::GlowWidth => "Width",
+            InfobarField::BevelSide => "Side",
+            InfobarField::BevelIndent => "Size",
+            InfobarField::BevelContrast => "Contrast",
+            InfobarField::BevelLightAngle => "Light angle",
+            InfobarField::BevelTilt => "Elevation",
+            InfobarField::BevelJoin => "Join",
         }
     }
 
@@ -631,6 +687,25 @@ impl InfobarField {
             InfobarField::TextTabAdd => "Add a tab stop",
             InfobarField::TextTabMove(_) => "Move a tab stop",
             InfobarField::TextTabRemove(_) => "Remove a tab stop",
+            InfobarField::ShadowType => "The kind of shadow: none, wall, floor or glow",
+            InfobarField::ShadowX => "Horizontal offset of the shadow",
+            InfobarField::ShadowY => "Vertical offset of the shadow",
+            InfobarField::ShadowBlur => "How soft the shadow's edge is",
+            InfobarField::ShadowTransparency => "Transparency of the shadow, in per cent",
+            InfobarField::ShadowBias => {
+                "Pushes the shadow's softness towards its inside or outside"
+            }
+            InfobarField::ShadowGain => "Sharpens or softens the middle of the shadow's edge",
+            InfobarField::ShadowAngle => "Angle of a floor shadow from the vertical, in degrees",
+            InfobarField::ShadowHeight => "Height of a floor shadow, in per cent of the object's",
+            InfobarField::GlowWidth => "How far a glow reaches beyond the object",
+            InfobarField::BevelType => "The bevel's style, or none",
+            InfobarField::BevelSide => "Whether the bevel is inside or outside the object",
+            InfobarField::BevelIndent => "Width of the bevel",
+            InfobarField::BevelContrast => "How strongly the bevel is lit, in per cent",
+            InfobarField::BevelLightAngle => "Direction the light travels, in degrees",
+            InfobarField::BevelTilt => "Elevation of the light above the drawing, in degrees",
+            InfobarField::BevelJoin => "How the bevel turns corners",
         }
     }
 }

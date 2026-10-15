@@ -452,6 +452,9 @@ impl SceneWalker {
             .iter()
             .map(|(n, v)| (*n, (Arc::new(v.clone()), value_fingerprint(v))))
             .collect();
+        // Live controllers drawn with previewed parameters.
+        let live_over: HashMap<NodeId, &xarast_doc::LiveKind> =
+            preview.live.iter().map(|(n, k)| (*n, k)).collect();
         let preview_xf = preview
             .transform
             .as_ref()
@@ -693,7 +696,7 @@ impl SceneWalker {
                     }
                     // A shadow controller's shadow, beneath its source,
                     // inside the controller's own feather.
-                    let shadow = shadow_of(doc, parent, &attrs);
+                    let shadow = shadow_of(doc, parent, &attrs, live_over.get(&parent).copied());
                     let shadowed = shadow.is_some();
                     if let Some((effect, margin)) = shadow {
                         // Everything whose shadow can land in the area
@@ -707,7 +710,7 @@ impl SceneWalker {
                     }
                     // A bevel controller's bevel, over (inner) or beneath
                     // (outer) its source, inside its own feather.
-                    let bevel = bevel_of(doc, parent);
+                    let bevel = bevel_of(doc, parent, live_over.get(&parent).copied());
                     let bevelled = bevel.is_some();
                     if let Some((effect, margin)) = bevel {
                         // An outer bevel reaches beyond its source; an
@@ -2419,11 +2422,16 @@ fn is_culled(doc: &Document, node: NodeId, clip: Rect, attrs: &AttrStack) -> boo
 /// `None` for anything but a shadow controller with a source that has
 /// bounds. The source's bounds anchor a floor shadow (the middle of their
 /// bottom edge) and bound how far the map moves it.
-fn shadow_of(doc: &Document, node: NodeId, attrs: &AttrStack) -> Option<(LayerEffect, Mp)> {
+fn shadow_of(
+    doc: &Document,
+    node: NodeId,
+    attrs: &AttrStack,
+    over: Option<&xarast_doc::LiveKind>,
+) -> Option<(LayerEffect, Mp)> {
     let Some(NodeKind::Live(l)) = doc.tree.kind(node) else {
         return None;
     };
-    let xarast_doc::LiveKind::Shadow(p) = &l.kind else {
+    let xarast_doc::LiveKind::Shadow(p) = over.unwrap_or(&l.kind) else {
         return None;
     };
     if l.role != xarast_doc::LiveRole::Controller {
@@ -2479,11 +2487,15 @@ fn shadow_of(doc: &Document, node: NodeId, attrs: &AttrStack) -> Option<(LayerEf
 /// `None` for anything but a bevel controller with a positive width. An
 /// outer bevel is painted in its own colour, or else in its first object's
 /// (`BevelParams::paint`; nothing when that is "no colour").
-fn bevel_of(doc: &Document, node: NodeId) -> Option<(LayerEffect, Mp)> {
+fn bevel_of(
+    doc: &Document,
+    node: NodeId,
+    over: Option<&xarast_doc::LiveKind>,
+) -> Option<(LayerEffect, Mp)> {
     let Some(NodeKind::Live(l)) = doc.tree.kind(node) else {
         return None;
     };
-    let xarast_doc::LiveKind::Bevel(p) = &l.kind else {
+    let xarast_doc::LiveKind::Bevel(p) = over.unwrap_or(&l.kind) else {
         return None;
     };
     if l.role != xarast_doc::LiveRole::Controller || p.indent.raw() <= 0 {

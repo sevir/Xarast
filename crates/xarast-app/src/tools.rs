@@ -30,6 +30,8 @@ pub fn builtin() -> Vec<Box<dyn Tool>> {
         Box::new(crate::fill_tool::GradFillTool::default()),
         Box::new(crate::fill_tool::TransparencyTool::default()),
         Box::new(crate::text_tool::TextTool::default()),
+        Box::new(crate::shadow_tool::ShadowTool::default()),
+        Box::new(crate::bevel_tool::BevelTool::default()),
     ];
     for id in ToolId::ALL {
         if id.is_available() && !id.is_implemented() {

@@ -191,6 +191,13 @@ pub enum EditCommand {
     /// A palette edit (phase 8): create, redefine, rename, derive or
     /// delete a named colour. Every use of a redefined colour repaints.
     Palette(crate::colour_editor::PaletteCommand),
+    /// Live-effect edits (phase 13 C7, D6): apply or remove a shadow or a
+    /// bevel, change its parameters. All of them are one undo step,
+    /// named by the first ([`crate::live_edit`]).
+    Live {
+        /// The edits, in order.
+        edits: Vec<crate::live_edit::LiveEdit>,
+    },
     /// Types into a story (phase 9, T9.4.6), replacing a byte range of its
     /// text (the selection; empty for a caret). Commands of one typing
     /// burst merge into one undo step (`burst`, see [`TYPING_KIND`]).
@@ -364,6 +371,9 @@ impl EditCommand {
             EditCommand::SetWindingRule { .. } => "Winding Rule",
             EditCommand::Fill { edits } => edits.first().map_or("Fill", |e| e.command().label()),
             EditCommand::Palette(p) => p.label(),
+            EditCommand::Live { edits } => edits
+                .first()
+                .map_or("Live Effect", crate::live_edit::LiveEdit::label),
             EditCommand::TypeText { .. } => "Typing",
             EditCommand::DeleteText { .. } => "Delete Text",
             EditCommand::CreateText { .. } => "New Text",
@@ -413,6 +423,15 @@ impl EditCommand {
             }
             // A colour-editor drag redefining one entry: one step.
             (EditCommand::Palette(a), EditCommand::Palette(b)) => a.coalesces_with(b),
+            // Keyboard steps of one live-effect field: one step.
+            (EditCommand::Live { edits: a }, EditCommand::Live { edits: b }) => {
+                self.label() == prev.label()
+                    && a.len() == b.len()
+                    && a.iter().zip(b).all(|(x, y)| {
+                        matches!(x, crate::live_edit::LiveEdit::SetParams { .. })
+                            && x.nodes() == y.nodes()
+                    })
+            }
             _ => false,
         }
     }
@@ -427,6 +446,7 @@ impl EditCommand {
             | EditCommand::ConvertToPaths { nodes }
             | EditCommand::SetWindingRule { nodes, .. } => nodes.is_empty(),
             EditCommand::Fill { edits } => edits.is_empty(),
+            EditCommand::Live { edits } => edits.iter().all(crate::live_edit::LiveEdit::is_empty),
             EditCommand::TypeText { replace, text, .. } => replace.is_empty() && text.is_empty(),
             EditCommand::DeleteText { range, .. } => range.is_empty(),
             EditCommand::CreateText { text, .. } => text.is_empty(),
@@ -612,6 +632,14 @@ impl xarast_doc::Command for EditCommand {
                 Ok(())
             }
             EditCommand::Palette(p) => p.run(tx),
+            EditCommand::Live { edits } => {
+                let nodes: Vec<NodeId> = edits
+                    .iter()
+                    .flat_map(crate::live_edit::LiveEdit::nodes)
+                    .collect();
+                check_layers(tx, &nodes)?;
+                crate::live_edit::run_all(tx, edits)
+            }
             EditCommand::TypeText {
                 story,
                 replace,

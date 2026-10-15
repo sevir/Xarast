@@ -103,6 +103,16 @@ impl KeyChord {
         KeyChord::plain(ChordKey::Function(n))
     }
 
+    /// A function key with the command modifier.
+    #[must_use]
+    pub const fn ctrl_f(n: u8) -> KeyChord {
+        KeyChord {
+            key: ChordKey::Function(n),
+            ctrl: true,
+            shift: false,
+        }
+    }
+
     /// A key of the numeric keypad.
     #[must_use]
     pub const fn numpad(c: char) -> KeyChord {
@@ -239,7 +249,7 @@ pub const ZOOM_STEP: f64 = std::f64::consts::SQRT_2;
 impl AppCommand {
     /// Every command, in menu order, then the tools in palette order.
     /// Tools reserved for later phases are not here: they have no key yet.
-    pub const ALL: [AppCommand; 58] = [
+    pub const ALL: [AppCommand; 60] = [
         AppCommand::Open,
         AppCommand::Import,
         AppCommand::Save,
@@ -285,6 +295,8 @@ impl AppCommand {
         AppCommand::Tool(ToolId::Zoom),
         AppCommand::Tool(ToolId::Pan),
         AppCommand::Tool(ToolId::Text),
+        AppCommand::Tool(ToolId::Shadow),
+        AppCommand::Tool(ToolId::Bevel),
         AppCommand::Action(ToolAction::Finish),
         AppCommand::Action(ToolAction::MakeLine),
         AppCommand::Action(ToolAction::MakeCurve),
@@ -401,6 +413,10 @@ impl AppCommand {
         const FILL_TOOL: &[KeyChord] = &[KeyChord::f(5)];
         const TRANSP_TOOL: &[KeyChord] = &[KeyChord::f(6)];
         const TEXT: &[KeyChord] = &[KeyChord::f(8)];
+        // `research/04 §4.6`: Ctrl+F2 shadow (`TOOL22`), Ctrl+F3 bevel
+        // (`TOOL23`).
+        const SHADOW_TOOL: &[KeyChord] = &[KeyChord::ctrl_f(2)];
+        const BEVEL_TOOL: &[KeyChord] = &[KeyChord::ctrl_f(3)];
         // The shape editor's keys (`research/04 §4.11`).
         const FINISH: &[KeyChord] = &[KeyChord::plain(ChordKey::Enter)];
         const MAKE_LINE: &[KeyChord] = &[KeyChord::char('l')];
@@ -468,6 +484,8 @@ impl AppCommand {
                 ToolId::Fill => FILL_TOOL,
                 ToolId::Transparency => TRANSP_TOOL,
                 ToolId::Text => TEXT,
+                ToolId::Shadow => SHADOW_TOOL,
+                ToolId::Bevel => BEVEL_TOOL,
             },
             AppCommand::Action(a) => match a {
                 ToolAction::Finish => FINISH,
@@ -636,6 +654,8 @@ mod tests {
             (ToolId::Fill, "F5"),
             (ToolId::Transparency, "F6"),
             (ToolId::Text, "F8"),
+            (ToolId::Shadow, "Ctrl+F2"),
+            (ToolId::Bevel, "Ctrl+F3"),
         ] {
             assert_eq!(key(AppCommand::Tool(tool)), k, "{tool:?}");
             assert_eq!(
