@@ -89,7 +89,7 @@ fn drawing() -> Vec<u8> {
         .record(TAG_CONTOURCONTROLLER, &contour(3, -30_000))
         .down()
         .record(TAG_LINECOLOUR_NONE, &[])
-        .record(TAG_JOINSTYLE, &[2])
+        .record(TAG_JOINSTYLE, &[1])
         .record(TAG_CONTOUR, &[])
         .down()
         .record(TAG_FLATFILL, &C_WHITE.to_le_bytes())
@@ -106,7 +106,7 @@ fn drawing() -> Vec<u8> {
         .record(TAG_CONTOURCONTROLLER, &contour(3, 40_000))
         .down()
         .record(TAG_LINECOLOUR_NONE, &[])
-        .record(TAG_JOINSTYLE, &[1])
+        .record(TAG_JOINSTYLE, &[0])
         .record(
             TAG_PATH_RELATIVE_FILLED,
             &rect(400_000, 100_000, 200_000, 200_000),
