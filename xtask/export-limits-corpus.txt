@@ -35,6 +35,18 @@ TestBitmapFill pdf 6.5
 # bitmap fills above). Measured 2026-09-24: 7.56 (gs; Poppler 8.11).
 SoftShadow pdf 8.7
 
+# Groucho2's picture frame: 21 bevel controllers (XARA-T-0322) whose
+# objects were stripped with them until bevels were imported, so the frame
+# and its seven JPEG wood textures are drawn for the first time. resvg and
+# the PDF viewers draw those bitmap fills differently from our PNG (the
+# texture's contrast and resampling, as for the bitmap fills above; PDF
+# rasterises each bevel whole over its texture), and the SVG lights the
+# bevels with an feDiffuseLighting approximation (svg/effect.rs `bevel`):
+# unbaked 6.88, baked 6.77. Measured 2026-10-15: svg 6.77, pdf 4.64 (gs;
+# Poppler 7.10).
+Groucho2 svg 7.8
+Groucho2 pdf 5.4
+
 # (SoftShadow: its four-colour Bleach transparencies are baked as masks
 # since XARA-T-0256: svg 4.1 -> 1.20, under the default now.)
 
