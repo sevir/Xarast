@@ -2186,6 +2186,19 @@ fn bevel_of(doc: &Document, node: NodeId) -> Option<(LayerEffect, Mp)> {
         |c| c.resolve(&doc.resources.colours).to_rgba8(),
     );
     let indent = f64::from(p.indent.raw());
+    // The join the bevel node finds applied to it (`Kernel/nodebev.cpp:
+    // 845-850`): the controller's attributes before it and its ancestors'.
+    // The node's own copies of the first object's attributes are not kept
+    // (no corpus bevel node carries a join).
+    let at = xarast_doc::live::parts(&doc.tree, node)
+        .and_then(|parts| parts.generated)
+        .unwrap_or(node);
+    let join = match xarast_doc::attr::resolve_uncached(&doc.tree, at, &doc.defaults)
+        .get(AttrSlot::JoinType)
+    {
+        AttrValue::JoinType(j) => *j,
+        _ => Join::Mitre,
+    };
     let effect = LayerEffect::Bevel(Box::new(xarast_render::BevelEffect {
         style: p.bevel_type,
         indent,
@@ -2194,6 +2207,7 @@ fn bevel_of(doc: &Document, node: NodeId) -> Option<(LayerEffect, Mp)> {
         light_tilt: p.light_tilt,
         contrast: p.contrast,
         colour,
+        join,
     }));
     Some((effect, p.indent))
 }
