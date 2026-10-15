@@ -2302,19 +2302,32 @@ fn procedural(p: Option<&FractalParams>) -> ProceduralParams {
     }
 }
 
+/// `TAG_STARTCAP` / `TAG_ENDCAP` hold the original's in-memory cap enum
+/// as a byte: 0 butt, 1 round, 2 square (`Kernel/attr.h:126-131`, written
+/// and read raw at `Kernel/lineattr.cpp:1863`, `:4174`). The `CXF_CAP_STYLE_*`
+/// constants (1..=3) in `Kernel/cxfdefs.h` are never used. The corpus
+/// confirms it: only 1 and 2 occur, never the default 0. An out-of-range
+/// value strokes round, as the original's stroker does
+/// (`wxOil/grndrgn.cpp:1872-1886`).
 fn cap(v: u8) -> Cap {
     match v {
-        2 => Cap::Round,
-        3 => Cap::Square,
-        _ => Cap::Butt,
+        0 => Cap::Butt,
+        2 => Cap::Square,
+        _ => Cap::Round,
     }
 }
 
+/// `TAG_JOINSTYLE` holds the in-memory join enum as a byte: 0 mitre,
+/// 1 round, 2 bevelled (`Kernel/attr.h:147-152`, raw at
+/// `Kernel/lineattr.cpp:2904`, `:4210`), not the unused
+/// `CXF_JOIN_STYLE_*` (1..=3). The corpus has 0 and 1 only: bevelled is
+/// the document default and never written. Out of range strokes round
+/// (`wxOil/grndrgn.cpp:1887-1902`).
 fn join(v: u8) -> Join {
     match v {
-        2 => Join::Round,
-        3 => Join::Bevel,
-        _ => Join::Mitre,
+        0 => Join::Mitre,
+        2 => Join::Bevel,
+        _ => Join::Round,
     }
 }
 
@@ -2890,6 +2903,18 @@ mod tests {
         assert_eq!(
             path.data.points().first(),
             Some(&Point::raw(1000 + 35_000, 2000 + 35_000))
+        );
+    }
+
+    #[test]
+    fn caps_and_joins_read_as_the_original_s_enums() {
+        assert_eq!(
+            [cap(0), cap(1), cap(2), cap(3)],
+            [Cap::Butt, Cap::Round, Cap::Square, Cap::Round]
+        );
+        assert_eq!(
+            [join(0), join(1), join(2), join(3)],
+            [Join::Mitre, Join::Round, Join::Bevel, Join::Round]
         );
     }
 

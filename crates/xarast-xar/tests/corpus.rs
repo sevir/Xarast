@@ -1060,3 +1060,35 @@ fn the_two_attribute_questions_phase_two_left_open() {
          cap style and would have to grow a second"
     );
 }
+
+/// The cap and join records hold the original's in-memory enums (cap 0
+/// butt, 1 round, 2 square; join 0 mitre, 1 round, 2 bevelled), not the
+/// unused `CXF_*_STYLE` constants (1..=3), and the document defaults (a
+/// butt cap, a bevelled join) are never written (XARA-T-0329).
+#[test]
+fn caps_and_joins_are_the_original_enums_and_their_defaults_are_never_written() {
+    let c = corpus_or_skip!();
+    let mut caps = [0usize; 256];
+    let mut joins = [0usize; 256];
+    for f in &c.files {
+        let bytes = std::fs::read(f.path(&c.root)).unwrap_or_default();
+        let a = analyse(&bytes, ReaderLimits::default()).unwrap();
+        a.tree.walk(&mut |n, _| {
+            let r = &n.record;
+            let v = usize::from(r.data.first().copied().unwrap_or(255));
+            match r.tag {
+                174 | 175 => caps[v] += 1,
+                176 => joins[v] += 1,
+                _ => {}
+            }
+        });
+    }
+    println!(
+        "caps 0/1/2/3: {:?}; joins 0/1/2/3: {:?}",
+        &caps[..4],
+        &joins[..4]
+    );
+    assert_eq!((caps[0], joins[2]), (0, 0), "a default was written");
+    assert!(caps[1] > 0 && caps[2] > 0 && joins[0] > 0 && joins[1] > 0);
+    assert_eq!(caps[3] + joins[3], 0, "a value only the CXF table has");
+}

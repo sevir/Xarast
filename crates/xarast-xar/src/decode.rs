@@ -660,11 +660,11 @@ pub enum Decoded {
         /// How it composites.
         mode: TranspMode,
     },
-    /// `TAG_STARTCAP`: 1 butt, 2 round, 3 square.
+    /// `TAG_STARTCAP`: 0 butt, 1 round, 2 square (the original's enum).
     StartCap(u8),
     /// `TAG_ENDCAP`.
     EndCap(u8),
-    /// `TAG_JOINSTYLE`: 1 mitre, 2 round, 3 bevel.
+    /// `TAG_JOINSTYLE`: 0 mitre, 1 round, 2 bevelled (the original's enum).
     JoinStyle(u8),
     /// `TAG_MITRELIMIT`.
     MitreLimit(Mp),
