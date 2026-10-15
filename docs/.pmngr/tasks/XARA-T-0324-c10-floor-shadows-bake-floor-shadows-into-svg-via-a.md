@@ -2,14 +2,15 @@
 id: XARA-T-0324
 type: task
 title: C10 (floor shadows) — Bake floor shadows into SVG via a transformed copy the reader ignores
-status: in_progress
+status: done
 priority: low
 parent: XARA-US-0069
 author: mcp
 labels: [phase-13, live-effects, format, export]
 created: 2026-10-15T12:46:21Z
-updated: 2026-10-15T19:00:23Z
+updated: 2026-10-15T19:32:00Z
 started: 2026-10-15T19:00:23Z
+closed: 2026-10-15T19:32:00Z
 ---
 
 ## Description

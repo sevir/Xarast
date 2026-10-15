@@ -2,12 +2,13 @@
 id: XARA-T-0194
 type: task
 title: Ship the IJG acknowledgement required by jpeg-encoder in the About box and AppImage notices
-status: backlog
+status: in_progress
 priority: medium
 author: mcp
 labels: [packaging, licensing]
 created: 2026-09-23T19:49:11Z
-updated: 2026-09-23T19:49:11Z
+updated: 2026-10-15T19:32:00Z
+started: 2026-10-15T19:32:00Z
 ---
 
 ## Description
