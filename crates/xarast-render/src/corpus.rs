@@ -1385,6 +1385,7 @@ fn bevel_pt(style: BevelType, indent: f64, outer: bool, angle: f32, contrast: f3
             b: 120,
             a: 255,
         },
+        join: xarast_geom::Join::Round,
     }))
 }
 
@@ -1401,7 +1402,7 @@ fn ellipse_path(cx: f64, cy: f64, r: f64) -> PathRef {
     PathRef::new(b.build())
 }
 
-/// Live effects through the offscreen pipeline (phase 13): 21 cases.
+/// Live effects through the offscreen pipeline (phase 13): 23 cases.
 ///
 /// Each exercises something the pipeline has to get right beyond the blur
 /// itself: the silhouette (a transparent object is feathered by its shape,
@@ -1414,9 +1415,10 @@ fn ellipse_path(cx: f64, cy: f64, r: f64) -> PathRef {
 /// tilted light and a bevel inside a shadow (XARA-T-0322). Nesting in a
 /// silhouette pass (XARA-T-0321): a feather around a shadow and around an
 /// outer bevel sees their outlines, a bevel around a shadow its object's.
+/// An outer band's mitred and bevelled corners (XARA-T-0326).
 fn effect_cases() -> Vec<Case> {
     type Draw = fn(&mut SceneBuilder<'_>);
-    let cases: [(&str, Draw); 21] = [
+    let cases: [(&str, Draw); 23] = [
         ("effect_bevel_flat_inner", |b| {
             b.push_effect(bevel_pt(BevelType::Flat, 8.0, false, 315.0, 0.5));
             b.fill(
@@ -1476,6 +1478,34 @@ fn effect_cases() -> Vec<Case> {
                 &star_path(),
                 FillRule::NonZero,
                 Paint::Solid(rgb(180, 40, 40)),
+            );
+            b.pop_effect();
+        }),
+        ("effect_bevel_mitre_outer", |b| {
+            let mut e = bevel_pt(BevelType::Flat, 3.0, true, 315.0, 0.5);
+            if let LayerEffect::Bevel(bv) = &mut e {
+                bv.join = xarast_geom::Join::Mitre;
+            }
+            b.push_effect(e);
+            b.fill(
+                SceneNodeId(10),
+                &star_path(),
+                FillRule::NonZero,
+                Paint::Solid(rgb(60, 120, 180)),
+            );
+            b.pop_effect();
+        }),
+        ("effect_bevel_bevel_outer", |b| {
+            let mut e = bevel_pt(BevelType::Round, 8.0, true, 315.0, 0.5);
+            if let LayerEffect::Bevel(bv) = &mut e {
+                bv.join = xarast_geom::Join::Bevel;
+            }
+            b.push_effect(e);
+            b.fill(
+                SceneNodeId(10),
+                &rect_path(24.0, 24.0, 72.0, 72.0),
+                FillRule::NonZero,
+                Paint::Solid(rgb(60, 120, 180)),
             );
             b.pop_effect();
         }),

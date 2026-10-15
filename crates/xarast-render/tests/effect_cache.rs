@@ -27,7 +27,7 @@ fn effect_cases() -> Vec<Case> {
         .into_iter()
         .filter(|c| c.name.starts_with("effect_"))
         .collect();
-    assert_eq!(cases.len(), 21, "the corpus's effect cases");
+    assert_eq!(cases.len(), 23, "the corpus's effect cases");
     cases
 }
 
@@ -40,7 +40,7 @@ fn shadow_cases() -> Vec<Case> {
         .into_iter()
         .filter(|c| c.name.starts_with("effect_shadow_") || c.name.starts_with("effect_bevel_"))
         .collect();
-    assert_eq!(cases.len(), 13, "the corpus's shadow and bevel cases");
+    assert_eq!(cases.len(), 15, "the corpus's shadow and bevel cases");
     cases
 }
 

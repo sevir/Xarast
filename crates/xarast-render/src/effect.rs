@@ -34,6 +34,7 @@ use std::sync::OnceLock;
 
 use rayon::prelude::*;
 use xarast_color::Rgba8;
+use xarast_geom::Join;
 use xarast_geom::bevel::{BevelType, Light, shade};
 
 use crate::blend::{BlendFamily, BlendLut, LumaWeights, build_blend_lut};
@@ -273,6 +274,13 @@ fn warp(
 /// wide (its offscreen region and reach must stay bounded).
 pub const MAX_BEVEL_PX: f64 = 2048.0;
 
+/// How far an outer bevel's mitred corner may reach, in band widths, before
+/// it is cut as a bevelled one. The original hands its face generator a
+/// mitre limit of 10 (`10<<16`, `Kernel/beveler.cpp:284-293`); what that
+/// generator does past the limit is inside the closed CDraw, so the cut is
+/// the usual stroking rule, as `xarast_geom`'s stroker applies it.
+pub const BEVEL_MITRE_LIMIT: f64 = 10.0;
+
 /// A bevel: the content's outline lit as a raised edge
 /// (`research/02 §6.10`, `research/03 §2.9`; `xarast_geom::bevel`).
 ///
@@ -304,6 +312,13 @@ pub struct BevelEffect {
     pub contrast: f32,
     /// An outer bevel's paint (straight alpha); unused by an inner one.
     pub colour: Rgba8,
+    /// How the band turns the outline's corners: the join attribute applied
+    /// to the original's bevel node (`Kernel/nodebev.cpp:845-850`). It
+    /// shapes an outer band's convex corners (a mitre, up to
+    /// [`BEVEL_MITRE_LIMIT`], or a straight cut); an inner band's corners
+    /// stay as the distance to the outline makes them (mitred where the
+    /// outline is convex, round where it is concave).
+    pub join: Join,
 }
 
 impl BevelEffect {
@@ -324,8 +339,26 @@ impl BevelEffect {
             return 0;
         }
         // Two pixels of slack: the coverage gradient's stencil and the
-        // antialiased edge of the band.
-        r.ceil() as i32 + 2
+        // antialiased edge of the band. A band that finds corners reads
+        // the pieces round its nearest one (which may lie a pixel past the
+        // reach), whether they are pieces (their neighbours) and their
+        // stencils.
+        let corners = if self.outer && self.join != Join::Round {
+            CORNER_RING as i32 + 3
+        } else {
+            0
+        };
+        (r * self.corner_reach()).ceil() as i32 + 2 + corners
+    }
+
+    /// How far the band reaches from the outline, in band widths: a mitred
+    /// outer corner reaches up to the mitre limit.
+    fn corner_reach(&self) -> f64 {
+        if self.outer && self.join == Join::Mitre {
+            BEVEL_MITRE_LIMIT
+        } else {
+            1.0
+        }
     }
 
     /// The light in device space: the document-space direction through the
@@ -393,8 +426,9 @@ impl BevelEffect {
                     *f = is_edge(x as i64, y as i64);
                 }
             });
-        let reach = r + 2.0;
-        // The piece's inward normal and where the outline crosses it.
+        let reach = r * self.corner_reach() + 2.0;
+        // The piece's inward normal and where the outline crosses it, from
+        // the top-left corner of its pixel.
         let piece = |b: usize| -> ((f64, f64), (f64, f64)) {
             let (bx, by) = ((b % width) as i64, (b / width) as i64);
             let gx = f64::from(
@@ -415,9 +449,10 @@ impl BevelEffect {
             } else {
                 (0.0, 0.0)
             };
+            // Relative to the pixel's top-left corner: nothing may depend
+            // on where the region starts (invariant 23).
             let off = f64::from(cov(bx, by)) / 255.0 - 0.5;
-            let c = (bx as f64 + 0.5, by as f64 + 0.5);
-            (n, (c.0 - off * n.0, c.1 - off * n.1))
+            (n, (0.5 - off * n.0, 0.5 - off * n.1))
         };
         let light = self.device_light(xf);
         let k_light = f64::from(self.contrast).clamp(0.0, 1.0);
@@ -426,24 +461,54 @@ impl BevelEffect {
         let paint = self.colour;
         let outer = self.outer;
         let style = self.style;
+        let join = if outer { self.join } else { Join::Round };
+        // An outer band's corners, when it does not round them: the two
+        // edges meeting at each piece of outline that is a corner.
+        let corners = if join == Join::Round {
+            Corners::default()
+        } else {
+            Corners::find(&feature, width, height, &piece)
+        };
+        let mitre_cos = 2.0 / (BEVEL_MITRE_LIMIT * BEVEL_MITRE_LIMIT) - 1.0;
         // Each band pixel's distance across the band and the direction its
         // face rises in, `[d, up.x, up.y]`; `d` is NaN off the band. Single
         // precision: 12 bytes a pixel rather than 32 (the region's largest
         // plane after the colour; `docs/memory/perf.md`, "Bevel cost").
         let mut geo: Vec<[f32; 3]> = vec![[f32::NAN, 0.0, 0.0]; width * height];
+        let near = r + 2.0;
+        let near2 = (near * near).ceil();
         let found = nearest_features(&feature, width, height, reach, &mut geo, |x, y, b, g| {
             let a_cov = silhouette[y * width + x];
             if (!outer && a_cov == 0) || (outer && a_cov == 255) {
                 return;
             }
+            let corner = corners.at(b);
+            // Beyond the band's own reach only a mitred corner's point can
+            // still be band.
+            if reach > near && corner.is_none() {
+                let dx = x.abs_diff(b as usize % width);
+                let dy = y.abs_diff(b as usize / width);
+                if (dx * dx + dy * dy) as f64 > near2 {
+                    return;
+                }
+            }
             let (n, e) = piece(b as usize);
-            let p = (x as f64 + 0.5, y as f64 + 0.5);
-            let v = (p.0 - e.0, p.1 - e.1);
+            // From the piece's outline point, in whole pixels plus the
+            // fractions: the same sums wherever the region starts.
+            let (bx, by) = (b as usize % width, b as usize / width);
+            let local = (
+                (x as i64 - bx as i64) as f64 + 0.5,
+                (y as i64 - by as i64) as f64 + 0.5,
+            );
+            let v = (local.0 - e.0, local.1 - e.1);
             let along = v.0 * n.0 + v.1 * n.1;
             let across = (v.0 - along * n.0).hypot(v.1 - along * n.1);
-            // Inside a piece's strip its normal holds (a face); beyond it,
-            // round a corner (a join).
-            let (d, up) = if n != (0.0, 0.0) && across <= 1.0 {
+            // A corner of an outer band that does not round: its two edges'
+            // faces and the join between them. Elsewhere, inside a piece's
+            // strip its normal holds (a face); beyond it, round a corner.
+            let (d, up) = if let Some(c) = corner {
+                c.join(local, join, mitre_cos)
+            } else if n != (0.0, 0.0) && across <= 1.0 {
                 let d = if outer { -along } else { along };
                 (d.max(0.0), n)
             } else {
@@ -542,6 +607,293 @@ impl BevelEffect {
                     }
                 }
             });
+    }
+}
+
+/// Where two straight edges of an outer band's outline meet, in device
+/// pixels from the top-left corner of the piece it was found at: the
+/// corner `v`, each edge's outward unit normal
+/// `m`, and the directions `t` along them (the first edge arriving at `v`,
+/// the second leaving it), oriented so that the wedge between the edges'
+/// bands lies past the first and before the second.
+#[derive(Debug, Clone, Copy)]
+struct Corner {
+    v: (f64, f64),
+    m: [(f64, f64); 2],
+    t: [(f64, f64); 2],
+}
+
+impl Corner {
+    /// The corner of the lines `m[i] · x = c[i]`; `None` when they are too
+    /// near parallel (a hairpin) to meet reliably.
+    fn new(m: [(f64, f64); 2], c: [f64; 2]) -> Option<Corner> {
+        let [m1, m2] = m;
+        let det = m1.0 * m2.1 - m1.1 * m2.0;
+        if det.abs() < 0.05 {
+            return None;
+        }
+        let v = (
+            (c[0] * m2.1 - c[1] * m1.1) / det,
+            (m1.0 * c[1] - m2.0 * c[0]) / det,
+        );
+        let along = |m: (f64, f64), towards: (f64, f64), sign: f64| {
+            let t = (-m.1, m.0);
+            if sign * (t.0 * towards.0 + t.1 * towards.1) >= 0.0 {
+                t
+            } else {
+                (-t.0, -t.1)
+            }
+        };
+        Some(Corner {
+            v,
+            m,
+            t: [along(m1, m2, 1.0), along(m2, m1, -1.0)],
+        })
+    }
+
+    /// The band's distance across and rising direction at `p`: the face of
+    /// the edge `p` lies beside, or in the wedge past the corner, the
+    /// join's.
+    fn join(&self, p: (f64, f64), join: Join, mitre_cos: f64) -> (f64, (f64, f64)) {
+        let [m1, m2] = self.m;
+        let [t1, t2] = self.t;
+        let w = (p.0 - self.v.0, p.1 - self.v.1);
+        let d1 = m1.0 * w.0 + m1.1 * w.1;
+        let d2 = m2.0 * w.0 + m2.1 * w.1;
+        let beside1 = t1.0 * w.0 + t1.1 * w.1 <= 0.0;
+        let beside2 = t2.0 * w.0 + t2.1 * w.1 >= 0.0;
+        let face = |d: f64, m: (f64, f64)| (d.max(0.0), (-m.0, -m.1));
+        match (beside1, beside2) {
+            // Beside both edges at once is inside a convex corner, outside
+            // the content only by the fit's error: the far face.
+            (true, true) => {
+                if d1 >= d2 {
+                    face(d1, m1)
+                } else {
+                    face(d2, m2)
+                }
+            }
+            (true, false) => face(d1, m1),
+            (false, true) => face(d2, m2),
+            (false, false) => {
+                let cos = m1.0 * m2.0 + m1.1 * m2.1;
+                match join {
+                    // A mitre: the far of the two faces, until its point
+                    // passes the limit.
+                    Join::Mitre if cos >= mitre_cos => {
+                        if d1 >= d2 {
+                            face(d1, m1)
+                        } else {
+                            face(d2, m2)
+                        }
+                    }
+                    Join::Round => {
+                        let len = w.0.hypot(w.1);
+                        if len <= 0.0 {
+                            face(0.0, m1)
+                        } else {
+                            (len, (-w.0 / len, -w.1 / len))
+                        }
+                    }
+                    // A straight cut from one edge's band corner to the
+                    // other's: its normal halves the corner and it lies
+                    // `cos(φ/2)·w` from it, so the distance across is
+                    // (d1 + d2) / (1 + cos φ).
+                    _ => {
+                        let (bx, by) = (m1.0 + m2.0, m1.1 + m2.1);
+                        let len = bx.hypot(by);
+                        if len <= 1e-9 || 1.0 + cos <= 1e-9 {
+                            return face(d1.max(d2), m1);
+                        }
+                        ((d1 + d2) / (1.0 + cos), (-bx / len, -by / len))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// How far from a piece, in whole pixels, its neighbours are read for the
+/// two edges of a corner: far enough that coverage steps (±0.3 px) tilt
+/// the fitted lines by a degree or two.
+const CORNER_RING: i64 = 8;
+
+/// The least turn between a corner's two edges, and the most their pieces'
+/// normals spread along one edge: 20°. Coverage steps tilt a piece's normal
+/// by up to about 7° along a straight edge; a corner turning less than this
+/// is within 1.6 % of round at its mitre's point.
+const CORNER_GAP: f64 = 20.0 * std::f64::consts::PI / 180.0;
+
+/// The outward unit normal of the edge through `side`'s pieces (their turn,
+/// inward normal and outline point): the principal axis of the points when
+/// they spread along it, else their mean normal; outward either way.
+fn edge_line(side: &[(f64, (f64, f64), (f64, f64))]) -> (f64, f64) {
+    let k = side.len() as f64;
+    let (nx, ny) = side
+        .iter()
+        .fold((0.0, 0.0), |a, s| (a.0 - s.1.0, a.1 - s.1.1));
+    let (mx, my) = side
+        .iter()
+        .fold((0.0, 0.0), |a, s| (a.0 + s.2.0 / k, a.1 + s.2.1 / k));
+    let (mut sxx, mut sxy, mut syy) = (0.0, 0.0, 0.0);
+    for s in side {
+        let (dx, dy) = (s.2.0 - mx, s.2.1 - my);
+        sxx += dx * dx;
+        sxy += dx * dy;
+        syy += dy * dy;
+    }
+    // The larger eigenvalue of the scatter and its axis.
+    let half = (sxx - syy) / 2.0;
+    let root = half.hypot(sxy);
+    let along = (sxx + syy) / 2.0 + root;
+    let mean = {
+        let len = nx.hypot(ny);
+        if len > 0.0 {
+            (nx / len, ny / len)
+        } else {
+            (0.0, 0.0)
+        }
+    };
+    if along < 1.0 || root <= 0.0 {
+        return mean;
+    }
+    // The axis (half + root, sxy) or, when that vanishes, (sxy, root − half).
+    let (tx, ty) = if half >= 0.0 {
+        (half + root, sxy)
+    } else {
+        (sxy, root - half)
+    };
+    let len = tx.hypot(ty);
+    let n = (-ty / len, tx / len);
+    if n.0 * mean.0 + n.1 * mean.1 >= 0.0 {
+        n
+    } else {
+        (-n.0, -n.1)
+    }
+}
+
+/// The corners of an outline found in its pieces, by piece.
+#[derive(Debug, Default)]
+struct Corners {
+    /// Corner pieces' pixel indices, ascending.
+    at: Vec<u32>,
+    /// Their corners, in the same order.
+    corner: Vec<Corner>,
+}
+
+impl Corners {
+    /// The pieces 2–8 px from a piece are its two edges when their
+    /// normals fall in two groups at least [`CORNER_GAP`] apart; each
+    /// edge is the pieces within that of its group's outer end (at least
+    /// two, and half the group: the rest round the corner itself). A
+    /// curve's normals spread evenly, so its pieces are not corners and
+    /// round as before.
+    fn find(
+        feature: &[bool],
+        width: usize,
+        height: usize,
+        // A piece's inward normal and its outline point, relative to the
+        // top-left corner of its own pixel.
+        piece: &(dyn Fn(usize) -> ((f64, f64), (f64, f64)) + Sync),
+    ) -> Corners {
+        let found: Vec<(u32, Corner)> = feature
+            .par_iter()
+            .enumerate()
+            .with_min_len(16 * 1024)
+            .filter_map(|(b, &f)| {
+                if !f {
+                    return None;
+                }
+                let (nb, _) = piece(b);
+                if nb == (0.0, 0.0) {
+                    return None;
+                }
+                let (bx, by) = ((b % width) as i64, (b / width) as i64);
+                let mut ring: Vec<((f64, f64), (f64, f64))> = Vec::with_capacity(64);
+                for dy in -CORNER_RING..=CORNER_RING {
+                    for dx in -CORNER_RING..=CORNER_RING {
+                        let r2 = dx * dx + dy * dy;
+                        if !(4..=CORNER_RING * CORNER_RING).contains(&r2) {
+                            continue;
+                        }
+                        let (qx, qy) = (bx + dx, by + dy);
+                        if qx < 0 || qy < 0 || qx >= width as i64 || qy >= height as i64 {
+                            continue;
+                        }
+                        let q = qy as usize * width + qx as usize;
+                        if feature[q] {
+                            let (nq, eq) = piece(q);
+                            let eq = (dx as f64 + eq.0, dy as f64 + eq.1);
+                            if nq != (0.0, 0.0) {
+                                ring.push((nq, eq));
+                            }
+                        }
+                    }
+                }
+                // Sorted by how far each normal turns from the piece's own,
+                // the two edges are the two sides of the widest gap.
+                let turn = |n: (f64, f64)| (nb.0 * n.1 - nb.1 * n.0).atan2(nb.0 * n.0 + nb.1 * n.1);
+                let mut ring: Vec<(f64, (f64, f64), (f64, f64))> =
+                    ring.into_iter().map(|(n, e)| (turn(n), n, e)).collect();
+                ring.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let (gap, at) = ring
+                    .windows(2)
+                    .enumerate()
+                    .map(|(i, w)| (w[1].0 - w[0].0, i + 1))
+                    .fold((0.0, 0), |a, g| if g.0 > a.0 { g } else { a });
+                if gap < CORNER_GAP {
+                    return None;
+                }
+                let mut m = [(0.0, 0.0); 2];
+                let mut c = [0.0; 2];
+                let mut mean = [(0.0, 0.0); 2];
+                for (i, side) in [&ring[..at], &ring[at..]].into_iter().enumerate() {
+                    // Each edge is the side's outer end: pieces turned
+                    // towards the other side (the corner's own, rounded by
+                    // coverage) are left out, up to half of them.
+                    let all = side.len();
+                    let side: Vec<_> = if i == 0 {
+                        let end = side[0].0;
+                        side.iter()
+                            .copied()
+                            .filter(|s| s.0 - end <= CORNER_GAP)
+                            .collect()
+                    } else {
+                        let end = side[all - 1].0;
+                        side.iter()
+                            .copied()
+                            .filter(|s| end - s.0 <= CORNER_GAP)
+                            .collect()
+                    };
+                    if side.len() < 2 || 2 * side.len() < all {
+                        return None;
+                    }
+                    let side = side.as_slice();
+                    m[i] = edge_line(side);
+                    let k = side.len() as f64;
+                    let (ex, ey) = side
+                        .iter()
+                        .fold((0.0, 0.0), |a, s| (a.0 + s.2.0 / k, a.1 + s.2.1 / k));
+                    c[i] = m[i].0 * ex + m[i].1 * ey;
+                    mean[i] = (ex, ey);
+                }
+                // Only a convex corner: each edge lies behind the other's
+                // line. Beside a concave one the edges' strips already
+                // cover the band.
+                let behind = |i: usize, j: usize| m[j].0 * mean[i].0 + m[j].1 * mean[i].1 < c[j];
+                if !(behind(0, 1) && behind(1, 0)) {
+                    return None;
+                }
+                Some((u32::try_from(b).ok()?, Corner::new(m, c)?))
+            })
+            .collect();
+        let (at, corner) = found.into_iter().unzip();
+        Corners { at, corner }
+    }
+
+    /// The corner at piece `b`, if it is one.
+    fn at(&self, b: u32) -> Option<&Corner> {
+        self.at.binary_search(&b).ok().map(|i| &self.corner[i])
     }
 }
 
@@ -1214,6 +1566,7 @@ mod tests {
                 b: 128,
                 a: 255,
             },
+            join: Join::Round,
         }))
     }
 
@@ -1275,6 +1628,42 @@ mod tests {
         assert!(top > 128 && bottom < 128, "{top} {bottom}");
         assert_eq!(at(&c, 40, 10), (0, 0));
         assert_eq!(at(&c, 70, 40), (0, 0));
+    }
+
+    #[test]
+    fn an_outer_band_turns_its_corners_by_the_join() {
+        // The square's corner at (20, 20), a band 8 px wide: along the
+        // diagonal a round join ends 8 px out, a bevelled one at the cut
+        // 5.7 px out, a mitre at its point 11.3 px out.
+        let alpha = |join: Join, at: usize| {
+            let (mut c, sil, w, h) = grey_square();
+            let mut e = bevel(BevelType::Flat, 8.0, true);
+            if let LayerEffect::Bevel(b) = &mut e {
+                b.join = join;
+            }
+            e.apply_at(&mut c, Some(&sil), w, h, y_down(), (0, 0));
+            // Away from the corner the band is the same for every join.
+            assert_eq!(c[(40 * w + 15) * 4 + 3], 255, "{join:?}");
+            c[(at * w + at) * 4 + 3]
+        };
+        assert_eq!(alpha(Join::Round, 17), 255);
+        assert_eq!(alpha(Join::Mitre, 17), 255);
+        assert_eq!(alpha(Join::Bevel, 17), 255);
+        // 6.4 px out.
+        assert_eq!(alpha(Join::Round, 15), 255);
+        assert_eq!(alpha(Join::Mitre, 15), 255);
+        assert_eq!(alpha(Join::Bevel, 15), 0);
+        // 9.2 px out.
+        assert_eq!(alpha(Join::Round, 13), 0);
+        assert_eq!(alpha(Join::Mitre, 13), 255);
+        assert_eq!(alpha(Join::Bevel, 13), 0);
+        // A mitre reaches its limit; a round band only its width.
+        assert_eq!(bevel(BevelType::Flat, 8.0, true).growth_px(1.0), 10);
+        let mut m = bevel(BevelType::Flat, 8.0, true);
+        if let LayerEffect::Bevel(b) = &mut m {
+            b.join = Join::Mitre;
+        }
+        assert_eq!(m.growth_px(1.0), 93);
     }
 
     #[test]
@@ -1431,6 +1820,7 @@ mod tests {
                     b: 30,
                     a: 40,
                 },
+                join: Join::Round,
             }))
         };
         let mut plane = sil.clone();
