@@ -1486,11 +1486,10 @@ enum Primitive<'a> {
 }
 
 fn to_fill(rule: FillRule) -> Fill {
-    match rule {
+    // Negative and positive draw as non-zero, as in the original
+    // (`FillRule::as_drawn`).
+    match rule.as_drawn() {
         FillRule::EvenOdd => Fill::EvenOdd,
-        // NonZero, Positive and Negative all fill by winding sign; vello
-        // offers nonzero only, and the sign variants differ from it just in
-        // orientation, which the path already carries.
         _ => Fill::NonZero,
     }
 }

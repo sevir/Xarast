@@ -292,8 +292,8 @@ fn collect_top(doc: &Document, top: NodeId, stack: &mut AttrStack) -> Vec<Found>
         };
         let bitmap = matches!(kind, NodeKind::Bitmap(_));
         let rule = match stack.get(AttrSlot::WindingRule) {
-            AttrValue::WindingRule(r) => *r,
-            _ => FillRule::NonZero,
+            AttrValue::WindingRule(r) => r.as_drawn(),
+            _ => FillRule::EvenOdd,
         };
         let fill = (filled
             && (bitmap

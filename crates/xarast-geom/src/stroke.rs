@@ -29,8 +29,12 @@ pub enum Join {
     Bevel = 3,
 }
 
-/// Which regions a path encloses. The discriminants match `.xar`'s
-/// `TAG_WINDINGRULE`.
+/// Which regions a path encloses. The discriminants are Xarast's own (they
+/// feed digests and golden names); `.xar`'s `TAG_WINDINGRULE` byte is read
+/// by [`FillRule::from_byte`].
+///
+/// The `Default` here is SVG's and the geometry's, `NonZero`; a document's
+/// default rule is the model's (`xarast_doc::default_for`), even-odd.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Default)]
 #[repr(u8)]
 pub enum FillRule {
@@ -58,16 +62,36 @@ impl FillRule {
         }
     }
 
-    /// Reads the `.xar` `TAG_WINDINGRULE` byte. Unknown values become
-    /// `NonZero`, which is the format's own default and the least surprising
-    /// rendering of a corrupt file.
+    /// Reads the `.xar` `TAG_WINDINGRULE` byte: the original's in-memory
+    /// winding enum as a byte, 0 non-zero, 1 negative, 2 even-odd,
+    /// 3 positive (`Kernel/attr.h:169-175`, written and read raw at
+    /// `Kernel/lineattr.cpp:3506`, `:4276`), not the unused
+    /// `CXF_WINDING_RULE_*` constants (1..=4) of `Kernel/cxfdefs.h`. An
+    /// unknown value is `NonZero`: the original fills every value but
+    /// even-odd as non-zero (see [`FillRule::as_drawn`]).
     #[inline]
     #[must_use]
     pub const fn from_byte(v: u8) -> FillRule {
         match v {
-            2 => FillRule::Negative,
-            3 => FillRule::EvenOdd,
-            4 => FillRule::Positive,
+            1 => FillRule::Negative,
+            2 => FillRule::EvenOdd,
+            3 => FillRule::Positive,
+            _ => FillRule::NonZero,
+        }
+    }
+
+    /// The rule a fill is drawn with: `EvenOdd` stays, every other rule
+    /// draws `NonZero`. The original's renderers pass the rasteriser a
+    /// single flag, even-odd or not (`wxOil/grndrgn.cpp:2233-2234`, `:2769`,
+    /// `:3798`, `:7114`; `wxOil/osrndrgn.cpp:1318-1321`), so a negative or
+    /// positive rule fills exactly as non-zero does there. Rendering,
+    /// export and picking use this; [`FillRule::covers`] keeps the strict
+    /// meaning for geometry that asks for it.
+    #[inline]
+    #[must_use]
+    pub const fn as_drawn(self) -> FillRule {
+        match self {
+            FillRule::EvenOdd => FillRule::EvenOdd,
             _ => FillRule::NonZero,
         }
     }

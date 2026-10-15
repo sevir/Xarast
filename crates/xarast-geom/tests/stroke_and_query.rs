@@ -498,3 +498,36 @@ proptest! {
         prop_assert!((arclen(&scaled, 1e-9) - 2.0 * base).abs() < 8.0);
     }
 }
+
+#[test]
+fn winding_bytes_are_the_original_s_enum_and_only_even_odd_draws_even_odd() {
+    // `TAG_WINDINGRULE`: 0 non-zero, 1 negative, 2 even-odd, 3 positive;
+    // anything else non-zero (XARA-T-0331).
+    let read: Vec<FillRule> = [0u8, 1, 2, 3, 4, 255]
+        .into_iter()
+        .map(FillRule::from_byte)
+        .collect();
+    assert_eq!(
+        read,
+        [
+            FillRule::NonZero,
+            FillRule::Negative,
+            FillRule::EvenOdd,
+            FillRule::Positive,
+            FillRule::NonZero,
+            FillRule::NonZero,
+        ]
+    );
+    let drawn: Vec<FillRule> = read.iter().map(|r| r.as_drawn()).collect();
+    assert_eq!(
+        drawn,
+        [
+            FillRule::NonZero,
+            FillRule::NonZero,
+            FillRule::EvenOdd,
+            FillRule::NonZero,
+            FillRule::NonZero,
+            FillRule::NonZero,
+        ]
+    );
+}

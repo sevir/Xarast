@@ -405,7 +405,7 @@ fn winding_rule(doc: &Document, id: NodeId) -> FillRule {
         .get(AttrSlot::WindingRule)
     {
         AttrValue::WindingRule(r) => *r,
-        _ => FillRule::NonZero,
+        _ => FillRule::EvenOdd,
     }
 }
 

@@ -1092,3 +1092,29 @@ fn caps_and_joins_are_the_original_enums_and_their_defaults_are_never_written() 
     assert!(caps[1] > 0 && caps[2] > 0 && joins[0] > 0 && joins[1] > 0);
     assert_eq!(caps[3] + joins[3], 0, "a value only the CXF table has");
 }
+
+/// `TAG_WINDINGRULE` holds the original's in-memory enum (0 non-zero,
+/// 1 negative, 2 even-odd, 3 positive), not the unused `CXF_WINDING_RULE_*`
+/// constants (1..=4), and the document default (even-odd) is never
+/// written (XARA-T-0331).
+#[test]
+fn winding_rules_are_the_original_enum_and_the_default_is_never_written() {
+    let c = corpus_or_skip!();
+    let mut rules = [0usize; 256];
+    for f in &c.files {
+        let bytes = std::fs::read(f.path(&c.root)).unwrap_or_default();
+        let a = analyse(&bytes, ReaderLimits::default()).unwrap();
+        a.tree.walk(&mut |n, _| {
+            let r = &n.record;
+            if r.tag == 178 {
+                let v = usize::from(r.data.first().copied().unwrap_or(255));
+                rules[v] += 1;
+                println!("{}: record {} value {v}", f.label(), r.number);
+            }
+        });
+    }
+    println!("winding 0/1/2/3/4: {:?}", &rules[..5]);
+    assert_eq!(rules[2], 0, "the default was written");
+    assert_eq!(rules[1], 3, "the three negative records");
+    assert_eq!(rules.iter().sum::<usize>(), 3);
+}

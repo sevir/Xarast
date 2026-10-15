@@ -697,7 +697,8 @@ pub enum Decoded {
     JoinStyle(u8),
     /// `TAG_MITRELIMIT`.
     MitreLimit(Mp),
-    /// `TAG_WINDINGRULE`: 1 nonzero, 2 negative, 3 even-odd, 4 positive.
+    /// `TAG_WINDINGRULE`: 0 non-zero, 1 negative, 2 even-odd, 3 positive
+    /// (the original's enum).
     WindingRule(u8),
     /// `TAG_QUALITY`.
     Quality(i32),

@@ -1179,7 +1179,7 @@ impl<'o> Mapper<'o> {
         self.mapped = self.mapped.saturating_add(1);
         let rule = match self.attrs.get(AttrSlot::WindingRule) {
             AttrValue::WindingRule(r) => *r,
-            _ => FillRule::NonZero,
+            _ => FillRule::EvenOdd,
         };
         let at = (cv.record.number, cv.record.tag);
         let Some(clip) = self.keyhole_clip(group, rule, at) else {
@@ -1271,7 +1271,9 @@ impl<'o> Mapper<'o> {
         let tol = xarast_geom::Tolerance::BOOLEAN;
         let mut acc: Option<xarast_geom::Path> = None;
         for (p, r) in &parts {
-            let resolved = xarast_geom::self_union(p, *r, tol);
+            // Negative and positive keyholes clip as the original draws
+            // them, non-zero (`FillRule::as_drawn`).
+            let resolved = xarast_geom::self_union(p, r.as_drawn(), tol);
             acc = Some(match acc {
                 None => resolved,
                 Some(a) => xarast_geom::boolean(
@@ -3100,6 +3102,45 @@ mod tests {
     }
 
     #[test]
+    fn winding_records_read_as_the_original_s_enum_and_none_is_even_odd() {
+        // No record, then 0 non-zero, 1 negative, 2 even-odd, 3 positive,
+        // and a byte out of range (XARA-T-0331).
+        let bytes = layer_with(|b| {
+            let mut b = b.record(116, &square_path(0, 0, 10_000));
+            for v in [0u8, 1, 2, 3, 9] {
+                b = b
+                    .record(116, &square_path(0, 0, 10_000))
+                    .down()
+                    .record(178, &[v])
+                    .up();
+            }
+            b
+        });
+        let (doc, report) = import(&bytes, &ImportOptions::default()).unwrap();
+        balanced(&report);
+        let rules: Vec<AttrValue> = doc
+            .tree
+            .preorder(doc.tree.root())
+            .filter(|&n| matches!(doc.tree.kind(n), Some(NodeKind::Path(_))))
+            .map(|n| {
+                xarast_doc::attr::resolve_uncached(&doc.tree, n, &doc.defaults)
+                    .get(xarast_doc::AttrSlot::WindingRule)
+                    .clone()
+            })
+            .collect();
+        let want = [
+            FillRule::EvenOdd,
+            FillRule::NonZero,
+            FillRule::Negative,
+            FillRule::EvenOdd,
+            FillRule::Positive,
+            FillRule::NonZero,
+        ]
+        .map(AttrValue::WindingRule);
+        assert_eq!(rules, want);
+    }
+
+    #[test]
     fn an_unknown_non_ignorable_record_survives_as_opaque() {
         let bytes = XarBuilder::new()
             .record(40, &[])
@@ -3415,15 +3456,16 @@ mod tests {
 
     #[test]
     fn keyholes_under_their_own_winding_rules_clip_to_their_union() {
-        // Two overlapping squares, the second even-odd: the union is one
-        // outline, not two, and not the overlap.
+        // Two overlapping squares, the first even-odd (the default), the
+        // second non-zero: the union is one outline, not two, and not the
+        // overlap.
         let bytes = layer_with(|b| {
             b.record(4084, &[])
                 .down()
                 .record(116, &square_path(0, 0, 200_000))
                 .record(116, &square_path(100_000, 100_000, 200_000))
                 .down()
-                .record(178, &[3])
+                .record(178, &[0])
                 .up()
                 .record(4085, &[])
                 .record(116, &square_path(0, 0, 400_000))

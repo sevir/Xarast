@@ -16,7 +16,7 @@
 //! 3. **Rasterise that object** through the CPU backend at
 //!    [`PdfOptions::rasterise_dpi`]: perspective gradients, bitmap fills
 //!    and placed images (until T11.4.8), graduated transparency (until
-//!    T11.4.5), the Positive/Negative fill rules, and every transparency
+//!    T11.4.5), and every transparency
 //!    family other than ordinary mixing (with its backdrop; see
 //!    [`BlendFidelity`]). Each is a [`Compromise::Rasterised`] naming the
 //!    object.
@@ -493,18 +493,7 @@ impl Translator<'_> {
             }
             (DrawItem::PushClip { path, rule, xf }, _) => {
                 let p = xf.to_affine() * path.bez().clone();
-                let rule = match rule {
-                    FillRule::EvenOdd => Rule::EvenOdd,
-                    FillRule::NonZero => Rule::NonZero,
-                    other => {
-                        self.compromises.push(Compromise::Approximated {
-                            node: SceneNodeId(0),
-                            what: format!("a clip with the {other:?} winding rule drawn non-zero")
-                                .into(),
-                        });
-                        Rule::NonZero
-                    }
-                };
+                let rule = pdf_rule(rule);
                 let cv = self.canvas();
                 cv.save();
                 cv.path(&p);
@@ -844,21 +833,7 @@ impl Translator<'_> {
         if path.elements().is_empty() {
             return Ok(());
         }
-        let pdf_rule = match rule {
-            FillRule::NonZero => Rule::NonZero,
-            FillRule::EvenOdd => Rule::EvenOdd,
-            other => {
-                let backdrop = t.family != BlendFamily::Mix;
-                return self.rasterise(
-                    node,
-                    Target::Op(op),
-                    bounds,
-                    backdrop,
-                    &format!("the {other:?} winding rule has no PDF equivalent"),
-                    cancelled,
-                );
-            }
-        };
+        let pdf_rule = pdf_rule(rule);
         let page_path = xf.to_affine() * path.clone();
         self.paint_area(
             node, op, &page_path, pdf_rule, paint, t, bounds, None, cancelled,
@@ -1267,6 +1242,16 @@ impl TextArea {
             cv.glyph(*font, *m, *cid);
         }
         cv.end_text();
+    }
+}
+
+/// A fill or clip rule in PDF. Negative and positive draw as non-zero,
+/// exactly as the renderer and the original draw them
+/// ([`FillRule::as_drawn`]).
+fn pdf_rule(rule: FillRule) -> Rule {
+    match rule.as_drawn() {
+        FillRule::EvenOdd => Rule::EvenOdd,
+        _ => Rule::NonZero,
     }
 }
 

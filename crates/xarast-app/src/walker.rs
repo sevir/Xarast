@@ -1963,7 +1963,7 @@ fn effect(attrs: &AttrStack) -> xarast_color::FillEffect {
 fn winding(attrs: &AttrStack) -> FillRule {
     match attrs.get(AttrSlot::WindingRule) {
         AttrValue::WindingRule(r) => *r,
-        _ => FillRule::NonZero,
+        _ => FillRule::EvenOdd,
     }
 }
 
@@ -2072,7 +2072,7 @@ fn outside_clip(
         &pb.build(),
         clip.path(),
         xarast_geom::BoolOp::Difference,
-        rule,
+        rule.as_drawn(),
         xarast_geom::Tolerance::BOOLEAN,
     );
     Some(PathRef::new(cut))
