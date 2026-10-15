@@ -1045,8 +1045,7 @@ of a shadow and a bevel made by scripted gestures). Unit tests in
     angle and height (floor) and width (glow), so every parameter is
     typed (J2); X/Y and blur are lengths in the user's unit, not pixels;
     out-of-range values are clamped to the original's limits rather than
-    refused. The **colour** is not editable yet (no colour item in the
-    infobar; the colour bar does not target shadows) — follow-up.
+    refused. The colour is set from the colour bar (decision 91).
 89. **Bevel tool, ours**: the size box is the union of the selected
     objects' *source* boxes (a bevel's own growth excluded); an existing
     bevel previews live plus the dashed box, a new one the dashed box only;
@@ -1064,6 +1063,39 @@ of a shadow and a bevel made by scripted gestures). Unit tests in
     or bevel preview is computed at full resolution every frame, as in the
     original. A reduced-resolution Draft effect is a render-crate change
     (follow-up, with XARA-T-0315).
+
+91. **Shadow follow-ups (XARA-T-0339).**
+    - *F5/F6 bug*: `ToolId::Fill` and `ToolId::Transparency` were missing
+      from `AppCommand::ALL`, so the shell (which binds keys by walking
+      `ALL`) never bound them. Added; the test
+      `every_tool_with_a_key_is_in_the_command_table` walks `ToolId::ALL`
+      so a new tool without a table entry fails. **A new tool must add its
+      `AppCommand::Tool` to `ALL` (and bump its length).**
+    - *Colour*: the infobar shows a read-only `InfobarItem::Swatch`
+      (`InfobarField::ShadowColour`, mixed selection = empty). A **left
+      click** in the colour bar while the Shadow tool is in force and the
+      selection has a shadow sets the shadows' colour (one "Shadow Colour"
+      step via `shadow_tool::colour_command`) and does not touch the
+      fill; right/Shift-click (line) and a selection without a shadow
+      behave as ever. Dropping a dragged colour on a shadow is not done
+      (drops still target the object's fill), and the colour editor does
+      not target shadows.
+    - *Nudges*: arrows move the selected **wall** shadows' offset by the
+      standard `Nudge` (same unit/modifiers as everywhere), clamped to
+      ±999 px; a run is one "Shadow Position" step (the `Live`
+      coalescing); floor/glow shadows ignore the keys (the arrows pan).
+    - *Bevel size drag outline*: `bevel_tool::size_regions` collects the
+      clean silhouettes of the ink nodes under each selected object (the
+      bevel source for a bevelled one) once at the press;
+      `xarast_geom::contour::offset_region` (round joins) offsets them by
+      the signed width every frame and they are drawn as dashed polylines.
+      More than 24 objects, or nothing contourable (text), falls back to
+      the dashed box. No snapping.
+    - *Not done, by decision*: the original's Shift-drag second shadow and
+      plain keys 1–4/A stay unbound (1 and 3 are zoom keys here; the
+      infobar's type choice covers 1–4 and Shift-click selection covers
+      A); revisit only if users ask. Draft-quality effects stay with
+      XARA-T-0315.
 
 ## Provisional values (observe in the VM before trusting)
 

@@ -785,3 +785,110 @@ fn a_shadow_and_a_bevel_made_by_gestures_match_their_golden() {
     let cmp = xarast_render::golden::compare(&out.surface, &want);
     assert!(cmp.is_exact(), "{cmp:?}");
 }
+
+#[test]
+fn the_colour_bar_colours_the_selected_shadow_in_one_step() {
+    use xarast_app::colour_bar::{ColourBarOp, ColourSource};
+    use xarast_doc::fill_edit::PaintSlot;
+    let (mut s, _) = fixture(&[CENTRE], ToolId::Shadow);
+    edit(&mut s, InfobarField::ShadowType, InfobarValue::Choice(1));
+    let c = selection(&s)[0];
+    let swatch = |s: &Session| {
+        s.infobar().items.iter().find_map(|i| match i {
+            InfobarItem::Swatch {
+                field: InfobarField::ShadowColour,
+                colour,
+            } => Some(*colour),
+            _ => None,
+        })
+    };
+    assert_eq!(
+        swatch(&s).flatten().map(|c| (c.r, c.g, c.b)),
+        Some((0, 0, 0))
+    );
+    let before = s.doc.canonical_digest();
+    let len = s.bus.history().len();
+    let blue = ColourValue::Rgbt {
+        r: 0.0,
+        g: 0.0,
+        b: 1.0,
+        t: 0.0,
+    };
+    s.apply(Intent::ColourBar(ColourBarOp::Apply {
+        source: ColourSource::Direct(blue),
+        slot: PaintSlot::Fill,
+    }))
+    .unwrap();
+    assert_eq!(s.bus.history().len(), len + 1);
+    assert_eq!(shadow(&s, c).colour, Colour::Direct(blue));
+    assert_eq!(
+        swatch(&s).flatten().map(|c| (c.r, c.g, c.b)),
+        Some((0, 0, 255))
+    );
+    undo_is_exact(&mut s, before, "Shadow Colour");
+}
+
+#[test]
+fn arrow_keys_nudge_a_wall_shadow_and_a_run_is_one_step() {
+    use xarast_app::{Nudge, NudgeDir, NudgeStep};
+    let (mut s, _) = fixture(&[CENTRE], ToolId::Shadow);
+    assert!(!s.takes_nudge(), "no shadow: the arrows pan");
+    edit(&mut s, InfobarField::ShadowType, InfobarValue::Choice(1));
+    let c = selection(&s)[0];
+    assert!(s.takes_nudge());
+    let o0 = shadow(&s, c).offset;
+    let before = s.doc.canonical_digest();
+    let len = s.bus.history().len();
+    let nudge = |s: &mut Session, dir, step| {
+        s.apply(Intent::Nudge(Nudge { dir, step })).unwrap();
+    };
+    for _ in 0..3 {
+        nudge(&mut s, NudgeDir::Right, NudgeStep::One);
+    }
+    nudge(&mut s, NudgeDir::Up, NudgeStep::Times5);
+    assert_eq!(s.bus.history().len(), len + 1, "one step for the run");
+    assert_eq!(s.undo_label(), Some("Shadow Position"));
+    let unit = xarast_app::tool::NUDGE_UNIT_MP.round();
+    let o = shadow(&s, c).offset;
+    assert_eq!((o.x - o0.x).to_f64(), 3.0 * unit);
+    assert_eq!(
+        (o.y - o0.y).to_f64(),
+        (5.0 * xarast_app::tool::NUDGE_UNIT_MP).round()
+    );
+    s.undo();
+    assert_eq!(s.doc.canonical_digest(), before, "undo is exact");
+    // A floor shadow has no offset to nudge.
+    edit(&mut s, InfobarField::ShadowType, InfobarValue::Choice(2));
+    assert!(!s.takes_nudge());
+}
+
+#[test]
+fn a_bevel_size_drag_outlines_the_contoured_path_not_the_box() {
+    let (mut s, _) = fixture(&[CENTRE], ToolId::Bevel);
+    let from = Point::raw(RIGHT_HANDLE.0, RIGHT_HANDLE.1);
+    // 8 pt inwards.
+    drag_open(&mut s, from, Point::raw(242_000, 200_000), 0);
+    let shapes = s.overlay();
+    assert!(
+        !shapes
+            .iter()
+            .any(|o| matches!(o, OverlayShape::Rect { dashed: true, .. })),
+        "no dashed box when the path can be contoured"
+    );
+    let xs: Vec<i32> = shapes
+        .iter()
+        .filter_map(|o| match o {
+            OverlayShape::Polyline {
+                points,
+                dashed: true,
+                ..
+            } => Some(points.iter().map(|p| p.x.raw()).collect::<Vec<_>>()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert!(!xs.is_empty(), "a dashed contoured outline");
+    let right = *xs.iter().max().unwrap();
+    assert!((right - (RIGHT_HANDLE.0 - 8000)).abs() <= 200, "{right}");
+    release(&mut s, Point::raw(242_000, 200_000), 10);
+}
