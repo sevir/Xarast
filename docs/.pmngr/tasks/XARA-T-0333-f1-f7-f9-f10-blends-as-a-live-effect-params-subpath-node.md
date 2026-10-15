@@ -2,14 +2,15 @@
 id: XARA-T-0333
 type: task
 title: "F1–F7, F9, F10 — Blends as a live effect: params, subpath/node correspondence, interpolation, along a path, import, .xarast"
-status: in_progress
+status: done
 priority: high
 parent: XARA-US-0070
 author: mcp
 labels: [phase-13, live-effects, geom, xar, format]
 created: 2026-10-15T20:53:13Z
-updated: 2026-10-15T20:53:13Z
+updated: 2026-10-15T22:07:00Z
 started: 2026-10-15T20:53:13Z
+closed: 2026-10-15T22:07:00Z
 ---
 
 ## Description
