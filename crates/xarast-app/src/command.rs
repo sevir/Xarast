@@ -249,7 +249,7 @@ pub const ZOOM_STEP: f64 = std::f64::consts::SQRT_2;
 impl AppCommand {
     /// Every command, in menu order, then the tools in palette order.
     /// Tools reserved for later phases are not here: they have no key yet.
-    pub const ALL: [AppCommand; 60] = [
+    pub const ALL: [AppCommand; 62] = [
         AppCommand::Open,
         AppCommand::Import,
         AppCommand::Save,
@@ -294,6 +294,8 @@ impl AppCommand {
         AppCommand::Tool(ToolId::Freehand),
         AppCommand::Tool(ToolId::Zoom),
         AppCommand::Tool(ToolId::Pan),
+        AppCommand::Tool(ToolId::Fill),
+        AppCommand::Tool(ToolId::Transparency),
         AppCommand::Tool(ToolId::Text),
         AppCommand::Tool(ToolId::Shadow),
         AppCommand::Tool(ToolId::Bevel),
@@ -662,6 +664,16 @@ mod tests {
                 AppCommand::Tool(tool).intent(DevicePoint::new(0.0, 0.0)),
                 Intent::ChooseTool(tool)
             );
+        }
+    }
+
+    #[test]
+    fn every_tool_with_a_key_is_in_the_command_table() {
+        for tool in ToolId::ALL {
+            let command = AppCommand::Tool(tool);
+            if !command.shortcuts().is_empty() {
+                assert!(AppCommand::ALL.contains(&command), "{tool:?}");
+            }
         }
     }
 
