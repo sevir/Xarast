@@ -92,6 +92,7 @@ pub mod photo_panel;
 pub mod picking;
 pub mod place;
 pub mod prefs;
+mod procedural;
 pub mod prompt;
 pub mod recent;
 pub mod render_thread;

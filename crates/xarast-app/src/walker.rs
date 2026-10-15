@@ -102,6 +102,9 @@ pub struct WalkStats {
     /// nothing to draw. Generating a path from the parameters is
     /// Phase 7.
     pub shapes_pending: usize,
+    /// Clouds and plasma tiles this walker has generated in its life: a
+    /// redraw that regenerates none leaves it unchanged (phase 13 H5).
+    pub procedural_generated: u64,
 }
 
 impl WalkStats {
@@ -185,6 +188,9 @@ pub struct SceneWalker {
     live_epoch: Epoch,
     /// A 1 × 1 transparent image parked in freed slots.
     placeholder: Option<ImageRef>,
+    /// Clouds and plasma tiles, by their full parameter tuple
+    /// ([`crate::procedural`]).
+    procedural: crate::procedural::ProceduralImages,
     /// The photo chains the frame being walked previews, by object
     /// ([`Preview::photo`]).
     photo_preview: Vec<(NodeId, xarast_doc::PhotoOps)>,
@@ -386,6 +392,7 @@ impl SceneWalker {
         self.derived_failed.clear();
         self.derived_free.clear();
         self.derived_epoch = Epoch::default();
+        self.procedural.clear();
         self.proxies.clear();
         self.proxy_info.clear();
         self.attr_cache.clear();
@@ -765,6 +772,12 @@ impl SceneWalker {
         let stats = b.finish()?;
         self.scene_stats = stats;
         self.park_unused_proxies();
+        // A culled walk did not see every procedural fill: only a whole
+        // one may release the tiles it did not use.
+        if dirty.is_none() {
+            self.procedural.end_walk(&mut self.resolver);
+        }
+        self.stats.procedural_generated = self.procedural.generated();
         // Ramps no scene of late has used go past the budget (a fill drag
         // makes one per frame); this frame's are never evicted.
         self.resolver.trim_ramps(RAMP_CACHE_BUDGET);
@@ -1263,6 +1276,7 @@ impl SceneWalker {
             filter: quality.image_filter(),
             resolver: &mut self.resolver,
             images: &self.images,
+            procedural: &mut self.procedural,
         };
 
         if filled
@@ -1645,6 +1659,7 @@ impl SceneWalker {
                 filter: quality.image_filter(),
                 resolver: &mut self.resolver,
                 images: &self.images,
+                procedural: &mut self.procedural,
             };
             // Glyph outlines wind by the non-zero rule whatever the winding
             // attribute says: that is how fonts are drawn.
@@ -1733,6 +1748,7 @@ impl SceneWalker {
             filter: quality.image_filter(),
             resolver: &mut self.resolver,
             images: &self.images,
+            procedural: &mut self.procedural,
         };
         let t = object_transparency(attrs, AttrSlot::TranspFillGeometry, &mut ctx);
         let id = scene_id(doc, node);

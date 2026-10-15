@@ -46,6 +46,8 @@ pub(crate) struct PaintCtx<'a> {
     pub resolver: &'a mut Resolver,
     /// Bitmap resources already registered with the renderer.
     pub images: &'a HashMap<BitmapId, ImageId>,
+    /// Clouds and plasma tiles, generated on first use.
+    pub procedural: &'a mut crate::procedural::ProceduralImages,
 }
 
 /// A document point as continuous millipoints.
@@ -458,23 +460,38 @@ pub(crate) fn colour_paint(
                 },
             }
         }
-        // Procedural fills are generated in Phase 13. Until then they are
-        // shown as the midpoint of their two endpoint colours, which at
-        // least keeps the object visible and the scene renderable —
-        // `Paint::Fractal` deliberately refuses to rasterise.
-        FillGeometry::Fractal { from, to, .. } | FillGeometry::Noise { from, to, .. } => {
-            let (a, b) = (rgba(from, ctx.colours), rgba(to, ctx.colours));
-            let mix = |x: u8, y: u8| ((u16::from(x) + u16::from(y)) / 2) as u8;
-            let c = Rgba8 {
-                r: mix(a.r, b.r),
-                g: mix(a.g, b.g),
-                b: mix(a.b, b.b),
-                a: mix(a.a, b.a),
+        // Clouds and plasma: the generated grey tile as a contone bitmap
+        // on the fill's parallelogram (phase 13 H5). The profile is baked
+        // into the tile. A degenerate parallelogram is not generated (as
+        // in the original) and falls back to the start colour.
+        FillGeometry::Fractal {
+            origin,
+            axis_x,
+            axis_y,
+            from,
+            to,
+            ..
+        }
+        | FillGeometry::Noise {
+            origin,
+            axis_x,
+            axis_y,
+            from,
+            to,
+            ..
+        } => {
+            let Some(key) = crate::procedural::TileKey::of(fill, true) else {
+                return fallback_solid(fill, ctx);
             };
-            if c.a == 0 {
-                return None;
+            let id = ctx.procedural.image(ctx.resolver, key);
+            Paint::Image {
+                image: id,
+                mapping: bitmap_frame(*origin, *axis_x, *axis_y, None),
+                repeat: bitmap_repeat(Tiling::None, tiling),
+                filter: ctx.filter,
+                contone: Some((rgba(from, ctx.colours), rgba(to, ctx.colours), space)),
+                adjust: BitmapAdjust::default(),
             }
-            Paint::Solid(c)
         }
     };
 
@@ -691,14 +708,45 @@ pub(crate) fn transparency(
             mesh_repeat(tiling),
             MeshLevels::Four([c0.level, c1.level, c2.level, c3.level]),
         ),
-        // Procedurals have no transparency counterpart in the renderer
-        // yet; the flat average keeps the object composited roughly right,
-        // in its own family, instead of dropping the transparency.
-        FillGeometry::Fractal { from, to, .. } | FillGeometry::Noise { from, to, .. } => {
+        // Clouds and plasma: the generated tile read as levels, black at
+        // the start level and white at the end, as a bitmap transparency.
+        FillGeometry::Fractal {
+            origin,
+            axis_x,
+            axis_y,
+            from,
+            to,
+            profile,
+            ..
+        }
+        | FillGeometry::Noise {
+            origin,
+            axis_x,
+            axis_y,
+            from,
+            to,
+            profile,
+            ..
+        } => {
             if from.mode == TranspMode::None {
-                Transparency::OPAQUE
-            } else {
-                Transparency::flat(family_of(from.mode), mean_level(&[from.level, to.level]))
+                return Transparency::OPAQUE;
+            }
+            let Some(key) = crate::procedural::TileKey::of(t, false) else {
+                return Transparency::flat(
+                    family_of(from.mode),
+                    mean_level(&[from.level, to.level]),
+                );
+            };
+            let id = ctx.procedural.image(ctx.resolver, key);
+            Transparency {
+                family: family_of(from.mode),
+                source: TranspSource::Image {
+                    image: id,
+                    mapping: bitmap_frame(*origin, *axis_x, *axis_y, None),
+                    repeat: bitmap_repeat(Tiling::None, tiling),
+                    filter: ctx.filter,
+                    ramp: bitmap_level_ramp(*from, *to, *profile, ctx),
+                },
             }
         }
     }
