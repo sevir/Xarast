@@ -12,6 +12,7 @@
 //! antialiased edge to have somewhere to go.
 
 use xarast_color::Rgba8;
+use xarast_geom::bevel::BevelType;
 use xarast_geom::{Cap, DashPattern, FillRule, Join, Mp, Path, Point, Rect, StrokeStyle};
 
 use crate::backend::cpu::Resolver;
@@ -1369,6 +1370,24 @@ fn shadow_pt(
     }))
 }
 
+/// A bevel in points, painted (when outer) in a warm grey.
+fn bevel_pt(style: BevelType, indent: f64, outer: bool, angle: f32, contrast: f32) -> LayerEffect {
+    LayerEffect::Bevel(Box::new(crate::effect::BevelEffect {
+        style,
+        indent: indent * f64::from(Mp::PER_PT),
+        outer,
+        light_angle: angle,
+        light_tilt: 45.0,
+        contrast,
+        colour: Rgba8 {
+            r: 150,
+            g: 140,
+            b: 120,
+            a: 255,
+        },
+    }))
+}
+
 fn ellipse_path(cx: f64, cy: f64, r: f64) -> PathRef {
     // Four cubic quarters, the usual 0.5523 handle.
     let k = 0.552_284_75 * r;
@@ -1382,7 +1401,7 @@ fn ellipse_path(cx: f64, cy: f64, r: f64) -> PathRef {
     PathRef::new(b.build())
 }
 
-/// Live effects through the offscreen pipeline (phase 13): 13 cases.
+/// Live effects through the offscreen pipeline (phase 13): 19 cases.
 ///
 /// Each exercises something the pipeline has to get right beyond the blur
 /// itself: the silhouette (a transparent object is feathered by its shape,
@@ -1390,10 +1409,98 @@ fn ellipse_path(cx: f64, cy: f64, r: f64) -> PathRef {
 /// edge), nesting, an enclosing clip and layer, the profile, and the
 /// radius ceiling. The shadows add a silhouette that moves (a wall), is
 /// squashed and sheared (a floor) or grows (a glow), and a shadow whose
-/// object is outside the view while the shadow is in it.
+/// object is outside the view while the shadow is in it. The bevels add
+/// four styles inner and outer, a group lit by its shared outline, a
+/// tilted light and a bevel inside a shadow (XARA-T-0322).
 fn effect_cases() -> Vec<Case> {
     type Draw = fn(&mut SceneBuilder<'_>);
-    let cases: [(&str, Draw); 13] = [
+    let cases: [(&str, Draw); 19] = [
+        ("effect_bevel_flat_inner", |b| {
+            b.push_effect(bevel_pt(BevelType::Flat, 8.0, false, 315.0, 0.5));
+            b.fill(
+                SceneNodeId(10),
+                &star_path(),
+                FillRule::NonZero,
+                Paint::Solid(rgb(200, 120, 40)),
+            );
+            b.pop_effect();
+        }),
+        ("effect_bevel_round_inner", |b| {
+            b.push_effect(bevel_pt(BevelType::Round, 12.0, false, 300.0, 1.0));
+            b.fill(
+                SceneNodeId(10),
+                &ellipse_path(48.0, 48.0, 34.0),
+                FillRule::NonZero,
+                Paint::Solid(rgb(60, 110, 200)),
+            );
+            b.pop_effect();
+        }),
+        ("effect_bevel_smooth_inner_group", |b| {
+            // Two objects of different colours under one bevel: each keeps
+            // its own colour, lit by the shared outline.
+            b.push_effect(bevel_pt(BevelType::Smooth1, 10.0, false, 345.0, 0.47));
+            b.fill(
+                SceneNodeId(10),
+                &rect_path(12.0, 12.0, 84.0, 48.0),
+                FillRule::NonZero,
+                Paint::Solid(rgb(40, 160, 60)),
+            );
+            b.fill(
+                SceneNodeId(11),
+                &rect_path(12.0, 48.0, 84.0, 84.0),
+                FillRule::NonZero,
+                Paint::Solid(rgb(220, 200, 60)),
+            );
+            b.pop_effect();
+        }),
+        ("effect_bevel_point_outer", |b| {
+            b.push_effect(bevel_pt(BevelType::Point1, 10.0, true, 344.0, 0.5));
+            b.fill(
+                SceneNodeId(10),
+                &ellipse_path(48.0, 48.0, 26.0),
+                FillRule::NonZero,
+                Paint::Solid(rgb(180, 40, 40)),
+            );
+            b.pop_effect();
+        }),
+        ("effect_bevel_flat_outer_tilted", |b| {
+            let mut e = bevel_pt(BevelType::Flat, 6.0, true, 300.0, 0.5);
+            if let LayerEffect::Bevel(bv) = &mut e {
+                bv.light_tilt = 32.0;
+            }
+            b.push_effect(e);
+            b.fill(
+                SceneNodeId(10),
+                &star_path(),
+                FillRule::NonZero,
+                Paint::Solid(rgb(180, 40, 40)),
+            );
+            b.pop_effect();
+        }),
+        ("effect_bevel_in_shadow", |b| {
+            // The corpus's nesting: a shadow cast by a bevelled object.
+            b.push_effect(shadow_pt(
+                [1.0, 0.0, 0.0, 1.0, 6.0, 6.0],
+                9.0,
+                0.0,
+                6.0,
+                Rgba8 {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 140,
+                },
+            ));
+            b.push_effect(bevel_pt(BevelType::Flat, 7.0, false, 313.0, 0.5));
+            b.fill(
+                SceneNodeId(10),
+                &rect_path(16.0, 16.0, 72.0, 72.0),
+                FillRule::NonZero,
+                Paint::Solid(rgb(200, 150, 90)),
+            );
+            b.pop_effect();
+            b.pop_effect();
+        }),
         ("effect_shadow_wall", |b| {
             b.push_effect(shadow_pt(
                 [1.0, 0.0, 0.0, 1.0, 8.0, 6.0],

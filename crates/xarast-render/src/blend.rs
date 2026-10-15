@@ -427,9 +427,14 @@ pub fn build_blend_lut(family: BlendFamily, weights: LumaWeights) -> BlendLut {
                     let out = 128.0 + (f64::from(d) - 128.0) * k;
                     out.round().clamp(0.0, 255.0) as u8
                 }
-                // Bevel: 128 is flat, above lightens, below darkens.
+                // Bevel: 128 is flat (exactly: the bevel effect draws its
+                // plateaus at 128, XARA-T-0322), 255 white, 0 black.
                 BlendFamily::Bevel => {
-                    let v = f64::from(i32::from(l) * 2 - 255) / 255.0;
+                    let v = if l >= 128 {
+                        f64::from(l - 128) / 127.0
+                    } else {
+                        -f64::from(128 - l) / 128.0
+                    };
                     let out = if v >= 0.0 {
                         f64::from(d) + (255.0 - f64::from(d)) * v
                     } else {
@@ -521,10 +526,11 @@ pub fn blend_level(
             u8::try_from(((faded + 255) / 2).clamp(0, 255)).unwrap_or(128)
         }
         BlendFamily::Bevel => {
-            // The "source" red channel carries the bevel index.
-            let v = i32::from(src.r) * 2 - 255;
+            // The "source" red channel carries the bevel index, 128 flat;
+            // the transparency fades it towards flat.
+            let v = i32::from(src.r) - 128;
             let faded = v * i32::from(255 - t) / 255;
-            u8::try_from(((faded + 255) / 2).clamp(0, 255)).unwrap_or(128)
+            u8::try_from((128 + faded).clamp(0, 255)).unwrap_or(128)
         }
         BlendFamily::Saturation | BlendFamily::Luminosity | BlendFamily::Hue => t,
         BlendFamily::None => 255,

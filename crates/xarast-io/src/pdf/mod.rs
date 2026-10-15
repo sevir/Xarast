@@ -478,6 +478,9 @@ impl Translator<'_> {
                     xarast_render::LayerEffect::Shadow(_) => {
                         "a live effect (shadow) has no PDF equivalent"
                     }
+                    xarast_render::LayerEffect::Bevel(_) => {
+                        "a live effect (bevel) has no PDF equivalent"
+                    }
                 };
                 self.rasterise(
                     SceneNodeId(0),
