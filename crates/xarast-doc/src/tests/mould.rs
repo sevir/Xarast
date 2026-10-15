@@ -207,6 +207,36 @@ fn an_envelope_moulds_three_fill_points_and_keeps_the_frame_affine() {
     assert_eq!(mould_fill(&flat, &*g), flat);
 }
 
+/// A clouds or plasma tile moves its three corners with the object
+/// (XARA-T-0336); it has no fourth corner to take a perspective with.
+#[test]
+fn a_procedural_fill_follows_the_mould_by_its_three_corners() {
+    let noise = AttrValue::Fill(Paint::Noise {
+        origin: Point::raw(0, 0),
+        axis_x: Point::raw(100_000, 0),
+        axis_y: Point::raw(0, 100_000),
+        params: Box::default(),
+        from: rgb(1.0, 0.0, 0.0),
+        to: rgb(0.0, 0.0, 1.0),
+        profile: BiasGain::IDENTITY,
+    });
+    let (doc, c) = moulded(&perspective(), noise);
+    let shapes = generate(&doc, c).unwrap();
+    let AttrValue::Fill(Paint::Noise {
+        origin,
+        axis_x,
+        axis_y,
+        ..
+    }) = slot(&shapes[0].attrs, AttrSlot::FillGeometry)
+    else {
+        panic!("a noise fill");
+    };
+    let g = Perspective::new(trapezoid(), SOURCE);
+    assert_eq!(*origin, g.mould_point(Point::raw(0, 0)));
+    assert_eq!(*axis_x, g.mould_point(Point::raw(100_000, 0)));
+    assert_eq!(*axis_y, g.mould_point(Point::raw(0, 100_000)));
+}
+
 #[test]
 fn a_bitmap_becomes_its_parallelogram_filled_with_itself() {
     let params = perspective();

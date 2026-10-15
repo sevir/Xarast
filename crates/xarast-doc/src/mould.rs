@@ -313,8 +313,9 @@ fn far(a: Point, b: Point, c: Point) -> Point {
 /// points through `g`. Under a perspective, or for a fill that already has
 /// one, the frame gains its fourth corner and deforms projectively; under
 /// an envelope three points carry an affine frame, the perpendicular axis
-/// made explicit where the model implies it. Flat and procedural fills
-/// have no points and come back unchanged.
+/// made explicit where the model implies it. A flat fill has no points
+/// and comes back unchanged; a fractal or noise fill moves its three
+/// corners (no fourth: the affine part of a perspective).
 #[must_use]
 pub fn mould_fill<S: Stop>(fill: &FillGeometry<S>, g: &dyn MouldGeometry) -> FillGeometry<S> {
     let m = |p: Point| g.mould_point(p);
@@ -343,7 +344,25 @@ pub fn mould_fill<S: Stop>(fill: &FillGeometry<S>, g: &dyn MouldGeometry) -> Fil
     };
     let mut f = fill.clone();
     match &mut f {
-        FillGeometry::Flat { .. } | FillGeometry::Fractal { .. } | FillGeometry::Noise { .. } => {}
+        FillGeometry::Flat { .. } => {}
+        // A procedural tile is placed as a bitmap is, but its model has no
+        // fourth corner (XARA-T-0336): its three corners follow the mould,
+        // so it moves, turns, scales and shears with the object; under a
+        // perspective that is the affine part of the deformation only.
+        FillGeometry::Fractal {
+            origin,
+            axis_x,
+            axis_y,
+            ..
+        }
+        | FillGeometry::Noise {
+            origin,
+            axis_x,
+            axis_y,
+            ..
+        } => {
+            (*origin, *axis_x, *axis_y) = (m(*origin), m(*axis_x), m(*axis_y));
+        }
         FillGeometry::Linear {
             start, end, persp, ..
         } => {
