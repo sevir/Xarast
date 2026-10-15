@@ -415,9 +415,9 @@ the ladder most needs (the sampled ramp and the meshes). The façade in
 | Feature | PDF | Rung |
 |---|---|---|
 | Path fill, non-zero / even-odd | `f` / `f*` | native |
-| Fill rule Positive / Negative | — | **rasterise** (object alone) |
+| Fill rule Positive / Negative | `f` (non-zero) | native: the original and the renderer draw them non-zero (`FillRule::as_drawn`, XARA-T-0331; they were rasterised before) |
 | Clip, non-zero / even-odd | `W n` / `W* n` inside `q`/`Q` | native |
-| Clip, Positive / Negative | drawn non-zero | approximated (reported) |
+| Clip, Positive / Negative | `W n` (non-zero) | native, as above (was reported as approximated) |
 | Stroke: width, join, mitre, one cap, dashes + offset | `w J j M d`, drawn in document units under the object's transform (`cm`), coordinates relative to the path's corner | native |
 | Hairline (width 0) | `0 w` | native (device-dependent by definition) |
 | Different start and end caps | outline via `kurbo::stroke`, filled | workaround, exact |

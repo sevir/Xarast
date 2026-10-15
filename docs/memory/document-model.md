@@ -859,15 +859,40 @@ the digest recorded for that state serial.
       4.77 → 4.75, SoftShadow 10.51 → 10.49, ProbeX16 8.96 → 8.97, others
       unchanged); the corpus export check moves ≤ 0.12 (Broken Butt Cap pdf
       0.97 → 0.85) and no limit. `.xarast`: see `xarast-format.md`.
-- [ ] **The default winding rule differs from the original's too**, and
-      for the same reason `TAG_WINDINGRULE` is mis-read. The original's
-      default is `EvenOddWinding` (`Kernel/attr.cpp:1858`), its renderer
-      fills even-odd unless the rule says otherwise (`wxOil/grndrgn.cpp:
-      2233-2234`), and the record is the raw enum (0 nonzero, 1 negative,
-      2 even-odd, 3 positive; `Kernel/attr.h:169-175`,
-      `Kernel/lineattr.cpp:3506`, `:4276`). Xarast defaults to `NonZero`
-      and `FillRule::from_byte` follows the unused `CXF_WINDING_RULE_*`
-      1..4 table (the corpus's three records, all 1, mean *negative* and
-      read as non-zero). It changes every self-overlapping or same-direction
-      nested fill: needs its own task, with the previews and goldens
-      checked (found in XARA-T-0329, not changed there).
+- [x] **The default winding rule differs from the original's too.** Done
+      (XARA-T-0331, 2026-10-15): `default_for(WindingRule)` is
+      `FillRule::EvenOdd`, and `TAG_WINDINGRULE` is read as the
+      original's enum. Evidence: the original registers `EvenOddWinding`
+      as the document default (`Kernel/attr.cpp:1856-1858`, constructor
+      `:1802`) and the exporter never writes defaults; the record is the
+      raw `WindingType` byte (0 non-zero, 1 negative, 2 even-odd,
+      3 positive; `Kernel/attr.h:169-175`, `Kernel/lineattr.cpp:3506`,
+      `:4276`). Corpus: three records, all 1 (negative), on three
+      quadrilaterals of `scope3 simple`; no 2.
+      **Negative and positive draw as non-zero**, exactly: every renderer
+      of the original hands the rasteriser one flag, even-odd or not
+      (`wxOil/grndrgn.cpp:2233-2234`, `:2769`, `:3798`, clip regions
+      `:7114`; `wxOil/osrndrgn.cpp:1318-1321`). `FillRule::as_drawn`
+      says so; the CPU renderer, the PDF writer (it used to rasterise
+      them), picking, the walker's outside clip and the importer's
+      keyhole union use it. `FillRule::covers` keeps the strict sign
+      meaning for geometry that asks for it (`xarast-geom` hit tests,
+      booleans). The model keeps all four values (they round-trip).
+      Where the original itself forces a rule (stroke shapes and brushes
+      fill their outline non-zero, `Kernel/ppstroke.cpp:292`,
+      `ppvecstr.cpp:527`, `ppairbsh.cpp:539`; contours negative,
+      `Kernel/nodecntr.cpp:609`) Xarast has no such outline fill yet;
+      whoever adds one must set the rule there, not rely on the default.
+      Text glyph runs still fill non-zero in the walker, as before.
+      Measured (export 72 dpi, previews by the T-0248 registration): 9 of
+      59 PNGs change; preview |Δ| SimpleSphere 16.52 → **7.65** (its globe
+      is a wire frame, as the preview shows), Girard_simple 17.18 →
+      **9.53**, scope3 simple 25.16 → **16.07** (wood table, sky),
+      BLUECAR 6.24 → 5.58, GardenPlan 4.73 → 4.72, leafgirl 22.65 →
+      22.67, JagSS100 / WATCH2 unchanged; **Watch4 15.66 → 16.55** (its
+      wheels and rim open into rings — not attributed: it has 65 blends
+      and 126 moulds the walker does not generate yet, Phase 13). No
+      render golden moved (the fill-rule goldens draw the sign rules
+      non-zero, as before); export check 118 comparisons, 0 failures, no
+      limit moved (largest moves: scope3 svg 1.26 → 2.23, Girard pdf
+      1.05 → 1.63). `.xarast`: see `xarast-format.md`.

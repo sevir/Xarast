@@ -692,6 +692,9 @@ test in §13.5).
    Elision follows the SVG initial values, not the model's defaults: the model's
    default join is bevelled (the original's, XARA-T-0329), so a bevelled stroke
    writes `stroke-linejoin="bevel"` and a reader takes a missing one as `miter`.
+   Likewise the model's default fill rule is even-odd (the original's,
+   XARA-T-0331): an even-odd fill writes `fill-rule="evenodd"` (it hoists like
+   any paint) and a reader takes a filled element without one as non-zero.
 4. **Attribute hoisting.** If all the direct children of a `<g>` share the same value
    for an inheritable property, it is hoisted to the `<g>` and deleted from the children.
 5. **CSS classes.** If ≥ 8 elements share the same set of ≥ 3 paint properties, a rule
@@ -1820,7 +1823,7 @@ resource; the palette is Xarast-only data and is stored beside it:
 | ClipView (live clipping) | `TAG_CLIPVIEWCONTROLLER` 4084, `TAG_CLIPVIEW` 4085, `TAG_CLIPVIEW_PATH` 4137 | `<g clip-path="url(#cpN)">` + `<clipPath id="cpN">` with the path | `xarast:clipview="true"`, `xarast:clip-shape="#…"`, `xarast:clip-keep-shape="true"` |
 | Clipping by path (static) | — | `clip-path` | — |
 | Mask by transparency | see §6.5 | `mask` | `<xarast:transparency>` |
-| Fill rule | — | `fill-rule="nonzero|evenodd"`, `clip-rule` | — |
+| Fill rule | `TAG_WINDINGRULE` 178 | `fill-rule="nonzero|evenodd"`, `clip-rule` | `xarast:winding="negative|positive"` on a filled ink element (with no `fill-rule`, so non-zero): the original's sign rules, which it draws, and Xarast with it, as non-zero (XARA-T-0331); not inherited, not hoisted |
 
 Xara's ClipView keeps the clipping shape as an editable object. That is why the writer
 **MUST** emit the shape **twice**: inside the `<clipPath>` (where it is neither visible

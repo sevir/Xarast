@@ -939,6 +939,37 @@ XARA-T-0330 it was misused for include-line-widths) and
   the four corpus contours.
 - Not done: an inset path's source is still drawn by an SVG viewer.
 
+## The default fill rule became even-odd (XARA-T-0331, 2026-10-15)
+
+The model's default rule is now `EvenOdd` (the original's), while SVG's
+initial `fill-rule` is `nonzero`. As for the join (above):
+
+- **Writer:** a filled element whose rule is even-odd always writes
+  `fill-rule="evenodd"` (it was written only when it differed from the
+  old default, so the spelling is unchanged). It is a hoisted paint
+  property, so in practice it climbs to the spread `<g>` or into a class.
+  Corpus SVG 104 459 731 → 104 684 866 B (**+0.22 %**), packages
+  16 705 538 → 16 713 351 B (+0.05 %); largest: Spitfire +1.4 %,
+  amurdove +1.3 %, scope3 +1.1 %; 13 files unchanged.
+- **Negative and positive** (which draw non-zero, `document-model.md`)
+  write no `fill-rule` and **`xarast:winding="negative|positive"`** on
+  the ink element itself: an element attribute, not inherited, not
+  hoisted (`ink_known` lists it). Before this change they were written
+  as nothing and read back non-zero; the corpus's three negative quads
+  (scope3) needed it for the model to round-trip. The normal form
+  prints `winding=…` beside `evenodd`.
+- **Reader:** a filled element with no `fill-rule` is **non-zero**
+  (pushed explicitly: the generic `push` drops only the model's
+  default), refined by `xarast:winding`. A file written before this
+  change meant exactly that. An unfilled element records no rule and
+  takes the default.
+- Round trip after the change: model, bytes and render 59/59 (tests
+  unchanged); `tests/svg_read.rs` covers the four rules and the
+  old-file reading; `tests/svg.rs`'s hoisting/class tests now show
+  `fill-rule` hoisted to the spread and inside the class.
+- ClipView clips carry no rule of their own in the profile (unchanged):
+  a clip resolves the rule in force, now even-odd by default.
+
 ## Photo operations: `<xarast:photo-ops>` (XARA-US-0054, 2026-09-24)
 
 `svg/photo.rs` writes and parses a bitmap object's chain

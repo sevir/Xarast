@@ -920,10 +920,17 @@ profiles.
   cap as round and every round join as a mitre. Out-of-range bytes now
   stroke round, as the original's stroker does (`wxOil/grndrgn.cpp:
   1872-1902`).
-- **`TAG_WINDINGRULE` has the same bug, not fixed**: the raw enum is 0
-  nonzero, 1 negative, 2 even-odd, 3 positive, and the original's default
-  is even-odd; `FillRule::from_byte` follows the 1..4 table and the model
-  defaults to non-zero. Open TODO in `document-model.md`.
+- **`TAG_WINDINGRULE` had the same bug, fixed by XARA-T-0331**: the
+  byte is the raw enum, 0 non-zero, 1 negative, 2 even-odd, 3 positive
+  (`FillRule::from_byte`; out of range reads non-zero, which is how the
+  original draws anything but 2), and an object with no record fills
+  even-odd, the document default. Corpus
+  (`winding_rules_are_the_original_enum_and_the_default_is_never_written`):
+  three records, all 1, on `scope3 simple` records 7956/7966/7976 —
+  simple quads, so negative and non-zero fill them alike. The ClipView
+  keyhole union resolves each keyhole under its rule *as drawn*
+  (negative/positive → non-zero). Evidence and render numbers:
+  `document-model.md` (the closed winding TODO).
 - **Dead end: trusting `cxfdefs.h` for a record's enum values.** Check
   the record handler's `Write*`/`Read*` (`WritePreChildrenWeb` and the
   `Handle*Record` beside it) and a corpus histogram first.
