@@ -1381,11 +1381,19 @@ impl<'d, 'b> Emitter<'d, 'b> {
             if let Some(o) = fill_opacity {
                 el.p(st, p::FILL_OPACITY, &f64s(o, 3));
             }
+            // The model's default rule is even-odd (the original's), SVG's
+            // initial `fill-rule` is non-zero: even-odd is always written,
+            // and a negative or positive rule, which draws non-zero, also
+            // says which it is.
             if fill.value != "none"
-                && let AttrValue::WindingRule(FillRule::EvenOdd) =
-                    self.attrs.get(AttrSlot::WindingRule)
+                && let AttrValue::WindingRule(rule) = self.attrs.get(AttrSlot::WindingRule)
             {
-                el.p(st, p::FILL_RULE, "evenodd");
+                match rule {
+                    FillRule::EvenOdd => el.p(st, p::FILL_RULE, "evenodd"),
+                    FillRule::NonZero => {}
+                    FillRule::Negative => el.a("xarast:winding", "negative"),
+                    FillRule::Positive => el.a("xarast:winding", "positive"),
+                }
             }
             if let Some(r) = &fill.palette_ref {
                 el.p(st, p::FILL_REF, r);

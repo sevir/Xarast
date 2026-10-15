@@ -314,8 +314,21 @@ impl<'d> Reader<'d, '_, '_> {
                     push(&mut out, AttrValue::TranspFillMapping(tl));
                 }
             }
-            if f.visible && cs.get("fill-rule") == Some("evenodd") {
-                push(&mut out, AttrValue::WindingRule(FillRule::EvenOdd));
+            if f.visible {
+                // No `fill-rule` is SVG's initial non-zero, whatever the
+                // model's default (even-odd, the original's): files written
+                // when the model's default was non-zero mean the same.
+                // `xarast:winding` refines non-zero to the sign rules,
+                // which draw as non-zero.
+                let rule = match cs.get("fill-rule") {
+                    Some("evenodd") => FillRule::EvenOdd,
+                    _ => match xa(e, "winding") {
+                        Some("negative") => FillRule::Negative,
+                        Some("positive") => FillRule::Positive,
+                        _ => FillRule::NonZero,
+                    },
+                };
+                push(&mut out, AttrValue::WindingRule(rule));
             }
         } else if info.image {
             let mask = attr(e, "", "mask").and_then(|m| self.by_ref(m));

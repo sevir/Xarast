@@ -802,10 +802,14 @@ impl Nf<'_> {
                 let _ = write!(s, " fill-opacity={}", f64s(o, 3));
             }
             if fill.value != "none"
-                && let AttrValue::WindingRule(FillRule::EvenOdd) =
-                    self.attrs.get(AttrSlot::WindingRule)
+                && let AttrValue::WindingRule(rule) = self.attrs.get(AttrSlot::WindingRule)
             {
-                s.push_str(" evenodd");
+                match rule {
+                    FillRule::EvenOdd => s.push_str(" evenodd"),
+                    FillRule::NonZero => {}
+                    FillRule::Negative => s.push_str(" winding=negative"),
+                    FillRule::Positive => s.push_str(" winding=positive"),
+                }
             }
             if let Some(r) = &fill.palette_ref {
                 let _ = write!(s, " fill-ref={r}");

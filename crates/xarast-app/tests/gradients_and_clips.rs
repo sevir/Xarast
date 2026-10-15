@@ -20,7 +20,7 @@ use xarast_doc::{
     AttrValue, BuildLimits, ClipViewMode, ClipViewNode, Document, NodeKind, PathNode, ShapeKind,
     ShapeNode,
 };
-use xarast_geom::{Path, Point, Rect, Vector};
+use xarast_geom::{FillRule, Path, Point, Rect, Vector};
 
 type Rgb = [u8; 3];
 const RED: Rgb = [255, 0, 0];
@@ -85,7 +85,15 @@ fn clip_view(
     x: i32,
     y: i32,
     clip: NodeKind,
+    rule: Option<FillRule>,
 ) {
+    // A rule of its own comes from a group around it, as an import puts
+    // it (the clipping path is the ClipView's first child).
+    if let Some(r) = rule {
+        b.node(NodeKind::Group(Box::default())).unwrap();
+        b.push_scope().unwrap();
+        b.attribute(AttrValue::WindingRule(r)).unwrap();
+    }
     b.node(NodeKind::ClipView(ClipViewNode { mode })).unwrap();
     b.push_scope().unwrap();
     b.node(clip).unwrap();
@@ -101,6 +109,9 @@ fn clip_view(
         .unwrap();
     b.pop_scope();
     b.pop_scope();
+    if rule.is_some() {
+        b.pop_scope();
+    }
 }
 
 /// Two overlapping squares in one path, both wound the same way: under
@@ -129,6 +140,7 @@ fn a_clip_view_keeps_the_outside_or_the_inside_of_its_path() {
         100_000,
         100_000,
         square(100_000, 100_000),
+        None,
     );
     clip_view(
         &mut b,
@@ -136,6 +148,7 @@ fn a_clip_view_keeps_the_outside_or_the_inside_of_its_path() {
         600_000,
         100_000,
         square(600_000, 100_000),
+        None,
     );
     clip_view(
         &mut b,
@@ -143,11 +156,21 @@ fn a_clip_view_keeps_the_outside_or_the_inside_of_its_path() {
         1_100_000,
         100_000,
         overlapping_squares(1_150_000, 150_000),
+        Some(FillRule::NonZero),
+    );
+    // The document's default rule, even-odd (XARA-T-0331).
+    clip_view(
+        &mut b,
+        ClipViewMode::Outside,
+        1_600_000,
+        100_000,
+        overlapping_squares(1_650_000, 150_000),
+        None,
     );
     let doc = b.finish().unwrap().0;
     let (px, unsupported) = probe(
         doc,
-        Rect::raw(0, 0, 1_600_000, 600_000),
+        Rect::raw(0, 0, 2_100_000, 600_000),
         &[
             // Outside: kept around the hole, nothing in it (not even the
             // clipping shape's own black).
@@ -163,12 +186,17 @@ fn a_clip_view_keeps_the_outside_or_the_inside_of_its_path() {
             (1_200_000, 200_000),
             (1_275_000, 275_000),
             (1_375_000, 375_000),
+            // The same path even-odd: the overlap is not part of the hole.
+            (1_775_000, 275_000),
+            (1_875_000, 375_000),
         ],
     );
     assert_eq!(unsupported, 0);
     assert_eq!(
         px,
-        [RED, RED, WHITE, WHITE, RED, RED, WHITE, WHITE, WHITE],
+        [
+            RED, RED, WHITE, WHITE, RED, RED, WHITE, WHITE, WHITE, RED, WHITE
+        ],
         "outside, inside, outside of a self-overlapping path"
     );
 }

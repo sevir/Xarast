@@ -45,6 +45,7 @@ fn ink_known(ns: &str, l: &str) -> bool {
                 | "stroke-ref"
                 | "blend"
                 | "stroke-blend"
+                | "winding"
                 | "stroke-mask"
                 | "quality"
                 | "overprint-stroke"

@@ -35,7 +35,7 @@ use xarast_format::{
     OpenOptions, PackageWriter, ResourceIndex, SaveOptions, WriteOptions, XarastReader,
     open_reader, save_opened_to, save_to,
 };
-use xarast_geom::{BiasGain, Join, Matrix, Mp, Path, Point, Vector};
+use xarast_geom::{BiasGain, FillRule, Join, Matrix, Mp, Path, Point, Vector};
 
 /// A colour 8-bit sRGB holds exactly: what a key stop can carry.
 fn rgb(r: f32, g: f32, b: f32) -> Colour {
@@ -2084,5 +2084,96 @@ fn a_contour_is_baked_as_real_offset_paths_and_reads_back_exactly() {
     assert!(!export.svg.contains("xarast"), "{}", export.svg);
     for r in rings.iter().flatten().filter(|d| !d.is_empty()) {
         assert!(export.svg.contains(r.as_str()), "{r}");
+    }
+}
+
+/// The rule in force at `n`.
+fn rule_at(doc: &Document, n: xarast_doc::NodeId) -> AttrValue {
+    resolve_uncached(&doc.tree, n, &doc.defaults)
+        .get(AttrSlot::WindingRule)
+        .clone()
+}
+
+/// Filled triangles under the default rule (even-odd) and under each of
+/// the other three, set on the object (XARA-T-0331).
+fn winding_doc() -> Document {
+    let mut b = xarast_doc::builder::skeleton(BuildLimits::default()).unwrap();
+    for (i, rule) in [
+        None,
+        Some(FillRule::NonZero),
+        Some(FillRule::Negative),
+        Some(FillRule::Positive),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let n = i32::try_from(i).unwrap();
+        b.node(triangle(50_000 + 150_000 * n, 300_000)).unwrap();
+        b.push_scope().unwrap();
+        b.attribute(flat(rgb(0.9, 0.5, 0.1))).unwrap();
+        if let Some(r) = rule {
+            b.attribute(AttrValue::WindingRule(r)).unwrap();
+        }
+        b.pop_scope();
+    }
+    b.finish().unwrap().0
+}
+
+fn paths_of(doc: &Document) -> Vec<xarast_doc::NodeId> {
+    let t = &doc.tree;
+    t.preorder(t.root())
+        .filter(|n| matches!(t.kind(*n), Some(NodeKind::Path(_))))
+        .collect()
+}
+
+#[test]
+fn every_winding_rule_reads_back_and_even_odd_is_written() {
+    let doc = winding_doc();
+    let first = package(&doc, SvgOptions::default());
+    let svg = svg_of(&first);
+    assert_eq!(svg.matches("fill-rule=\"evenodd\"").count(), 1, "{svg}");
+    assert!(svg.contains("xarast:winding=\"negative\""), "{svg}");
+    assert!(svg.contains("xarast:winding=\"positive\""), "{svg}");
+    let mut o = open(&first);
+    assert!(o.diagnostics.is_empty(), "{:?}", o.diagnostics);
+    let (a, b) = (paths_of(&doc), paths_of(&o.document));
+    assert_eq!(b.len(), 4);
+    let want = [
+        FillRule::EvenOdd,
+        FillRule::NonZero,
+        FillRule::Negative,
+        FillRule::Positive,
+    ];
+    for ((x, y), w) in a.iter().zip(&b).zip(want) {
+        assert_eq!(rule_at(&doc, *x), AttrValue::WindingRule(w));
+        assert_eq!(rule_at(&o.document, *y), AttrValue::WindingRule(w));
+    }
+    assert_eq!(normal_form(&doc), normal_form(&o.document));
+    assert_eq!(first, resave(&mut o), "a fixed point");
+}
+
+#[test]
+fn no_fill_rule_written_is_non_zero_as_when_the_default_was_one() {
+    // Before XARA-T-0331 the model's default rule was non-zero and was
+    // never written: a fill without `fill-rule` still reads as non-zero,
+    // and the sign rules (then written as nothing) as non-zero too.
+    let doc = winding_doc();
+    let svg = svg_of(&package(&doc, SvgOptions::default()));
+    let old = svg
+        .replace(" fill-rule=\"evenodd\"", "")
+        .replace(" xarast:winding=\"negative\"", "")
+        .replace(" xarast:winding=\"positive\"", "");
+    assert!(
+        !old.contains("evenodd") && !old.contains("winding"),
+        "{old}"
+    );
+    let r = read(&old);
+    let paths = paths_of(&r.document);
+    assert_eq!(paths.len(), 4);
+    for n in &paths {
+        assert_eq!(
+            rule_at(&r.document, *n),
+            AttrValue::WindingRule(FillRule::NonZero)
+        );
     }
 }

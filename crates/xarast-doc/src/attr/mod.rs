@@ -683,7 +683,9 @@ pub fn default_for(slot: AttrSlot) -> AttrValue {
         AttrSlot::TranspFillMapping => AttrValue::TranspFillMapping(Tiling::None),
         AttrSlot::FillEffect => AttrValue::FillEffect(FillEffect::Fade),
         AttrSlot::LineWidth => AttrValue::LineWidth(Mp::new(250)),
-        AttrSlot::WindingRule => AttrValue::WindingRule(FillRule::NonZero),
+        // The original registers even-odd as the document default
+        // (`Kernel/attr.cpp:1856-1858`), and a `.xar` never writes it.
+        AttrSlot::WindingRule => AttrValue::WindingRule(FillRule::EvenOdd),
         // The original registers bevelled joins as the document default
         // (`Kernel/attr.cpp:1967-1980`), and a `.xar` never writes it.
         AttrSlot::JoinType => AttrValue::JoinType(Join::Bevel),

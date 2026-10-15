@@ -258,8 +258,9 @@ fn the_header_is_the_normative_one() {
 fn exact_things_are_plain_svg_and_nothing_more() {
     let (svg, stats, _) = write(&fixture());
     // Document y 100..200 on an 841.89 pt page: SVG y 641.89..741.89.
+    // The model's default rule, even-odd, is not SVG's initial one.
     assert!(
-        svg.contains("x=\"100\" y=\"641.89\" width=\"200\" height=\"100\"/>"),
+        svg.contains("x=\"100\" y=\"641.89\" width=\"200\" height=\"100\" fill-rule=\"evenodd\"/>"),
         "{svg}"
     );
     assert!(svg.contains("fill=\"#c33\""));
@@ -474,11 +475,16 @@ fn pass_4_hoists_shared_paint_onto_the_group_only_when_every_child_agrees() {
     let doc = groups_fixture();
     let (svg, stats) = write_with(&doc, true, false);
     assert!(!svg.contains("class="), "pass 5 is off");
-    // Every rectangle is red: the fill climbs through both groups and the
-    // layer to the spread, the last `<g>` above them.
+    // Every rectangle is red and even-odd (the model's default): the fill
+    // and its rule climb through both groups and the layer to the spread,
+    // the last `<g>` above them.
     assert_eq!(svg.matches("fill=\"#f00\"").count(), 1);
+    assert_eq!(svg.matches("fill-rule=\"evenodd\"").count(), 1);
     assert!(svg.contains("xarast:kind=\"spread\""), "{svg}");
-    assert!(svg.contains("xarast:margin=\"36\" fill=\"#f00\">"), "{svg}");
+    assert!(
+        svg.contains("xarast:margin=\"36\" fill=\"#f00\" fill-rule=\"evenodd\">"),
+        "{svg}"
+    );
     // The first group takes the stroke; its rects keep nothing.
     assert!(
         svg.contains("xarast:kind=\"group\" stroke=\"#00f\" stroke-width=\"2\">"),
@@ -495,7 +501,7 @@ fn pass_5_turns_widely_shared_paint_into_a_css_class() {
     let (svg, stats) = write_with(&doc, false, true);
     assert!(
         svg.contains(
-            "<style type=\"text/css\">\n.c1{fill:#f00;stroke:#00f;stroke-width:2}\n</style>"
+            "<style type=\"text/css\">\n.c1{fill:#f00;fill-rule:evenodd;stroke:#00f;stroke-width:2}\n</style>"
         ),
         "{svg}"
     );
