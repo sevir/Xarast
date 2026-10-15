@@ -1012,16 +1012,24 @@ impl<'d, 'r, 'f> Reader<'d, 'r, 'f> {
         let u = |n: &str, d: u32| g(n).and_then(|v| v.parse().ok()).unwrap_or(d);
         match kind {
             "contour" => LiveKind::Contour(Box::new(ContourParams {
-                steps: u("steps", 1),
-                width: mpv("width"),
+                steps: u("steps", 5),
+                width: Mp::new(mpv("width").raw().saturating_abs()),
                 outer: g("direction") != Some("inner"),
-                include_line_widths: is_true(g("insets")),
+                include_line_widths: is_true(g("include-line-widths")),
                 join: match g("join") {
-                    Some("round") => Join::Round,
-                    Some("bevel") => Join::Bevel,
-                    _ => Join::Mitre,
+                    Some("round") => Some(Join::Round),
+                    Some("bevel") => Some(Join::Bevel),
+                    Some("miter") => Some(Join::Mitre),
+                    _ => None,
                 },
                 profile: prof("profile"),
+                colour_profile: prof("colour-profile"),
+                colour_effect: match g("colour-effect") {
+                    Some("rainbow") => xarast_color::FillEffect::Rainbow,
+                    Some("alt-rainbow") => xarast_color::FillEffect::AltRainbow,
+                    _ => xarast_color::FillEffect::Fade,
+                },
+                inset: is_true(g("insets")),
             })),
             "shadow" => LiveKind::Shadow(Box::new(ShadowParams {
                 kind: match g("type") {

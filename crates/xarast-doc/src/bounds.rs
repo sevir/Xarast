@@ -132,14 +132,21 @@ pub fn compute_bounds_with(tree: &Tree, id: NodeId, stroke_extent: xarast_geom::
             }
         }
         // An outer bevel's faces lie outside its source, as far as its
-        // width reaches.
+        // width reaches; an outer contour's rings as far as its distance
+        // (times the mitre limit when its corners may be mitred: a cheap
+        // bound, not the rings' own box, which only regeneration knows).
         NodeKind::Live(l)
             if l.role == crate::live::LiveRole::Controller
-                && matches!(&l.kind, crate::live::LiveKind::Bevel(p) if p.outer) =>
+                && match &l.kind {
+                    crate::live::LiveKind::Bevel(p) => p.outer,
+                    crate::live::LiveKind::Contour(p) => p.outer,
+                    _ => false,
+                } =>
         {
             let own = union_children(tree, id, *attrs);
             match &l.kind {
                 crate::live::LiveKind::Bevel(p) if !own.is_empty() => own.inflated(p.growth()),
+                crate::live::LiveKind::Contour(p) if !own.is_empty() => own.inflated(p.growth()),
                 _ => own,
             }
         }

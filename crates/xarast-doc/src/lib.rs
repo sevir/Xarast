@@ -55,6 +55,7 @@ pub mod bitmap_fill;
 pub mod bitmap_place;
 pub mod bounds;
 pub mod builder;
+pub mod contour;
 pub mod digest;
 pub mod document;
 pub mod fill;

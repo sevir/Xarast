@@ -133,21 +133,105 @@ pub struct BlendParams {
     pub profile: BiasGain,
 }
 
-/// Parameters of a contour.
+/// The most rings a contour draws; a file asking for more is clamped
+/// (each ring is one offset of the whole source).
+pub const MAX_CONTOUR_RINGS: usize = 256;
+
+/// Parameters of a contour (`research/02 §6.8`; the `.xar` record is
+/// `research/01`'s 4066).
+///
+/// The original keeps the width signed (negative for an outer contour,
+/// `Kernel/ncntrcnt.h:255`); the model keeps the distance and the direction
+/// apart. The colour the last ring is drawn in is not a parameter: it is
+/// the attributes of the generated node (the original's `NodeContour`),
+/// and the rings between blend from those to the first object's
+/// (`crate::contour`). The flattening tolerance is derived from the
+/// source's size, as the original derives it, so it is not kept either.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ContourParams {
-    /// Number of steps.
+    /// Number of steps between the outline and the last ring: the original
+    /// draws `steps + 1` rings ([`rings`](Self::rings)).
     pub steps: u32,
-    /// Contour width; the sign selects inside or outside.
+    /// How far the last ring lies from the outline. Only its magnitude
+    /// counts; [`outer`](Self::outer) gives the direction.
     pub width: Mp,
-    /// Whether the contour lies outside the object.
+    /// Whether the contour lies outside the object (drawn beneath it)
+    /// rather than inside (drawn over it).
     pub outer: bool,
-    /// Whether line widths count towards the offset.
+    /// Whether a closed object's visible outline counts towards the
+    /// silhouette (it grows by half the line width). The original draws
+    /// contours without (`Kernel/nodecntr.cpp:1376-1379`); nothing in a
+    /// `.xar` file sets it.
     pub include_line_widths: bool,
-    /// The corner treatment.
-    pub join: xarast_geom::Join,
-    /// The spacing profile.
+    /// The corner treatment; `None` takes the join attribute in force at
+    /// the generated node, as the original does.
+    pub join: Option<xarast_geom::Join>,
+    /// The spacing profile (the original's object profile).
     pub profile: BiasGain,
+    /// The colour profile (the original's attribute profile).
+    pub colour_profile: BiasGain,
+    /// How colours interpolate between the rings.
+    pub colour_effect: xarast_color::FillEffect,
+    /// An inset path: one ring at the full width, drawn instead of the
+    /// object (the original's `m_bInsetPath`, bit 7 of the record's type).
+    pub inset: bool,
+}
+
+impl Default for ContourParams {
+    /// The original's new contour: five steps, 5 pt, outside, fading.
+    fn default() -> ContourParams {
+        ContourParams {
+            steps: 5,
+            width: Mp::new(5000),
+            outer: true,
+            include_line_widths: false,
+            join: None,
+            profile: BiasGain::IDENTITY,
+            colour_profile: BiasGain::IDENTITY,
+            colour_effect: xarast_color::FillEffect::Fade,
+            inset: false,
+        }
+    }
+}
+
+impl ContourParams {
+    /// How many rings are drawn: one for an inset path, `steps + 1`
+    /// otherwise (`Kernel/nodecntr.cpp:1296-1306`), at most
+    /// [`MAX_CONTOUR_RINGS`].
+    #[must_use]
+    pub fn rings(&self) -> usize {
+        if self.inset {
+            1
+        } else {
+            usize::try_from(self.steps)
+                .unwrap_or(usize::MAX)
+                .saturating_add(1)
+                .min(MAX_CONTOUR_RINGS)
+        }
+    }
+
+    /// The distance from the outline to the last ring, in millipoints,
+    /// non-negative.
+    #[must_use]
+    pub fn distance(&self) -> f64 {
+        f64::from(self.width.raw()).abs()
+    }
+
+    /// How far beyond its source an outer contour can reach, for bounds:
+    /// the distance, times the contour mitre limit when the corners may be
+    /// mitred (the join is a mitre or comes from the attributes). Zero for
+    /// an inner contour.
+    #[must_use]
+    pub fn growth(&self) -> Mp {
+        if !self.outer {
+            return Mp::ZERO;
+        }
+        let reach = match self.join {
+            Some(xarast_geom::Join::Round | xarast_geom::Join::Bevel) => 1.0,
+            _ => xarast_geom::contour::CONTOUR_MITRE_LIMIT,
+        };
+        Mp::from_f64_round((self.distance() * reach).ceil())
+    }
 }
 
 /// Which sort of shadow.

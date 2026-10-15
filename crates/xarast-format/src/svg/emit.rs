@@ -2595,9 +2595,28 @@ fn live_params(
                 "xarast:direction",
                 if c.outer { "outer" } else { "inner" },
             );
-            attr(&mut s, "xarast:insets", bool_s(c.include_line_widths));
-            attr(&mut s, "xarast:join", join_name(c.join));
-            attr(&mut s, "xarast:profile", &profile(c.profile));
+            if let Some(j) = c.join {
+                attr(&mut s, "xarast:join", join_name(j));
+            }
+            // Shortest exact spellings, as a shadow's: a reload is bit for
+            // bit.
+            let exact =
+                |p: xarast_geom::BiasGain| format!("{} {}", f64s_exact(p.bias), f64s_exact(p.gain));
+            attr(&mut s, "xarast:profile", &exact(c.profile));
+            attr(&mut s, "xarast:colour-profile", &exact(c.colour_profile));
+            match c.colour_effect {
+                xarast_color::FillEffect::Fade => {}
+                xarast_color::FillEffect::Rainbow => {
+                    attr(&mut s, "xarast:colour-effect", "rainbow");
+                }
+                xarast_color::FillEffect::AltRainbow => {
+                    attr(&mut s, "xarast:colour-effect", "alt-rainbow");
+                }
+            }
+            attr(&mut s, "xarast:insets", bool_s(c.inset));
+            if c.include_line_widths {
+                attr(&mut s, "xarast:include-line-widths", "true");
+            }
         }
         LiveKind::Shadow(sh) => {
             s.push_str("<xarast:shadow");

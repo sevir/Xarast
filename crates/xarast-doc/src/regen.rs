@@ -185,8 +185,12 @@ pub fn regenerate(doc: &Document, controller: NodeId, dpi: f64) -> Result<LiveOu
     // One arm per kind, so that a generator lands as a change to exactly
     // one line, and a new kind cannot be added without deciding.
     Ok(match &l.kind {
+        // Geometry, independent of the resolution.
+        LiveKind::Contour(_) => match crate::contour::generate(doc, controller) {
+            Some(shapes) => LiveOutput::Shapes(Arc::from(shapes)),
+            None => LiveOutput::Stored,
+        },
         LiveKind::Blend(_)
-        | LiveKind::Contour(_)
         | LiveKind::Mould(_)
         | LiveKind::Brush(_)
         | LiveKind::Shadow(_)
@@ -248,6 +252,37 @@ impl LiveCache {
     /// Forgets everything.
     pub fn clear(&mut self) {
         self.entries.clear();
+    }
+
+    /// `controller`'s output for its current state at `dpi`: the cached
+    /// one when its key still matches, else regenerated with `generate`
+    /// and cached. What a consumer that walks the tree once per frame
+    /// (the scene walker) uses instead of a queue: the key catches every
+    /// change, so nothing has to be marked. `None` when `controller` is
+    /// not a controller or could not be regenerated (and nothing stale is
+    /// kept).
+    pub fn current_or_regenerate(
+        &mut self,
+        doc: &Document,
+        controller: NodeId,
+        dpi: f64,
+        generate: &mut Generator<'_>,
+    ) -> Option<Arc<LiveOutput>> {
+        let key = regen_key(doc, controller, dpi)?;
+        if let Some(out) = self.current(controller, key) {
+            return Some(Arc::clone(out));
+        }
+        match generate(doc, controller, dpi) {
+            Ok(out) => {
+                let out = Arc::new(out);
+                self.entries.insert(controller, (key, Arc::clone(&out)));
+                Some(out)
+            }
+            Err(_) => {
+                self.entries.remove(&controller);
+                None
+            }
+        }
     }
 }
 

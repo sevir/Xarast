@@ -614,8 +614,11 @@ impl Canon for LiveNode {
                 h.add(&p.width);
                 h.bool(p.outer);
                 h.bool(p.include_line_widths);
-                h.u8(p.join as u8);
+                h.u8(p.join.map_or(0, |j| j as u8));
                 h.add(&p.profile);
+                h.add(&p.colour_profile);
+                h.u8(p.colour_effect as u8);
+                h.bool(p.inset);
             }
             LiveKind::Shadow(p) => {
                 h.u8(p.kind as u8);
