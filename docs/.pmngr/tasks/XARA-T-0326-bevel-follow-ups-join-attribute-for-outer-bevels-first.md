@@ -2,14 +2,15 @@
 id: XARA-T-0326
 type: task
 title: "Bevel follow-ups: join attribute for outer bevels, first-frame cost (cache the lighting map), multi-fill inner bevels, resolution-independent SVG bake"
-status: in_progress
+status: done
 priority: medium
 parent: XARA-US-0069
 author: mcp
 labels: [phase-13, live-effects, render, perf]
 created: 2026-10-15T13:50:43Z
-updated: 2026-10-15T15:37:55Z
+updated: 2026-10-15T17:09:40Z
 started: 2026-10-15T15:37:55Z
+closed: 2026-10-15T17:09:40Z
 ---
 
 ## Description
