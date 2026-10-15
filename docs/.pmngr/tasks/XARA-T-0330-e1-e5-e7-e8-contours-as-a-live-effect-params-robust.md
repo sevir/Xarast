@@ -2,14 +2,15 @@
 id: XARA-T-0330
 type: task
 title: "E1–E5, E7, E8 — Contours as a live effect: params, robust offsetting, steps and colours, import 4066/4067, .xarast round trip"
-status: in_progress
+status: done
 priority: high
 parent: XARA-US-0070
 author: mcp
 labels: [phase-13, live-effects, geom, xar, format]
 created: 2026-10-15T19:00:19Z
-updated: 2026-10-15T19:00:19Z
+updated: 2026-10-15T20:53:05Z
 started: 2026-10-15T19:00:19Z
+closed: 2026-10-15T20:53:05Z
 ---
 
 ## Description
