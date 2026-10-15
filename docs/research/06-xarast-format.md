@@ -689,6 +689,9 @@ test in §13.5).
    emitted.
    **Exception:** if the SVG default value differs from the value inherited from the
    parent `<g>`, it **MUST** be emitted explicitly.
+   Elision follows the SVG initial values, not the model's defaults: the model's
+   default join is bevelled (the original's, XARA-T-0329), so a bevelled stroke
+   writes `stroke-linejoin="bevel"` and a reader takes a missing one as `miter`.
 4. **Attribute hoisting.** If all the direct children of a `<g>` share the same value
    for an inheritable property, it is hoisted to the `<g>` and deleted from the children.
 5. **CSS classes.** If ≥ 8 elements share the same set of ≥ 3 paint properties, a rule
@@ -1568,10 +1571,15 @@ default is `linearRGB`, which produces blurs and shadows visibly different from 
 | `xarast:light-elevation` | the light's height above the plane, degrees (the record's tilt; 45 when the record has none) |
 | `xarast:contrast` | `0..=1` (the record's 0..100) |
 | `xarast:colour` (+ `xarast:colour-ref`) | the bevel node's own flat fill, only when it has one; otherwise the band takes the first colour of the source's first object |
+| `xarast:join` | `miter`, `round` or `bevel`: the join in force where the renderer resolves the bevel's (the controller's generated child, else the controller), always written; none reads as `miter` (XARA-T-0329) |
 
-The join is not a bevel attribute: it is the join attribute in force at
-the bevel (the controller's or an ancestor's `stroke-linejoin`), as the
-original's bevel node finds it applied (`Kernel/nodebev.cpp:845-850`).
+The join is not a bevel parameter in the model: it is the join attribute
+in force at the bevel, as the original's bevel node finds it applied
+(`Kernel/nodebev.cpp:845-850`). Because an unstroked object writes no
+`stroke-linejoin`, the writer records it as `xarast:join`, and the reader
+puts it back as a join attribute on the controller when it differs from
+the join already in force (a stroke under it whose join equals the
+model's default is then read as an explicit attribute).
 `TAG_BEVATTR_*` are read and discarded by the original and are not
 written.
 

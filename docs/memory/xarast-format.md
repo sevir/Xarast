@@ -872,6 +872,37 @@ the `live-source`:
   reads the source's first object instead — what the original copies onto
   its bevel node anyway — in both the walker and the writer.
 
+## The default join became bevelled (XARA-T-0329, 2026-10-15)
+
+The model's default join is now `Bevel` (the original's), while SVG's
+initial `stroke-linejoin` is `miter`. What changed, and why old files keep
+their meaning:
+
+- **Writer, strokes: unchanged.** It already wrote `round` and `bevel` and
+  left a mitre out (SVG's initial value), so every bevelled stroke now
+  carries `stroke-linejoin="bevel"` (hoisted and classed like any paint).
+  Corpus SVG 99.5 → 100.1 MB (+0.6 %).
+- **Reader, strokes:** no `stroke-linejoin` is a **mitre**, pushed as an
+  explicit attribute (the generic `push` would have dropped it as "the
+  default" only while the default was a mitre). A file written before
+  this change meant exactly that.
+- **Bevels:** an unstroked object writes no `stroke-linejoin`, so the join
+  a bevel resolves (at its generated child, as the walker does) is now
+  written as `xarast:join` on `<xarast:bevel>`, always. The reader puts it
+  back as a join attribute on the controller when it differs from the
+  join in force, and keeps a stack (`Reader::joins`) of the joins it put
+  in force: a stroke under such a controller whose join equals the
+  model's default is then written as an explicit attribute too. **No
+  `xarast:join` reads as a mitre** — what a bevel saved between XARA-T-0322
+  and this change meant. Without it testimp1 (its one explicit-mitre
+  controller) failed the render round trip (230 px).
+- Round trip after the change: model, bytes and render 59/59 (the tests
+  unchanged); `tests/svg_read.rs` covers the bevel joins and the
+  old-file reading.
+- **Dead end: elide what equals the model's default.** The profile elides
+  SVG's initial values, not the model's defaults (`research/06 §4.5.1` pass 3);
+  the two only coincided while the default join was a mitre.
+
 ## Photo operations: `<xarast:photo-ops>` (XARA-US-0054, 2026-09-24)
 
 `svg/photo.rs` writes and parses a bitmap object's chain

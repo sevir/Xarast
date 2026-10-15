@@ -809,13 +809,32 @@ the digest recorded for that state serial.
       with a dense map instead of a HAMT.
 - [ ] Incremental checkpoints would need dirty tracking in `Tree`. Revisit
       the snapshot representation (HAMT or chunked) only then.
-- [ ] **The default join differs from the original's.** `default_for(
-      JoinType)` is `Join::Mitre`; the original registers `BevelledJoin`
-      as the document default (`Kernel/attr.cpp:1967-1980`; the
-      constructor says the same, `:1927-1931`), and a `.xar` never writes
-      the defaults. Found in XARA-T-0326: 21 of the corpus's 22 bevel
-      controllers have no join attribute in force, so their joins (and any
-      stroke without one) come from this default. Check against the
-      previews before changing it: it moves every stroke corner that
-      relies on the default, the goldens built on it and the `.xarast`
-      writer's "differs from default" output.
+- [x] **The default join differs from the original's.** Done
+      (XARA-T-0329, 2026-10-15): `default_for(JoinType)` is `Join::Bevel`.
+      Evidence: the original registers `BevelledJoin` as the document
+      default (`Kernel/attr.cpp:1967-1980`, constructor `:1927-1931`); the
+      default attributes are nodes at the head of the tree that the
+      exporter skips ("all default attributes are assumed in the format",
+      `Kernel/camfiltr.cpp:4221-4255`), so an object that strokes bevelled
+      carries no join record. The corpus agrees once the records are read
+      as the original's enums (`xar-import.md`, "Caps and joins"): 38 722
+      mitre and 27 202 round records, **no bevelled one**. Strokes and the 21 bevel controllers with no join in force now
+      join bevelled. Mitre limit: the default is 4000 (`Kernel/attr.cpp:
+      1735`, `:1788`), as Xarast's, and no corpus file writes one.
+      Measured: no golden moved; preview scores (T-0248 method, 60 dpi)
+      move by ≤ 0.02 (the ≤ 128 px previews cannot see a corner: GardenPlan
+      4.77 → 4.75, SoftShadow 10.51 → 10.49, ProbeX16 8.96 → 8.97, others
+      unchanged); the corpus export check moves ≤ 0.12 (Broken Butt Cap pdf
+      0.97 → 0.85) and no limit. `.xarast`: see `xarast-format.md`.
+- [ ] **The default winding rule differs from the original's too**, and
+      for the same reason `TAG_WINDINGRULE` is mis-read. The original's
+      default is `EvenOddWinding` (`Kernel/attr.cpp:1858`), its renderer
+      fills even-odd unless the rule says otherwise (`wxOil/grndrgn.cpp:
+      2233-2234`), and the record is the raw enum (0 nonzero, 1 negative,
+      2 even-odd, 3 positive; `Kernel/attr.h:169-175`,
+      `Kernel/lineattr.cpp:3506`, `:4276`). Xarast defaults to `NonZero`
+      and `FillRule::from_byte` follows the unused `CXF_WINDING_RULE_*`
+      1..4 table (the corpus's three records, all 1, mean *negative* and
+      read as non-zero). It changes every self-overlapping or same-direction
+      nested fill: needs its own task, with the previews and goldens
+      checked (found in XARA-T-0329, not changed there).

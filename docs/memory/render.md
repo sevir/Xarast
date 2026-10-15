@@ -1823,9 +1823,10 @@ controller's own feather) and needs only the silhouette:
   one (`tools/opbevel.cpp:1321-1340`); no corpus bevel node carries one,
   so the join is the one resolved at the generated node (the controller's
   attributes and its ancestors'). **Corpus: 21 of 22 controllers have no
-  join attribute in force** and get the model's default, `Mitre`; the
-  other has an explicit mitre in force. The original's registered default is
-  `BevelledJoin` (`Kernel/attr.cpp:1967-1980`), see document-model TODO.
+  join attribute in force** and get the document default, `BevelledJoin`
+  in the original (`Kernel/attr.cpp:1967-1980`) and in the model since
+  XARA-T-0329 (it was `Mitre`); the other (testimp1) has an explicit
+  mitre in force.
 - **How corners are found** (renderer only, from the silhouette): an
   outer band with a mitre or bevel join takes, for each piece, the pieces
   2–8 px away (`CORNER_RING`), sorts their normals by turn from its own

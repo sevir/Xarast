@@ -1913,11 +1913,11 @@ pub struct AttrCtx {
 | 151 `TAG_LINECOLOUR` | `i32 colour_ref` | §9 |
 | 193/194/195 `TAG_LINECOLOUR_{NONE,BLACK,WHITE}` | empty | shortcuts for references −1/−2/−3 (`Kernel/lineattr.cpp:928-950`) |
 | 152 `TAG_LINEWIDTH` | `i32 width` (millipoints; 0 = "hairline" width) | `Kernel/lineattr.cpp:539-553` |
-| 174 `TAG_STARTCAP` | `u8 cap` | 1=butt, 2=round, 3=square (`Kernel/cxfdefs.h:132-134`) |
+| 174 `TAG_STARTCAP` | `u8 cap` | the original's `LineCapType` as a byte: 0=butt, 1=round, 2=square (`Kernel/attr.h:126-131`; written and read raw, `Kernel/lineattr.cpp:1863`, `:4174`). The `CXF_CAP_STYLE_*` values 1..3 in `Kernel/cxfdefs.h:132-134` are never used (corrected by XARA-T-0329: the corpus holds 1 and 2 only, never the default 0) |
 | 175 `TAG_ENDCAP` | `u8 cap` | same values. They are written as a pair (`Kernel/lineattr.cpp:1856-1880`) |
-| 176 `TAG_JOINSTYLE` | `u8 join` | 1=mitre, 2=round, 3=bevelled (`Kernel/cxfdefs.h:136-138`) |
+| 176 `TAG_JOINSTYLE` | `u8 join` | the original's `JointType` as a byte: 0=mitre, 1=round, 2=bevelled (`Kernel/attr.h:147-152`; raw, `Kernel/lineattr.cpp:2904`, `:4210`), not the unused `CXF_JOIN_STYLE_*` 1..3. The document default is **bevelled** (`Kernel/attr.cpp:1967-1980`) and is never written: the corpus holds 0 and 1 only (XARA-T-0329) |
 | 177 `TAG_MITRELIMIT` | `i32` | `Kernel/lineattr.cpp:3191-3205` |
-| 178 `TAG_WINDINGRULE` | `u8 rule` | 1=nonzero, 2=negative, 3=evenodd, 4=positive (`Kernel/cxfdefs.h:140-143`) |
+| 178 `TAG_WINDINGRULE` | `u8 rule` | by the same evidence the original's `WindingType` as a byte: 0=nonzero, 1=negative, 2=evenodd, 3=positive (`Kernel/attr.h:169-175`; raw, `Kernel/lineattr.cpp:3506`, `:4276`), not `CXF_WINDING_RULE_*` 1..4; the document default is **even-odd** (`Kernel/attr.cpp:1858`) and the renderer fills even-odd unless the rule says otherwise (`wxOil/grndrgn.cpp:2233-2234`). The corpus holds three records, all 1 (found by XARA-T-0329; the importer still follows the 1..4 table, see `docs/memory/xar-import.md`) |
 | 173 `TAG_LINETRANSPARENCY` | `u8 transp`, `u8 type` | §8.5 |
 | 179 `TAG_QUALITY` | `i32 quality` | render quality |
 

@@ -860,10 +860,36 @@ XaraX" text); light angles 300–345, tilt 45 (testimp1 32), contrast
 - Open question 2 settled for bevels: whole degrees in an `INT32`.
 - **Joins** (XARA-T-0326): no `TAG_BEVELINK` in the corpus carries a
   join attribute (its children: one flat fill, plus fill effect,
-  mappings and a transparency on one node). One controller has an
-  explicit mitre in force; the other 21 rely on the document
-  default, which is `Mitre` in the model and `BevelledJoin` in the
-  original (`document-model.md`, open TODO).
+  mappings and a transparency on one node). One controller (testimp1)
+  has an explicit mitre in force; the other 21 rely on the document
+  default, `BevelledJoin` in the original and, since XARA-T-0329, in
+  the model too.
+
+## Caps and joins (XARA-T-0329, 2026-10-15)
+
+- **`TAG_STARTCAP`/`TAG_ENDCAP`/`TAG_JOINSTYLE` hold the original's
+  in-memory enums as a byte**, not the `CXF_*_STYLE` constants
+  `research/01` used to cite: the writer does `WriteBYTE(BYTE(enum))`
+  and the reader casts back (`Kernel/lineattr.cpp:1863`, `:4174`,
+  `:2904`, `:4210`); the `CXF_` defines are referenced nowhere. Cap 0
+  butt, 1 round, 2 square; join 0 mitre, 1 round, 2 bevelled.
+- **Evidence in the corpus** (`tests/corpus.rs`,
+  `caps_and_joins_are_the_original_enums_and_their_defaults_are_never_written`):
+  caps 1 ×52 498 and 2 ×18, never 0; joins 0 ×38 722 and 1 ×27 202,
+  never 2. The missing values are exactly the defaults (butt, bevelled),
+  which the exporter never writes; value 0 does not exist in the `CXF_`
+  table at all.
+- **The old mapping** (1/2/3) read every round cap as butt, every square
+  cap as round and every round join as a mitre. Out-of-range bytes now
+  stroke round, as the original's stroker does (`wxOil/grndrgn.cpp:
+  1872-1902`).
+- **`TAG_WINDINGRULE` has the same bug, not fixed**: the raw enum is 0
+  nonzero, 1 negative, 2 even-odd, 3 positive, and the original's default
+  is even-odd; `FillRule::from_byte` follows the 1..4 table and the model
+  defaults to non-zero. Open TODO in `document-model.md`.
+- **Dead end: trusting `cxfdefs.h` for a record's enum values.** Check
+  the record handler's `Write*`/`Read*` (`WritePreChildrenWeb` and the
+  `Handle*Record` beside it) and a corpus histogram first.
 
 ## Dead ends (do not retry)
 
