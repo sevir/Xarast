@@ -191,6 +191,31 @@ a `TooLarge` into a successful decode ("import anyway").
   is the IHDR test (colour type byte at offset 25).
 - 60–64 (previews): plain files.
 
+## Procedural generators (`procedural.rs`, XARA-T-0336)
+
+- `clouds(&CloudsParams)` and `plasma(&PlasmaParams)` return grey tiles,
+  **row 0 at the fill's start point** (bottom-up); `Procedural` is both
+  the input and the cache key; `FillTile` turns a document fill (floats,
+  axis lengths, dpi) into one, choosing the clouds size by the original's
+  rule (power of two, 4..=256, from dpi and the axes; plasma is always
+  256).
+- **Clouds** is the original's integer algorithm restated in
+  `research/03 §2.8.1` (33-bit shift register, corner stretch, edge order
+  bottom/right/top/left, `noise − attraction + mean`, clamp to 0..65535,
+  pixel = low byte of `!(p >> 8)`). **Plasma** is the quadratic B-spline
+  over a 50 × 50 table; the table is the Microsoft C runtime's `rand()`
+  (×214013 + 2531011, bits 16..30) — the original used the platform's
+  `rand()`, so its own plasma varied by platform; matching Windows is
+  unverified.
+- **Frozen (H6)**: `tests/procedural.rs` hashes eight tiles (three seeds
+  per generator plus tileable, gravity and squash variants) and checks
+  four threads agree. A change to the pixels must bump
+  `CLOUDS_GENERATOR` / `PLASMA_GENERATOR` (written as `xarast:generator`)
+  and keep the old one, never edit a hash.
+- Integer edge cases the source left to the compiler are defined:
+  rotations by 0 are the identity, a shift past 31 is 0, conversions
+  saturate, so extreme `FIXED16` values cannot panic (unit test).
+
 ## Invariants that must not be broken
 
 1. No pixel buffer is allocated before `check_size`, the ratio and the scan

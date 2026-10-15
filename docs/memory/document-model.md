@@ -459,6 +459,13 @@ New in Phase 2:
     `ProceduralParams` canon (floats by their bits: one ulp is another
     bitmap). The generator version in the key is phase 13 H6's "freeze
     it": an old bitmap can never be served under a new algorithm.
+    **Still unused** after XARA-T-0336: procedural fills do not become
+    `BitmapResource`s. The walker keys its tiles by
+    `xarast_image::procedural::Procedural` (the fill's 16.16 words and the
+    tile size) plus profile and colours, and the frozen generators are
+    named by `CLOUDS_GENERATOR` / `PLASMA_GENERATOR`. Since XARA-T-0336
+    `FillGeometry::Fractal`/`Noise` also carry `origin`, `axis_x`,
+    `axis_y` (control points, transformed, digested, moulded).
 48. **A shadow is a controller whose generated node stays empty**
     (XARA-T-0318). `regenerate` returns `LiveOutput::Stored` for it for
     good: the renderer computes the pixels at the resolution shown, so

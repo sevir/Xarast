@@ -68,7 +68,7 @@ What is **not** in it, and who owns it:
 | The WGSL compositing pass, ping-pong destination reads, GPU tile planner | **Deferred** by the GPU decision (XARA-US-0011); trigger in XARA-T-0051 |
 | Presenting the canvas through `GpuTileCache` | built here (`gpu` feature); **wired** into the shell by XARA-T-0050 (`xarast-shell/src/tiles.rs`, see "The tiles in the viewer") |
 | Shadow, bevel, contour, blend, mould | Phase 13 (XARA-US-0069..0071). The shared offscreen pipeline and blur exist and feathers draw through them (XARA-US-0068, "Live effects: the offscreen pipeline"). Shadows and bevels are pixel effects; **contours are geometry** (XARA-T-0330): plain fills and strokes the walker emits per ring, nothing in the renderer (`document-model.md` decision 50), and so are **blends** (XARA-T-0333): steps emitted per pair at its generated node (decision 51), and **moulds** (XARA-T-0334): the moulded copy emitted at the generated node, fills deformed by their control points (decision 52) |
-| Fractal (plasma, clouds) generation | Phase 13; `Paint::Fractal` exists and refuses to rasterise until materialised |
+| Fractal (plasma, clouds) generation | Done in phase 13 (XARA-T-0336) outside this crate: `xarast-image::procedural` generates the tile, the walker materialises it into a `Paint::Image` ("Clouds and plasma" below). `Paint::Fractal(ProceduralParams)` still refuses to rasterise: it is the parameter tuple, never what reaches a backend |
 | Dither styles, sub-32 bpp output, CMYK separation, UCR/GCR | Deferred (`research/03 §3.9` M8) |
 | Glyph rasterisation | Phase 9; this crate renders glyph outlines if handed paths |
 | `.xar` corpus rendering end to end | `xarast-cli render` renders all 59 files (timings in `perf.md`); comparing against the original is Phase 11 |
@@ -624,6 +624,31 @@ otherwise `RenderQuality` would control nothing, which is exactly what it did
 until this was wired.
 
 ---
+
+## Clouds and plasma (XARA-T-0336, 2026-10-16)
+
+- **Where**: generator `xarast-image::procedural` (from `research/03
+  §2.8.1–2.8.2`); tile size and colouring `xarast-format::svg::procedural`
+  (`fill_tile`, `tile_pixels`, `tile_rgba`), shared by the walker and the
+  `.xarast`/SVG writer so the canvas and the bake are the same bytes; the
+  cache `xarast-app/src/procedural.rs`.
+- **What reaches the renderer**: a colour fill is a `Paint::Image` of the
+  tile **already coloured** (256-entry table of `interpolate(from, to, t,
+  effect)`, the colours' alpha kept, the bias/gain profile applied to the
+  grey first), no contone; a transparency is a `TranspSource::Image` of
+  the grey tile with `bitmap_level_ramp` (start level at black). Mapping
+  `bitmap_frame(origin, axis_x, axis_y)`, repeat `bitmap_repeat(None,
+  mapping attr)`. A degenerate parallelogram (an axis < 1 mp) is not
+  generated: the start colour / the mean level, as before.
+- **Cache (H5)**: `TileKey` = `Procedural` (16.16 words, tile size) +
+  profile bits + colours; one `ImageId` per key for the walker's life, so a
+  redraw generates nothing (`WalkStats::procedural_generated`,
+  `tests/procedural_fills.rs`). Beyond 128 keys a whole (unculled) walk
+  parks the unused ones on a 1 × 1 placeholder and reuses their slots.
+  Tiles are ≤ 256 × 256 RGBA (256 KiB).
+- **Moulds**: `mould_fill` moves the three corners (no fourth corner in
+  the model: the affine part of a perspective). Follow-up if a corpus
+  file needs it: a `persp` on procedural fills, as bitmaps have.
 
 ## Decisions taken (and why)
 

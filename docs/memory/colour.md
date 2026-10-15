@@ -117,6 +117,13 @@ Plain round-to-nearest would get **545** of them wrong.
 | T8.8.4 `xarast-cli inspect --fills` | `xarast-cli/src/inspect.rs` | done |
 | Conical/diamond/3-4-colour fills baked into SVG geometry (part of XARA-T-0102) | `xarast-format/src/svg/bake.rs` | done |
 
+### Randomise (XARA-T-0336)
+
+`RandomiseFill { node, slot, channel, seed }` (`fill_edit.rs`) sets the
+seed of a fractal or noise fill and nothing else; any other fill refuses
+it (`EditError::FillEdit`). The caller draws the seed, so the command
+replays exactly. No UI yet (H7).
+
 ## Decisions taken (and why)
 
 1. **Conversions follow the shipped (non-CMS) branch of the original.**

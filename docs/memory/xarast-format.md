@@ -1080,6 +1080,27 @@ initial `fill-rule` is `nonzero`. As for the join (above):
 - `photo-ops` is an ink sidecar (`is_ink_sidecar`), so it never lands in
   foreign baggage.
 
+## Fractal and noise fills: twin plus baked tile (XARA-T-0336, 2026-10-16)
+
+- The twin `<xarast:fill xarast:type="fractal-clouds|noise">` (and the
+  transparency twin) now writes `xarast:points` (origin, x end, y end) and
+  `xarast:generator`; the reader takes the points (files from before have
+  none: the fill reads back degenerate and draws its start colour).
+- The base is no longer a flat mean: a `<pattern xarast:generated=
+  "fill-bake" xarast:baked-dpi>` with the tile as a PNG in
+  `resources/baked/b3-….png` (interchange: a `data:` URI), coloured and
+  with the colours' alpha per pixel; a transparency is a luminance
+  `<mask>` of the grey tile (`bitmap_mask`). `Baker` (in the emitter;
+  normal-form pass uses a throwaway one) encodes each distinct tile once
+  per save; the PNG encoder is deterministic (zlib default level), so
+  re-saves stay byte-identical (59/59).
+- **The reader takes a procedural twin as opaque** (`approx_alpha` 255):
+  the alpha is in the tile, so `fill-opacity` is the transparency alone.
+- **Dead end**: the grey tile behind the contone `<filter>` (as contone
+  bitmaps do) — resvg drops the filter on a pattern image at large pattern
+  scales and draws raw grey (amurdove svg 1.24 → 20.64).
+- `xarast-format` depends on `xarast-image` for the generators.
+
 ## Decisions taken (and why)
 
 - **`zip` 8.6** (current stable major; 9.0 is pre-release), `MIT`, **every
