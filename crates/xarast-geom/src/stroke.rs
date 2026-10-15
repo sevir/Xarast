@@ -1,6 +1,6 @@
 //! Stroke expansion, dashing and offsetting.
 
-use crate::{Mp, Path, Point, Segment, Tolerance};
+use crate::{Mp, Path, Tolerance};
 
 /// How a stroke terminates at an open end. The discriminants match `.xar`.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Default)]
@@ -266,169 +266,33 @@ pub fn dash(path: &Path, pattern: &DashPattern, line_width: Mp, tol: Tolerance) 
 
 /// Offsets a path outwards (positive `distance`) or inwards (negative).
 ///
-/// Offsetting a concave region always produces self-intersecting loops, so
-/// this offsets each segment, rebuilds the joins, and then runs the result
-/// through [`self_union`](crate::self_union) to delete them. That dependency
-/// on the boolean engine is intrinsic to the operation, not an implementation
-/// shortcut.
-///
 /// Each subpath is treated as closed, because an offset of an open path is
 /// only well defined as one side of a stroke, which is what
-/// [`stroke_to_path`] is for.
+/// [`stroke_to_path`] is for. The region is taken under the non-zero rule,
+/// whatever its subpaths' orientation, and the result is clean: see
+/// [`contour::offset_region`](crate::contour::offset_region), which this
+/// calls with the original's contour mitre limit
+/// ([`CONTOUR_MITRE_LIMIT`](crate::contour::CONTOUR_MITRE_LIMIT)). A zero
+/// distance returns the path unchanged.
+///
+/// (Until XARA-T-0330 this offset each segment with `kurbo` and rebuilt
+/// the joins by hand: its outward normal assumed a counter-clockwise
+/// outline, so a clockwise one was offset the wrong way, and the mitre join
+/// was a bevel. Stroking the outline and combining the band with the
+/// region has neither problem.)
 #[must_use]
 pub fn offset(path: &Path, distance: Mp, join: Join, tol: Tolerance) -> Path {
     if distance == Mp::ZERO || path.is_empty() {
         return path.clone();
     }
-    let d = distance.to_f64();
-    let t = tol.get();
-    let mut b = Path::builder();
-
-    for sp in path.subpaths() {
-        let segs = path.subpath_segments(&sp);
-        if segs.is_empty() {
-            continue;
-        }
-        // Offset each segment independently, in `f64`.
-        let mut pieces: Vec<kurbo::BezPath> = Vec::with_capacity(segs.len());
-        for seg in &segs {
-            pieces.push(offset_segment(*seg, d, t));
-        }
-        let mut started = false;
-        for (i, piece) in pieces.iter().enumerate() {
-            let Some(kurbo::PathEl::MoveTo(first)) = piece.elements().first().copied() else {
-                continue;
-            };
-            if !started {
-                b.move_to(Point::from_kurbo(first));
-                started = true;
-            } else {
-                // Rebuild the join between the previous offset segment's end
-                // and this one's start.
-                let prev_end = pieces[..i]
-                    .iter()
-                    .rev()
-                    .find_map(|p| p.elements().last().and_then(el_end));
-                if let Some(prev) = prev_end {
-                    append_join(&mut b, prev, first, segs[i].start().to_kurbo(), d, join, t);
-                }
-            }
-            for el in piece.elements().iter().skip(1) {
-                append_el(&mut b, *el);
-            }
-        }
-        if started {
-            b.close();
-        }
-    }
-
-    let raw = b.build();
-    crate::self_union(&raw, FillRule::NonZero, tol)
-}
-
-/// Offsets a single segment by `d`, in `f64`.
-fn offset_segment(seg: Segment, d: f64, tol: f64) -> kurbo::BezPath {
-    match seg {
-        Segment::Line { p0, p1 } => {
-            let (a, b) = (p0.to_kurbo(), p1.to_kurbo());
-            let v = b - a;
-            let len = v.hypot();
-            if len == 0.0 {
-                return kurbo::BezPath::new();
-            }
-            // The outward normal in a Y-up frame, for a counter-clockwise
-            // outline, is the tangent rotated a quarter turn clockwise.
-            let n = kurbo::Vec2::new(v.y, -v.x) / len * d;
-            let mut p = kurbo::BezPath::new();
-            p.move_to(a + n);
-            p.line_to(b + n);
-            p
-        }
-        Segment::Cubic { p0, p1, p2, p3 } => {
-            let c =
-                kurbo::CubicBez::new(p0.to_kurbo(), p1.to_kurbo(), p2.to_kurbo(), p3.to_kurbo());
-            let mut out = kurbo::BezPath::new();
-            kurbo::offset::offset_cubic(c, d, tol, &mut out);
-            out
-        }
-    }
-}
-
-/// The endpoint of a path element, if it has one.
-fn el_end(el: &kurbo::PathEl) -> Option<kurbo::Point> {
-    match *el {
-        kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p) => Some(p),
-        kurbo::PathEl::QuadTo(_, p) | kurbo::PathEl::CurveTo(_, _, p) => Some(p),
-        kurbo::PathEl::ClosePath => None,
-    }
-}
-
-/// Appends a `kurbo` element to our builder.
-fn append_el(b: &mut crate::PathBuilder, el: kurbo::PathEl) {
-    match el {
-        kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p) => {
-            b.line_to(Point::from_kurbo(p));
-        }
-        kurbo::PathEl::QuadTo(c, p) => {
-            b.quad_to(Point::from_kurbo(c), Point::from_kurbo(p));
-        }
-        kurbo::PathEl::CurveTo(c1, c2, p) => {
-            b.cubic_to(
-                Point::from_kurbo(c1),
-                Point::from_kurbo(c2),
-                Point::from_kurbo(p),
-            );
-        }
-        kurbo::PathEl::ClosePath => {}
-    };
-}
-
-/// Bridges the gap between two consecutive offset segments.
-fn append_join(
-    b: &mut crate::PathBuilder,
-    from: kurbo::Point,
-    to: kurbo::Point,
-    corner: kurbo::Point,
-    d: f64,
-    join: Join,
-    tol: f64,
-) {
-    if from == to {
-        return;
-    }
-    match join {
-        Join::Bevel | Join::Mitre => {
-            // A mitre that is longer than the offset distance is exactly the
-            // case the mitre limit exists to reject, and at a join between
-            // two independently offset pieces the bevel is always valid; the
-            // subsequent self-union removes any resulting notch.
-            b.line_to(Point::from_kurbo(to));
-        }
-        Join::Round => {
-            let r = d.abs();
-            if r == 0.0 {
-                b.line_to(Point::from_kurbo(to));
-                return;
-            }
-            let a0 = (from - corner).atan2();
-            let a1 = (to - corner).atan2();
-            let mut sweep = a1 - a0;
-            while sweep > std::f64::consts::PI {
-                sweep -= std::f64::consts::TAU;
-            }
-            while sweep < -std::f64::consts::PI {
-                sweep += std::f64::consts::TAU;
-            }
-            let arc = kurbo::Arc::new((corner.x, corner.y), (r, r), a0, sweep, 0.0);
-            arc.to_cubic_beziers(tol, |c1, c2, p| {
-                b.cubic_to(
-                    Point::from_kurbo(c1),
-                    Point::from_kurbo(c2),
-                    Point::from_kurbo(p),
-                );
-            });
-        }
-    }
+    crate::contour::offset_region(
+        path,
+        FillRule::NonZero,
+        distance.to_f64(),
+        join,
+        crate::contour::CONTOUR_MITRE_LIMIT,
+        tol,
+    )
 }
 
 /// Maps our cap to `kurbo`'s.

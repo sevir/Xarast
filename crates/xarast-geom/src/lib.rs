@@ -41,6 +41,7 @@
 
 pub mod bevel;
 pub mod boolean;
+pub mod contour;
 pub mod fit;
 pub mod fixed;
 pub mod flatten;
