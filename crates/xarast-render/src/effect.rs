@@ -750,10 +750,14 @@ const CORNER_RING: i64 = 8;
 /// is within 1.6 % of round at its mitre's point.
 const CORNER_GAP: f64 = 20.0 * std::f64::consts::PI / 180.0;
 
+/// A piece round a corner candidate: how far its normal turns from the
+/// candidate's, its inward normal, and its outline point.
+type RingPiece = (f64, (f64, f64), (f64, f64));
+
 /// The outward unit normal of the edge through `side`'s pieces (their turn,
 /// inward normal and outline point): the principal axis of the points when
 /// they spread along it, else their mean normal; outward either way.
-fn edge_line(side: &[(f64, (f64, f64), (f64, f64))]) -> (f64, f64) {
+fn edge_line(side: &[RingPiece]) -> (f64, f64) {
     let k = side.len() as f64;
     let (nx, ny) = side
         .iter()
@@ -859,7 +863,7 @@ impl Corners {
                 // Sorted by how far each normal turns from the piece's own,
                 // the two edges are the two sides of the widest gap.
                 let turn = |n: (f64, f64)| (nb.0 * n.1 - nb.1 * n.0).atan2(nb.0 * n.0 + nb.1 * n.1);
-                let mut ring: Vec<(f64, (f64, f64), (f64, f64))> =
+                let mut ring: Vec<RingPiece> =
                     ring.into_iter().map(|(n, e)| (turn(n), n, e)).collect();
                 ring.sort_by(|a, b| a.0.total_cmp(&b.0));
                 let (gap, at) = ring
