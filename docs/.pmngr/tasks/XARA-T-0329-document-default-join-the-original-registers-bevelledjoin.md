@@ -2,13 +2,14 @@
 id: XARA-T-0329
 type: task
 title: "Document default join: the original registers BevelledJoin, Xarast defaults to Mitre"
-status: in_progress
+status: done
 priority: medium
 author: mcp
 labels: [document-model, render, fidelity]
 created: 2026-10-15T17:09:40Z
-updated: 2026-10-15T19:00:23Z
+updated: 2026-10-15T20:25:53Z
 started: 2026-10-15T19:00:23Z
+closed: 2026-10-15T20:25:53Z
 ---
 
 ## Description
