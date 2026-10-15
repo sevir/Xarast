@@ -1640,6 +1640,17 @@ Baking is mandatory as real offset paths (strategy 1 of §5.4.1). An increasing
 `stroke-width` **SHOULD NOT** be used as an approximation: it fails at the joins and on
 inner contours.
 
+As implemented (XARA-T-0330): `xarast:insets` is the original's inset-path
+flag (one ring, the source hidden); `xarast:join` is present only when the
+contour names its own join (otherwise the join attribute in force at the
+generated node decides, as in the original); `xarast:colour-effect`
+(`fade` default, `rainbow`, `alt-rainbow`) and `xarast:include-line-widths`
+are extensions. The generated group is **not** base-authoritative: its rings
+are regenerated on load. One ring — the one drawn in the generated node's own
+attributes — carries `xarast:contour-start="<join>"` and is written even when
+empty; a reader rebuilds the generated node's attributes from its paint and
+that join attribute, and drops the other rings.
+
 #### 6.8.4 Blend (`TAG_BLEND` 105, `TAG_BLENDER` 106, `TAG_BLEND_PATH` 4061, `TAG_BLENDPROFILES` 4072, `TAG_BLENDERADDITIONAL` 4073, `TAG_BLENDER_CURVEPROP` 4060, `TAG_BLENDER_CURVEANGLES` 4062, `TAG_NODEBLENDPATH_FILLED` 4074)
 
 ```xml
@@ -2766,12 +2777,14 @@ Bevel =
 Contour =
   element x:contour {
     attribute x:width          { Num },
-    attribute x:steps          { xsd:positiveInteger },
+    attribute x:steps          { xsd:nonNegativeInteger },
     attribute x:direction      { "inner" | "outer" | "both" },
     attribute x:join           { "round" | "miter" | "bevel" }?,
     attribute x:profile        { Profile }?,
     attribute x:colour-profile { Profile }?,
-    attribute x:insets         { Bool }?
+    attribute x:colour-effect  { "fade" | "rainbow" | "alt-rainbow" }?,
+    attribute x:insets         { Bool }?,
+    attribute x:include-line-widths { Bool }?
   }
 
 Blend =

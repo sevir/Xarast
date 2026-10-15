@@ -739,6 +739,25 @@ placer (XARA-T-0259, 2026-09-24, ext4, load ≈ 3): ProbeX16 UI thread
 30–38 ms, save thread 1.05–1.07 s with thumbnail, 970–984 ms without
 (965–991 ms without the placer: within noise); TextCurve +2–3 ms.
 
+### Contour rings in the walker (XARA-T-0330, 2026-10-15)
+
+- `SceneWalker` owns a `xarast_doc::LiveCache` (`live`), pruned with
+  `retain_alive` when the epoch moves. At a contour's **generated
+  node** the walk skips the subtree and `paint_contour` draws
+  `LiveCache::current_or_regenerate(doc, controller, 0.0, regenerate)`:
+  rings in paint order, each in the attributes in force there + the
+  generated node's own + the ring's blended ones (`paint_geometry`, the
+  ink half of `paint` factored out), filled and stroked.
+- Scene ids: the generated node's tag | (ring index + 1) << 32 (tags are
+  `u32`; previews use bit 63). Content hash: the regen key's first 8
+  bytes mixed with the index, plus the attribute scope fold.
+- A contour's controller and source paint nothing themselves and are not
+  `live_pending`; a failed regeneration counts one pending. An inset
+  path's source subtree is skipped.
+- This is T-0316's drawing half. The `RegenQueue` stays unused: the key
+  catches every change (undo included), so a lazy cache per walker is
+  enough; the drag-per-frame and damage tests of T-0316 are still open.
+
 ---
 
 ## Invariants that must not be broken

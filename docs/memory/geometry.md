@@ -261,9 +261,10 @@ which is what made this visible.
   the two, which gave *both* ends the union of the two caps (a round start
   and a square end came out square-and-round at both ends). A test now
   asserts each end's own cap.
-- `offset()` offsets each segment, rebuilds the joins, and runs the result
-  through `self_union` to delete the loops that offsetting a concave region
-  always produces. That dependency on the boolean engine is intrinsic.
+- `offset()` delegates to `contour::offset_region` since XARA-T-0330 (see
+  "Contours" below). The earlier per-segment version assumed a
+  counter-clockwise outline (a clockwise one went the wrong way) and
+  turned mitres into bevels.
 - Validated against `tiny-skia` (test-only) by rasterising both strokes at
   512×512 over 100 cases: worst disagreement **0.31 %** of pixels, gated at
   0.5 %. Two rasterisers antialiasing the same outline account for most of it.
@@ -578,6 +579,41 @@ Decisions:
    the default smoothing fits in well under a frame and stays within the
    tolerance (`xarast-app/tests/freehand.rs`).
 
+### Contours: `geom::contour` (XARA-T-0330, 2026-10-15)
+
+- **`offset_region(region, rule, d, join, mitre_limit, tol)`**: clean the
+  region (`self_union` under its rule), build the **band** — everything
+  within `|d|` of the flattened outline — and union it with the region
+  (`d > 0`) or subtract it (`d < 0`). Output is clean under non-zero.
+  `offset_clean` skips the first cleaning.
+- **The band is oriented pieces, not a stroke**: per edge a CCW
+  rectangle that *holds the edge's two end points* (so it meets the
+  join pieces exactly, no crack), per turn the join wedge on the outside
+  only (disc sector at `2·acos(1 − tol/d)` per segment, mitre quad while
+  `1/cos(θ/2) ≤ limit`, else the bevel triangle). All CCW, so non-zero
+  cannot cancel anything. Pieces are unioned in runs of 16, then
+  pairwise (`Pieces`).
+- `CONTOUR_MITRE_LIMIT` = 751 941 / 65 536 ≈ 11.47 (the original's
+  default, `Kernel/paths.h:467`); `MAX_CONTOUR_DISTANCE` = 2²⁶ mp; the
+  fitting/flattening tolerance is `max(tol, |d|·1e-4)`; an inset of at
+  least half the region's smaller side returns empty without work.
+- `step_distances(width, n, profile)`: ring `k` at `width ·
+  p((k+1)/n)` with the bias negated (`n ≥ 2`; one ring is the full
+  width). `steps(sources, outer, distances, …)`: outer offsets the union
+  of the sources, inner insets each source and unions the insets (the
+  original contours per object and merges). Collapsed inner rings are
+  empty paths, kept so ring indices stay stable. `contour_tolerance`:
+  the original's flatness, smaller side / 375, clamped to 10..=375 mp.
+- Measured (release, a 1 015-segment curved blob): ±1 000 mp 25 ms,
+  ±1e6 mp 33 ms per pair of offsets.
+- Output rings are **polylines** (curves flattened at the tolerance):
+  the boolean restore only keeps untouched *input* curves. Fitting the
+  rings back to cubics (`fit`) is an open TODO.
+- Property tests (`tests/contour.rs`): identity at 0, monotone area,
+  n round offsets of w ≈ one of n·w (tight bounds within 64n mp, area
+  within 1 %), curved insets past the inradius empty, hostile
+  distances/rules/limits sane and bounded (≤ 256 × (segments + 4)).
+
 ### Bevel cross-sections (XARA-T-0322, 2026-10-15)
 
 `xarast_geom::bevel`: `BevelType` (the original's fifteen styles, record
@@ -643,6 +679,16 @@ phase 13 D's empirical determination runs (`render.md` TODO 30).
    cannot have.
 
 ## Dead ends (do not retry)
+
+- **A contour band made by stroking the closed outline** (`kurbo`'s
+  stroker at twice the distance). Its two contours are oppositely
+  oriented and where the inner one loops back (an inset past a
+  curvature or the inradius) the windings cancel to zero: holes in the
+  band, so an inset kept the whole region (a 100 k triangle inset by
+  1e6 came back unchanged). Found by the property tests (XARA-T-0330).
+- **Unioning all band pieces in one sweep.** Quadratic in overlapping
+  pieces: a 1 000-edge outline grown by 1e6 took 100 s; a run-then-pair
+  tree takes 33 ms.
 
 - **`kurbo::flatten` for anything whose tolerance is a contract.** Up to 9×
   over on cusp-heavy cubics. See above.
@@ -743,8 +789,8 @@ flattener should go.
   would round the corner off, so it needs corner detection first. The
   verbatim restore handles the case that actually matters — a curve the
   operation did not touch.
-- **The `cavalier_contours` offset spike** has not been run. The current
-  `offset()` is kurbo-per-segment plus self-union and meets its tests.
+- **The `cavalier_contours` offset spike** has not been run and is not
+  needed for contours: `geom::contour` meets the phase-13 properties.
 - ~~Whether the uniform grid suffices for `HitIndex` at 100 000.~~
   **Settled 2026-09-23: the grid**, see "Picking" above (XARA-T-0150).
 - **`stroke_to_path` passes the dash offset to `kurbo` unreduced.** The hit

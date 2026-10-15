@@ -903,6 +903,42 @@ their meaning:
   SVG's initial values, not the model's defaults (`research/06 §4.5.1` pass 3);
   the two only coincided while the default join was a mitre.
 
+## Contours: baked as real offset paths, start read back (XARA-T-0330, 2026-10-15)
+
+`<xarast:contour>` in the controller (`research/06 §6.8.3`):
+`xarast:steps`, `xarast:width` (a distance, non-negative),
+`xarast:direction` (`outer`/`inner`), `xarast:join` only when the
+parameters name one (else the attribute decides), `xarast:profile` and
+`xarast:colour-profile` (shortest exact spellings), `xarast:colour-effect`
+(omitted for fade), `xarast:insets` (**the inset-path flag**; until
+XARA-T-0330 it was misused for include-line-widths) and
+`xarast:include-line-widths` (only when true).
+
+- **The generated group bakes the rings** (`Emitter::contour_rings`):
+  `xarast_doc::contour::generate` at every save, each ring a `<path>`
+  painted with the attributes in force at the generated node plus the
+  ring's blended ones, in paint order. **Never a growing
+  `stroke-width`.** It is not `base-authoritative`: the reader drops the
+  rings and the walker and next save regenerate them.
+- **The start ring carries `xarast:contour-start="<join>"`** and is
+  written even when empty (`d=""`, a collapsed inner contour): the
+  reader (`contour_start`) turns its paint back into attribute children
+  of the generated node (`ink_paint`, localised) plus a `JoinType` of the
+  named join — the join attribute in force at the node, which a
+  stroke-less paint would not carry and which the rings are cut with.
+  Writing the *cut* join there instead (an explicit `params.join`)
+  broke the fixed point; the attribute is what must survive.
+- Why not the parameters: the start can be any paint (Girard_simple's
+  third contour starts from a linear gradient), and the paint writer
+  already round-trips any paint on an ink element; the dead end in
+  `xar-import.md` (an attribute of a node with no ink vanishes) is why it rides on a
+  ring.
+- `Stats::contour_rings` counts the baked rings. Pinned by
+  `tests/svg_read.rs::a_contour_is_baked_as_real_offset_paths_and_reads_back_exactly`
+  and the corpus round trip: 59/59 normal form and byte-identical with
+  the four corpus contours.
+- Not done: an inset path's source is still drawn by an SVG viewer.
+
 ## Photo operations: `<xarast:photo-ops>` (XARA-US-0054, 2026-09-24)
 
 `svg/photo.rs` writes and parses a bitmap object's chain

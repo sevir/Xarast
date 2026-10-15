@@ -493,6 +493,31 @@ New in Phase 2:
     when it is `Paint::Flat`: an inner bevel paints its band in it, as the
     original's bevel node does; a non-flat first fill gives `None` (the
     renderer lights the objects' own colours).
+50. **A contour regenerates its rings; its generated node keeps the
+    blend's start as attributes** (XARA-T-0330). `ContourParams`:
+    `steps` (rings = steps + 1, or 1 for `inset`, at most
+    `MAX_CONTOUR_RINGS` = 256), `width` (a distance; `outer` gives the
+    direction, unlike the file's signed width), `include_line_widths`
+    (false from `.xar`), `join: Option<Join>` (`None` = the join
+    attribute in force at the generated node, the original's rule),
+    `profile` (spacing), `colour_profile`, `colour_effect`, `inset`.
+    Flatness is derived (`contour_tolerance`), not kept. The generated
+    node's own attribute children are the original `NodeContour`'s
+    attributes, the start of the ring blend; it sits before the source
+    (outer) or after it (inner), which is the paint order.
+    `xarast_doc::contour::generate` → `LiveOutput::Shapes` in paint
+    order, every ring (empty ones too), each with the *blended* slots
+    only (fill, stroke colour, line width, the two transparencies) on top
+    of the generated node's attributes; the start ring has none.
+    Blending: flat↔flat, same-family gradients with equal stop counts
+    (points, colours, stops, profile), a flat promoted to the other's
+    gradient; palette colours resolved first; "no colour" and anything
+    else does not blend and keeps the start (the original's failed
+    blend). `regenerate` returns them; the walker keys a `LiveCache` on
+    `RegenKey` (`LiveCache::current_or_regenerate`), so no queue is
+    needed. An outer contour's controller bounds grow by `growth()`:
+    the distance × 11.47 when the corners may be mitred (a cheap
+    conservative bound, see TODO).
 
 ## The `.xar` attribute tag reconciliation
 
@@ -760,6 +785,14 @@ the digest recorded for that state serial.
 
 ## Open TODOs
 
+- **Contour follow-ups (XARA-T-0330).** Exact controller bounds from the
+  regenerated rings (today `growth()` is ×11.47 for mitred corners, which
+  over-sizes culling, damage and "fit drawing"); text sources are not
+  contoured (their outlines come from the app's layout); a nested live
+  object's generated output is left out of the silhouette; the inset
+  path hides its source in the walker but not in the SVG bake; the
+  contour tool (E6). `RegenQueue` is still unused (the walker keys the
+  cache instead): wire it if a consumer needs `flush_urgent`.
 - [x] **Per-node foreign-baggage container (XARA-T-0089, phase 6 risk K1).**
       Done 2026-09-23 (8b0834d): decision 32, invariant 20. Automatic
       dirty/stale marking of edited nodes: done in W4 (decision 32);

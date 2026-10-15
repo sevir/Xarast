@@ -625,7 +625,7 @@ shadows) of the 59 files, for clip and mask constructs:
 | `TAG_CLIPVIEWCONTROLLER` / `TAG_CLIPVIEW` / `TAG_CLIPVIEW_PATH` (4084/4085/4137) | **0** | — | mapped since XARA-T-0306 (finding 17); 4137 is never written |
 | Bitmap transparency (171), a bitmap used as a mask | 3 | JagSS100 simple, scope3 simple | renders (XARA-T-0171), with its levels and mode since XARA-T-0307 (finding 18) |
 | `TAG_FEATHER` (4086), a soft-edge mask | 75 | Groucho2 63, feathers 9, Watch4 3 | imported as an attribute; **drawn feathered** since XARA-US-0068 (finding 19) |
-| Shadow (4050) / bevel (4052) / contour (4066) controllers | 98 / 22 / 4 | Groucho2, Girard_simple, SoftShadow, Watch4, testimp1 | live objects, Phase 13; **shadows imported and drawn** since XARA-T-0318 (finding 20), **bevels** since XARA-T-0322 (finding 21) |
+| Shadow (4050) / bevel (4052) / contour (4066) controllers | 98 / 22 / 4 | Groucho2, Girard_simple, SoftShadow, Watch4, testimp1 | live objects, Phase 13; **shadows imported and drawn** since XARA-T-0318 (finding 20), **bevels** since XARA-T-0322 (finding 21), **contours** since XARA-T-0330 (finding 22) |
 | Perspective / envelope moulds (108 / 107) | 129 / 68 | Watch4, ProbeX16, scope3 simple, TextCurve, testimp1 | live objects, Phase 13 |
 
 So "clips in imported files" is, for this corpus, only bitmap
@@ -752,7 +752,7 @@ that owns it:
 |---|---:|---|
 | ~~4050, 4051 shadow controller / shadow (atomic: the whole subtree, source objects included, is stripped)~~ | 98 controllers | done, XARA-T-0318 (finding 20) |
 | ~~4052–4057 bevel (atomic)~~ | 22 controllers | done, XARA-T-0322 (finding 21) |
-| 4066, 4067 contour (atomic) | 4 controllers | XARA-US-0070 (E7) |
+| ~~4066, 4067 contour (atomic)~~ | 4 controllers | done, XARA-T-0330 (finding 22) |
 | 105, 106, 4060–4062, 4072–4074 blend | 1 976 records | XARA-US-0070 (F9) |
 | 107–110, 4012 mould | 197 controllers | XARA-US-0071 (G10) |
 | 4127 feather effect (the effect-stack form) | 0 in the corpus | XARA-US-0069 |
@@ -865,6 +865,43 @@ XaraX" text); light angles 300–345, tilt 45 (testimp1 32), contrast
   default, `BevelledJoin` in the original and, since XARA-T-0329, in
   the model too.
 
+### 22. Contours are live objects, regenerated from their source (XARA-T-0330, 2026-10-15)
+
+Decoders for `TAG_CONTOURCONTROLLER` (4066) and `TAG_CONTOUR` (4067).
+Corpus census: **4 controllers**, testimp1 1 (outer: width −16 714, 3
+steps, the contour node before the object with its own flat fill, a
+mitre join byte 0 and line width 500 on the controller) and
+Girard_simple 3 (inner: widths 2 618, 1 088, 9 895; 3, 6 and 8 steps;
+the contour node after the objects, with no attribute, a flat fill and
+a linear fill). Every record 41 bytes, type byte 0 (fade, no inset), flat
+profiles.
+
+- **Field facts** (`Kernel/ncntrcnt.cpp:1606-1625`, `:3239-3275`):
+  `INT32` steps, `INT32` width (**negative = outer**,
+  `Kernel/ncntrcnt.h:255`), `BYTE` type = colour blend (0 fade, 1
+  rainbow, 2 alt-rainbow, 3 none) | 128 for an inset path, then four
+  `double`s: object bias, gain, attribute bias, gain. The original fails
+  a short record; Xarast needs the first nine bytes, defaults the
+  profiles. `TAG_CONTOUR` is empty (`Kernel/nodecntr.cpp:1655`).
+- **Drawing facts** (`Kernel/nodecntr.cpp:410-600`, `:1245-1537`,
+  `:2134-2415`): `steps + 1` rings (one for an inset path), ring `k` at
+  `|width| × p((k+1)/n)` with the object profile's bias negated; the
+  contour node's applied attributes start an attribute blend whose end
+  is the first object's; joins from the join attribute in force there
+  (default bevelled); mitre limit 751 941 (16.16, ≈ 11.47,
+  `Kernel/paths.h:467`); the rings are filled *and stroked*. The inset
+  path hides the source (`InsetPathPathProcessor`).
+- **Mapping** (`Mapper::emit_contour`): `Live (Controller, Contour)`
+  with the controller's attributes, `Live (Generated, Contour)` holding
+  the contour node's **own attribute children** (the blend's start) and
+  `Live (Source, Contour)`, generated first for an outer contour and
+  last for an inner one, as the file has it. `ContourDegraded`: 0 no
+  contour node, 1 a stray one (dropped with its attributes), 2 a colour
+  type outside 0..=2 (faded, plus `UnknownEnumValue`), 3 steps outside
+  0..=255 (clamped to `MAX_CONTOUR_RINGS`).
+- Snapshots: stripped records testimp1 13 → **0**, Girard_simple 43 →
+  **0**; no file strips anything now. Fuzz seed `contour`.
+
 ## Caps and joins (XARA-T-0329, 2026-10-15)
 
 - **`TAG_STARTCAP`/`TAG_ENDCAP`/`TAG_JOINSTYLE` hold the original's
@@ -974,7 +1011,8 @@ XaraX" text); light angles 300–345, tilt 45 (testimp1 32), contrast
   is not in the format at all).
 - Live objects: 1 594 records currently round-trip as `NodeKind::Opaque`
   and should become `NodeKind::Live` in Phase 13. Shadows done
-  (finding 20), bevels done (finding 21); contours, blends and moulds remain.
+  (finding 20), bevels done (finding 21), contours done (finding 22);
+  blends and moulds remain.
 - ~~A release-profile import benchmark~~: done 2026-09-23 as
   `cargo bench -p xarast-xar --bench import`. ~~`ProbeX16.xar` 644 ms
   against the 350 ms budget~~: 329–343 ms after XARA-T-0031 (finding 13).
