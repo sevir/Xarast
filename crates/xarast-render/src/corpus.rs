@@ -1386,6 +1386,7 @@ fn bevel_pt(style: BevelType, indent: f64, outer: bool, angle: f32, contrast: f3
             a: 255,
         },
         join: xarast_geom::Join::Round,
+        paint_inner: false,
     }))
 }
 
@@ -1402,7 +1403,7 @@ fn ellipse_path(cx: f64, cy: f64, r: f64) -> PathRef {
     PathRef::new(b.build())
 }
 
-/// Live effects through the offscreen pipeline (phase 13): 23 cases.
+/// Live effects through the offscreen pipeline (phase 13): 24 cases.
 ///
 /// Each exercises something the pipeline has to get right beyond the blur
 /// itself: the silhouette (a transparent object is feathered by its shape,
@@ -1415,10 +1416,11 @@ fn ellipse_path(cx: f64, cy: f64, r: f64) -> PathRef {
 /// tilted light and a bevel inside a shadow (XARA-T-0322). Nesting in a
 /// silhouette pass (XARA-T-0321): a feather around a shadow and around an
 /// outer bevel sees their outlines, a bevel around a shadow its object's.
-/// An outer band's mitred and bevelled corners (XARA-T-0326).
+/// An outer band's mitred and bevelled corners, and an inner band painted
+/// in its first object's flat fill over a group (XARA-T-0326).
 fn effect_cases() -> Vec<Case> {
     type Draw = fn(&mut SceneBuilder<'_>);
-    let cases: [(&str, Draw); 23] = [
+    let cases: [(&str, Draw); 24] = [
         ("effect_bevel_flat_inner", |b| {
             b.push_effect(bevel_pt(BevelType::Flat, 8.0, false, 315.0, 0.5));
             b.fill(
@@ -1443,6 +1445,29 @@ fn effect_cases() -> Vec<Case> {
             // Two objects of different colours under one bevel: each keeps
             // its own colour, lit by the shared outline.
             b.push_effect(bevel_pt(BevelType::Smooth1, 10.0, false, 345.0, 0.47));
+            b.fill(
+                SceneNodeId(10),
+                &rect_path(12.0, 12.0, 84.0, 48.0),
+                FillRule::NonZero,
+                Paint::Solid(rgb(40, 160, 60)),
+            );
+            b.fill(
+                SceneNodeId(11),
+                &rect_path(12.0, 48.0, 84.0, 84.0),
+                FillRule::NonZero,
+                Paint::Solid(rgb(220, 200, 60)),
+            );
+            b.pop_effect();
+        }),
+        ("effect_bevel_smooth_inner_painted", |b| {
+            // The same group with the original's flat bevel node: the band
+            // is the first object's green, lit, over both objects.
+            let mut e = bevel_pt(BevelType::Smooth1, 10.0, false, 345.0, 0.47);
+            if let LayerEffect::Bevel(bv) = &mut e {
+                bv.colour = rgb(40, 160, 60);
+                bv.paint_inner = true;
+            }
+            b.push_effect(e);
             b.fill(
                 SceneNodeId(10),
                 &rect_path(12.0, 12.0, 84.0, 48.0),

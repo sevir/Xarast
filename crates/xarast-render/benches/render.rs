@@ -430,6 +430,7 @@ fn effects(c: &mut Criterion) {
             contrast: 0.75,
             colour: Rgba8::BLACK,
             join: xarast_geom::Join::Round,
+            paint_inner: false,
         }));
         let colour: Vec<u8> = plane
             .iter()

@@ -310,8 +310,16 @@ pub struct BevelEffect {
     /// it and darkening by its square, as the original's lightness and
     /// darkness do.
     pub contrast: f32,
-    /// An outer bevel's paint (straight alpha); unused by an inner one.
+    /// The band's paint (straight alpha): an outer band's always, an inner
+    /// one's when [`paint_inner`](Self::paint_inner) says so.
     pub colour: Rgba8,
+    /// Whether an inner band is painted in [`colour`](Self::colour) over
+    /// the content, lit, as the original's bevel node (a copy of the first
+    /// object's flat fill, drawn over the objects) paints it; otherwise the
+    /// content's own colours are lit, which is what the original's
+    /// non-flat bevel node (the fill under the lighting) gives for one
+    /// object.
+    pub paint_inner: bool,
     /// How the band turns the outline's corners: the join attribute applied
     /// to the original's bevel node (`Kernel/nodebev.cpp:845-850`). It
     /// shapes an outer band's convex corners (a mitre, up to
@@ -459,6 +467,7 @@ impl BevelEffect {
         let k_dark = k_light * k_light;
         let lut = bevel_lut();
         let paint = self.colour;
+        let paint_inner = self.paint_inner && !self.outer;
         let outer = self.outer;
         let style = self.style;
         let join = if outer { self.join } else { Join::Round };
@@ -593,6 +602,23 @@ impl BevelEffect {
                             *c = u8::try_from(v.min(255)).unwrap_or(u8::MAX);
                         }
                         let a = u32::from(px[3]) + (sa * under + 127) / 255;
+                        px[3] = u8::try_from(a.min(255)).unwrap_or(u8::MAX);
+                    } else if paint_inner {
+                        // The band over the content, antialiased at the
+                        // outline (the silhouette) and at its inner edge.
+                        let band = (r - d + 0.5).clamp(0.0, 1.0)
+                            * f64::from(silhouette[y * width + x])
+                            / 255.0;
+                        let sa = (f64::from(paint.a) * band).round() as u32;
+                        if sa == 0 {
+                            continue;
+                        }
+                        for (c, s) in px[..3].iter_mut().zip([paint.r, paint.g, paint.b]) {
+                            let lit = (u32::from(lut.get(level, s)) * sa + 127) / 255;
+                            let v = lit + (u32::from(*c) * (255 - sa) + 127) / 255;
+                            *c = u8::try_from(v.min(255)).unwrap_or(u8::MAX);
+                        }
+                        let a = sa + (u32::from(px[3]) * (255 - sa) + 127) / 255;
                         px[3] = u8::try_from(a.min(255)).unwrap_or(u8::MAX);
                     } else {
                         let a = u32::from(px[3]);
@@ -1567,6 +1593,7 @@ mod tests {
                 a: 255,
             },
             join: Join::Round,
+            paint_inner: false,
         }))
     }
 
@@ -1821,6 +1848,7 @@ mod tests {
                     a: 40,
                 },
                 join: Join::Round,
+                paint_inner: false,
             }))
         };
         let mut plane = sil.clone();
