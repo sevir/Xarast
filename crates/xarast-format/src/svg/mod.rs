@@ -307,6 +307,11 @@ pub struct Stats {
     pub contour_rings: usize,
     /// Blend steps baked as real paths (§6.8.4).
     pub blend_steps: usize,
+    /// Outlines baked into moulds' generated groups (`research/06 §6.8.5`).
+    pub moulded_paths: usize,
+    /// Text stories under a mould left out of its baked copy, for want of
+    /// a placer that makes outlines.
+    pub moulded_text_unbaked: usize,
     /// `ClipRegion` attributes, which nothing draws yet.
     pub clip_regions_ignored: usize,
     /// Non-attribute children of ink nodes, drawn before them as siblings.

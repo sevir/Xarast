@@ -204,11 +204,15 @@ pub fn regenerate(doc: &Document, controller: NodeId, dpi: f64) -> Result<LiveOu
             }
             None => LiveOutput::Stored,
         },
-        LiveKind::Mould(_)
-        | LiveKind::Brush(_)
-        | LiveKind::Shadow(_)
-        | LiveKind::Bevel(_)
-        | LiveKind::Effect(_) => LiveOutput::Stored,
+        // Geometry too: the source's outlines through the cage. Text is
+        // laid out by the caller that has fonts (`mould::generate_with`).
+        LiveKind::Mould(_) => match crate::mould::generate(doc, controller) {
+            Some(shapes) => LiveOutput::Shapes(Arc::from(shapes)),
+            None => LiveOutput::Stored,
+        },
+        LiveKind::Brush(_) | LiveKind::Shadow(_) | LiveKind::Bevel(_) | LiveKind::Effect(_) => {
+            LiveOutput::Stored
+        }
     })
 }
 

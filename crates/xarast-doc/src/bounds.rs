@@ -131,6 +131,35 @@ pub fn compute_bounds_with(tree: &Tree, id: NodeId, stroke_extent: xarast_geom::
                 _ => own,
             }
         }
+        // A mould draws its source through the cage, not where it stands:
+        // the image of the source rectangle (sampled, with a margin), grown
+        // by the stroke. Its source subtree's own box is what the
+        // rectangle defaults to.
+        NodeKind::Live(l)
+            if l.role == crate::live::LiveRole::Controller
+                && matches!(l.kind, crate::live::LiveKind::Mould(_)) =>
+        {
+            let own = union_children(tree, id, *attrs);
+            match &l.kind {
+                crate::live::LiveKind::Mould(p) => {
+                    let s = p.source();
+                    let s = if s.is_empty()
+                        || s.width() == xarast_geom::Mp::ZERO
+                        || s.height() == xarast_geom::Mp::ZERO
+                    {
+                        own
+                    } else {
+                        s
+                    };
+                    if s.is_empty() {
+                        own
+                    } else {
+                        xarast_geom::mould::MouldGeometry::extent(&*p.geometry(s)).inflated(*attrs)
+                    }
+                }
+                _ => own,
+            }
+        }
         // An outer bevel's faces lie outside its source, as far as its
         // width reaches; an outer contour's rings as far as its distance
         // (times the mitre limit when its corners may be mitred: a cheap

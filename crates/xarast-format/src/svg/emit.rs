@@ -1886,7 +1886,9 @@ impl<'d, 'b> Emitter<'d, 'b> {
                     _ => None,
                 };
                 let join = matches!(l.kind, LiveKind::Bevel(_)).then(|| self.join_at(n));
-                prelude = Some(live_params(&self.frame, &l.kind, colour, join));
+                if !matches!(l.kind, LiveKind::Mould(_)) {
+                    prelude = Some(live_params(&self.frame, &l.kind, colour, join));
+                }
             }
             LiveRole::Source => {
                 el.a("xarast:kind", "live-source");
@@ -1905,9 +1907,9 @@ impl<'d, 'b> Emitter<'d, 'b> {
                     el.a("xarast:generated-by", node_id(self.doc, p));
                 }
                 // A contour regenerates its rings (XARA-T-0330), a blend its
-                // steps (XARA-T-0333); the other kinds' baked geometry must
-                // survive a reader (§6.8.7).
-                if !matches!(l.kind, LiveKind::Contour(_)) && steps.is_none() {
+                // steps (XARA-T-0333), a mould its copy (XARA-T-0334); the
+                // other kinds' baked geometry must survive a reader (§6.8.7).
+                if !matches!(l.kind, LiveKind::Contour(_) | LiveKind::Mould(_)) && steps.is_none() {
                     el.a("xarast:base-authoritative", "true");
                 }
             }
@@ -1942,7 +1944,145 @@ impl<'d, 'b> Emitter<'d, 'b> {
             self.blend_steps(n, controller, k, el);
             return;
         }
+        if let LiveKind::Mould(m) = &l.kind {
+            match l.role {
+                LiveRole::Controller => {
+                    self.mould_controller(n, el, m);
+                    return;
+                }
+                LiveRole::Generated => {
+                    self.mould_generated(n, el);
+                    return;
+                }
+                LiveRole::Source => {}
+            }
+        }
         self.container(n, el, prelude);
+    }
+
+    /// A mould's controller (`research/06 §6.8.5`): its parameters in
+    /// `<xarast:mould>`, which holds the cage as `<xarast:mould-shape>`
+    /// and the **undeformed** source inside `<xarast:mould-source>`, where
+    /// no SVG renderer draws it; then its other children, the generated
+    /// copy among them.
+    fn mould_controller(&mut self, n: NodeId, el: El, m: &xarast_doc::MouldParams) {
+        let tag = el.tag;
+        self.open_container(Some(n), el);
+        self.body.push('>');
+        self.newline();
+        self.depth += 1;
+        // The source's paint must not be hoisted out of the foreign
+        // element, nor the copy's into it.
+        self.block();
+        let source = xarast_doc::live::parts(&self.doc.tree, n).map(|p| p.source);
+        self.attrs.push_scope();
+        for c in self.doc.tree.children(n) {
+            if let Some(NodeKind::Attr(a)) = self.doc.tree.kind(c) {
+                self.attrs.push(Arc::new(a.value.clone()));
+            }
+        }
+        self.indent();
+        self.body.push_str(&mould_open(&self.frame, m));
+        self.newline();
+        self.depth += 1;
+        self.indent();
+        let f = self.frame;
+        let mut shape = String::from("<xarast:mould-shape");
+        attr(&mut shape, "d", &path_data(&m.cage_path(), |q| f.pt(q)));
+        shape.push_str("/>");
+        self.body.push_str(&shape);
+        self.newline();
+        if let Some(src) = source {
+            self.indent();
+            self.body.push_str("<xarast:mould-source");
+            self.open_group("xarast:mould-source", &[]);
+            self.body.push('>');
+            self.newline();
+            self.depth += 1;
+            self.node(src);
+            self.depth -= 1;
+            self.close_group();
+            self.close("xarast:mould-source");
+        }
+        self.depth -= 1;
+        self.close("xarast:mould");
+        self.attrs.pop_scope();
+        self.attrs.push_scope();
+        self.children(n, source);
+        self.attrs.pop_scope();
+        self.depth -= 1;
+        self.close_group();
+        self.close(tag);
+    }
+
+    /// A mould's generated node, baked: the source's outlines through the
+    /// cage, regenerated at every save, each a `<path>` painted with every
+    /// attribute it is drawn with (its fills moulded). Text is baked as
+    /// curves when the placer makes outlines. The reader drops them all:
+    /// the walker and the next save regenerate them.
+    fn mould_generated(&mut self, n: NodeId, el: El) {
+        let tag = el.tag;
+        self.open_container(Some(n), el);
+        self.body.push('>');
+        self.newline();
+        self.depth += 1;
+        self.attrs.push_scope();
+        let controller = self.doc.tree.links(n).parent;
+        let placer = self.placer.clone();
+        let mut unbaked = 0usize;
+        let shapes = controller
+            .and_then(|c| {
+                xarast_doc::mould::generate_with(self.doc, c, &mut |doc, story| {
+                    let runs = placer.as_ref().and_then(|p| p.0.outlines(doc, story));
+                    if runs.is_none() {
+                        unbaked += 1;
+                    }
+                    runs
+                })
+            })
+            .unwrap_or_default();
+        self.stats.moulded_text_unbaked += unbaked;
+        for shape in &shapes {
+            if shape.path.is_empty() {
+                continue;
+            }
+            self.attrs.push_scope();
+            for a in shape.attrs.iter() {
+                self.attrs.push(Arc::new(a.clone()));
+            }
+            let mut el = El::new("path");
+            el.ink = true;
+            let f = self.frame;
+            el.a("d", path_data(&shape.path, |q| f.pt(q)));
+            let bounds = Some(self.path_box(&shape.path));
+            let mut known = Vec::new();
+            self.paint(&mut el, bounds, shape.filled, shape.stroked, &mut known);
+            let t = el.tag;
+            self.open(None, el);
+            if known.is_empty() {
+                self.body.push_str("/>");
+                self.newline();
+            } else {
+                self.body.push('>');
+                self.newline();
+                self.depth += 1;
+                for k in known {
+                    self.indent();
+                    self.body.push_str(&k);
+                    self.newline();
+                }
+                self.depth -= 1;
+                self.close(t);
+            }
+            self.attrs.pop_scope();
+            self.stats.moulded_paths += 1;
+        }
+        self.attrs.pop_scope();
+        let mut next = 0usize;
+        self.fragments(n, &mut next, None);
+        self.depth -= 1;
+        self.close_group();
+        self.close(tag);
     }
 
     /// The blend controller and pair index of a blend's generated node
@@ -2915,22 +3055,10 @@ fn live_params(
             }
         }
         LiveKind::Mould(m) => {
-            s.push_str("<xarast:mould");
-            attr(
-                &mut s,
-                "xarast:type",
-                match m.kind {
-                    xarast_doc::MouldKind::Envelope => "envelope",
-                    xarast_doc::MouldKind::Perspective => "perspective",
-                },
-            );
-            let (x0, y0) = frame.pt(Point::new(m.source.lo.x, m.source.hi.y));
-            let (x1, y1) = frame.pt(Point::new(m.source.hi.x, m.source.lo.y));
-            attr(
-                &mut s,
-                "xarast:bounds",
-                &format!("{} {} {} {}", mp(x0), mp(y0), mp(x1 - x0), mp(y1 - y0)),
-            );
+            // Written by `Emitter::mould_controller`, which holds the source
+            // inside; this is its start tag, closed.
+            let open = mould_open(frame, m);
+            s.push_str(open.trim_end_matches('>'));
         }
         LiveKind::Brush(b) => {
             s.push_str("<xarast:brush");
@@ -2950,6 +3078,29 @@ fn live_params(
         }
     }
     s.push_str("/>");
+    s
+}
+
+/// The start tag of `<xarast:mould>`: its type, the source rectangle
+/// (omitted when the model has none and takes the source's bounds) and the
+/// refitting threshold (omitted at the default).
+fn mould_open(frame: &Frame, m: &xarast_doc::MouldParams) -> String {
+    let mut s = String::from("<xarast:mould");
+    attr(&mut s, "xarast:type", m.kind().name());
+    let r = m.source();
+    if !r.is_empty() {
+        let (x0, y0) = frame.pt(Point::new(r.lo.x, r.hi.y));
+        let (x1, y1) = frame.pt(Point::new(r.hi.x, r.lo.y));
+        attr(
+            &mut s,
+            "xarast:bounds",
+            &format!("{} {} {} {}", mp(x0), mp(y0), mp(x1 - x0), mp(y1 - y0)),
+        );
+    }
+    if m.threshold() != xarast_geom::mould::DEFAULT_THRESHOLD {
+        attr(&mut s, "xarast:threshold", &m.threshold().to_string());
+    }
+    s.push('>');
     s
 }
 

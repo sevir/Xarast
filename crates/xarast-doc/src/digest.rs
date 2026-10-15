@@ -655,8 +655,13 @@ impl Canon for LiveNode {
                 h.opt(&p.colour);
             }
             LiveKind::Mould(p) => {
-                h.u8(p.kind as u8);
-                h.add(&p.source);
+                h.u8(p.kind() as u8);
+                h.len(p.cage().len());
+                for q in p.cage() {
+                    h.add(q);
+                }
+                h.add(&p.source());
+                h.i32(p.threshold());
             }
             LiveKind::Brush(p) => {
                 h.str(&p.brush);

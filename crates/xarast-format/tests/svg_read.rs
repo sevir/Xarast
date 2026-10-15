@@ -2235,6 +2235,74 @@ fn blend_doc() -> Document {
     b.finish().unwrap().0
 }
 
+/// An envelope over a triangle with a linear fill, a 2×2 envelope with no
+/// bounds (the source's own) and a perspective at a non-default threshold
+/// over a shape with its own attributes (XARA-T-0334).
+fn mould_doc() -> Document {
+    use xarast_doc::MouldParams;
+    use xarast_geom::mould::{MouldKind, identity_cage};
+    let mut b = xarast_doc::builder::skeleton(BuildLimits::default()).unwrap();
+    let src =
+        |x: i32| xarast_geom::Rect::new(Point::raw(x, 300_000), Point::raw(x + 120_000, 400_000));
+    let mut env = identity_cage(MouldKind::Envelope, src(50_000));
+    env[4] = Point::raw(90_000, 460_000);
+    env[5] = Point::raw(130_000, 380_000);
+    let mut two = identity_cage(MouldKind::Envelope2x2, src(250_000));
+    two[9] = Point::raw(310_000, 450_000);
+    let cases = [
+        MouldParams::from_cage(MouldKind::Envelope, &env, src(50_000), 32).unwrap(),
+        MouldParams::from_cage(MouldKind::Envelope2x2, &two, xarast_geom::Rect::EMPTY, 32).unwrap(),
+        MouldParams::Perspective {
+            corners: [
+                Point::raw(450_000, 300_000),
+                Point::raw(480_000, 400_000),
+                Point::raw(540_000, 400_000),
+                Point::raw(570_000, 300_000),
+            ],
+            source: src(450_000),
+            threshold: 1024,
+        },
+    ];
+    for (i, p) in cases.into_iter().enumerate() {
+        let x = 50_000 + 200_000 * i32::try_from(i).unwrap();
+        let kind = LiveKind::Mould(Box::new(p));
+        let live = |role| {
+            NodeKind::Live(Box::new(LiveNode {
+                role,
+                kind: kind.clone(),
+                regen: RegenState::Clean,
+                name: None,
+            }))
+        };
+        b.node(live(LiveRole::Controller)).unwrap();
+        b.push_scope().unwrap();
+        b.attribute(flat(rgb(0.2, 0.4, 0.8))).unwrap();
+        b.node(live(LiveRole::Generated)).unwrap();
+        b.node(live(LiveRole::Source)).unwrap();
+        b.push_scope().unwrap();
+        if i == 0 {
+            b.attribute(AttrValue::Fill(Paint::Linear {
+                start: Point::raw(x, 350_000),
+                end: Point::raw(x + 120_000, 350_000),
+                persp: None,
+                from: rgb(1.0, 0.0, 0.0),
+                to: rgb(0.0, 0.0, 1.0),
+                ramp: Ramp::new(),
+            }))
+            .unwrap();
+        }
+        b.node(triangle(x, 300_000)).unwrap();
+        if i == 2 {
+            b.push_scope().unwrap();
+            b.attribute(flat(rgb(0.9, 0.9, 0.1))).unwrap();
+            b.pop_scope();
+        }
+        b.pop_scope();
+        b.pop_scope();
+    }
+    b.finish().unwrap().0
+}
+
 #[test]
 fn a_blend_bakes_its_steps_between_its_objects_and_reads_back_exactly() {
     let doc = blend_doc();
@@ -2284,4 +2352,53 @@ fn a_blend_bakes_its_steps_between_its_objects_and_reads_back_exactly() {
     let again = resave(&mut o);
     same_text(&svg, &svg_of(&again));
     assert!(first == again, "a fixed point");
+}
+
+#[test]
+fn a_mould_keeps_its_source_hidden_and_bakes_its_copy() {
+    let doc = mould_doc();
+    let first = package(&doc, SvgOptions::default());
+    let svg = svg_of(&first);
+    assert_eq!(svg.matches("<xarast:mould ").count(), 3, "{svg}");
+    assert!(svg.contains("xarast:type=\"envelope\""), "{svg}");
+    assert!(svg.contains("xarast:type=\"envelope-2x2\""), "{svg}");
+    assert!(svg.contains("xarast:type=\"perspective\""), "{svg}");
+    assert!(svg.contains("xarast:threshold=\"1024\""), "{svg}");
+    assert_eq!(svg.matches("<xarast:mould-shape d=").count(), 3);
+    assert_eq!(svg.matches("<xarast:mould-source>").count(), 3);
+    // The source sits inside the foreign element, the copy outside it.
+    let mould_end = svg.find("</xarast:mould>").unwrap();
+    let generated = svg.find("xarast:generated=\"mould\"").unwrap();
+    assert!(generated > mould_end);
+    assert!(!svg.contains("xarast:generated=\"mould\" xarast:generated-by=\"\""));
+
+    let mut o = open(&first);
+    assert!(o.diagnostics.is_empty(), "{:?}", o.diagnostics);
+    same_text(&normal_form(&doc), &normal_form(&o.document));
+    // The generated nodes come back empty: the copy is regenerated.
+    let t = &o.document.tree;
+    for n in t.preorder(t.root()) {
+        if let Some(NodeKind::Live(l)) = t.kind(n)
+            && l.role == LiveRole::Generated
+        {
+            assert_eq!(t.children(n).count(), 0);
+        }
+    }
+    let again = resave(&mut o);
+    same_text(&svg, &svg_of(&again));
+    assert!(first == again, "a fixed point");
+
+    // A browser sees the moulded copy and nothing of ours: three baked
+    // paths, none of them the undeformed triangles.
+    let export = xarast_format::svg::write_svg(
+        &doc,
+        &mut ResourceIndex::new(),
+        &SvgOptions {
+            dialect: xarast_format::svg::SvgDialect::Interchange,
+            ..SvgOptions::default()
+        },
+    );
+    assert!(!export.svg.contains("xarast"), "{}", export.svg);
+    assert_eq!(export.svg.matches("<path").count(), 3, "{}", export.svg);
+    assert_eq!(export.stats.moulded_paths, 3);
 }

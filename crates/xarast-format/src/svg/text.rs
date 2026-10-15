@@ -49,6 +49,16 @@ pub trait TextPlacer: Send + Sync {
         let _ = (face, chars);
         None
     }
+
+    /// The story `story` laid out as outlines, one per attribute run, in
+    /// document space, with the attributes each paints with: what a mould
+    /// bakes its text from (`research/06 §6.8.5`: text under a mould is
+    /// written as curves). `None`: this placer makes no outlines, and the
+    /// writer leaves the text out of the baked copy.
+    fn outlines(&self, doc: &Document, story: NodeId) -> Option<Vec<xarast_doc::OutlineRun>> {
+        let _ = (doc, story);
+        None
+    }
 }
 
 /// A face placed text is drawn with, as a browser should know it for

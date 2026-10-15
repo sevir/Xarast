@@ -591,22 +591,188 @@ fn first_fill(
     )
 }
 
-/// Which sort of mould.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
-pub enum MouldKind {
-    /// A four-sided envelope.
-    Envelope,
-    /// A perspective quadrilateral.
-    Perspective,
+/// Which sort of mould: envelope, 2×2 envelope or perspective. Defined
+/// beside the maths, in `xarast-geom`.
+pub use xarast_geom::mould::MouldKind;
+
+/// Parameters of a mould (`research/02 §6.7`; the `.xar` records are
+/// `research/01`'s 107–110 and 4012).
+///
+/// The cage is a parameter, not a child node: it is what the mould tool
+/// edits, and nothing draws it. Its points run as the original's mould
+/// path does (`xarast_geom::mould`): the image of the source's bottom-left
+/// corner first, then clockwise. `source` is the rectangle the cage maps
+/// from (the original's mould bounds, `TAG_MOULD_BOUNDS`); an empty one
+/// stands for the source subtree's own bounds, as the original computes
+/// them when a file has no bounds record. `threshold` is the refitting
+/// tolerance in millipoints (zero never splits a curve).
+#[derive(Clone, Debug, PartialEq)]
+pub enum MouldParams {
+    /// A four-sided envelope, one cubic per side.
+    Envelope {
+        /// Corners and handles, 12 points.
+        shape: [Point; 12],
+        /// The rectangle the cage maps from.
+        source: xarast_geom::Rect,
+        /// The refitting tolerance, millipoints.
+        threshold: i32,
+    },
+    /// A four-sided envelope, two cubics per side.
+    Envelope2x2 {
+        /// Corners, side midpoints and handles, 24 points.
+        shape: [Point; 24],
+        /// The rectangle the cage maps from.
+        source: xarast_geom::Rect,
+        /// The refitting tolerance, millipoints.
+        threshold: i32,
+    },
+    /// A perspective.
+    Perspective {
+        /// The images of the source's bottom-left, top-left, top-right and
+        /// bottom-right corners.
+        corners: [Point; 4],
+        /// The rectangle the cage maps from.
+        source: xarast_geom::Rect,
+        /// The refitting tolerance, millipoints.
+        threshold: i32,
+    },
 }
 
-/// Parameters of a mould. The cage itself is a child path node.
-#[derive(Clone, Debug, PartialEq)]
-pub struct MouldParams {
-    /// Envelope or perspective.
-    pub kind: MouldKind,
-    /// The source rectangle the cage maps from.
-    pub source: xarast_geom::Rect,
+impl MouldParams {
+    /// The mould whose cage is `cage` (as many points as `kind` needs), or
+    /// `None` when the count is wrong.
+    #[must_use]
+    pub fn from_cage(
+        kind: MouldKind,
+        cage: &[Point],
+        source: xarast_geom::Rect,
+        threshold: i32,
+    ) -> Option<MouldParams> {
+        Some(match kind {
+            MouldKind::Envelope => MouldParams::Envelope {
+                shape: cage.try_into().ok()?,
+                source,
+                threshold,
+            },
+            MouldKind::Envelope2x2 => MouldParams::Envelope2x2 {
+                shape: cage.try_into().ok()?,
+                source,
+                threshold,
+            },
+            MouldKind::Perspective => MouldParams::Perspective {
+                corners: cage.try_into().ok()?,
+                source,
+                threshold,
+            },
+        })
+    }
+
+    /// The mould that changes nothing: its cage on the source's corners,
+    /// straight sides.
+    #[must_use]
+    pub fn identity(kind: MouldKind, source: xarast_geom::Rect, threshold: i32) -> MouldParams {
+        let cage = xarast_geom::mould::identity_cage(kind, source);
+        match MouldParams::from_cage(kind, &cage, source, threshold) {
+            Some(p) => p,
+            // `identity_cage` gives exactly `cage_len` points.
+            None => MouldParams::Perspective {
+                corners: [source.lo; 4],
+                source,
+                threshold,
+            },
+        }
+    }
+
+    /// Envelope, 2×2 envelope or perspective.
+    #[must_use]
+    pub fn kind(&self) -> MouldKind {
+        match self {
+            MouldParams::Envelope { .. } => MouldKind::Envelope,
+            MouldParams::Envelope2x2 { .. } => MouldKind::Envelope2x2,
+            MouldParams::Perspective { .. } => MouldKind::Perspective,
+        }
+    }
+
+    /// The cage's points.
+    #[must_use]
+    pub fn cage(&self) -> &[Point] {
+        match self {
+            MouldParams::Envelope { shape, .. } => shape,
+            MouldParams::Envelope2x2 { shape, .. } => shape,
+            MouldParams::Perspective { corners, .. } => corners,
+        }
+    }
+
+    /// The rectangle the cage maps from, as stored (may be empty).
+    #[must_use]
+    pub fn source(&self) -> xarast_geom::Rect {
+        match self {
+            MouldParams::Envelope { source, .. }
+            | MouldParams::Envelope2x2 { source, .. }
+            | MouldParams::Perspective { source, .. } => *source,
+        }
+    }
+
+    /// The refitting tolerance, millipoints.
+    #[must_use]
+    pub fn threshold(&self) -> i32 {
+        match self {
+            MouldParams::Envelope { threshold, .. }
+            | MouldParams::Envelope2x2 { threshold, .. }
+            | MouldParams::Perspective { threshold, .. } => *threshold,
+        }
+    }
+
+    /// The cage as a closed path, as the native format writes it.
+    #[must_use]
+    pub fn cage_path(&self) -> xarast_geom::Path {
+        xarast_geom::mould::cage_path(self.kind(), self.cage())
+    }
+
+    /// The deformation, mapping from `source` (the stored rectangle, or
+    /// the source subtree's bounds when that is empty). An envelope whose
+    /// cage has no width or no height, which the original refuses, maps
+    /// as the identity: the source is drawn as it is.
+    #[must_use]
+    pub fn geometry(
+        &self,
+        source: xarast_geom::Rect,
+    ) -> Box<dyn xarast_geom::mould::MouldGeometry> {
+        use xarast_geom::mould::{Envelope, Perspective};
+        // The identity, as the perspective on the source's own corners
+        // (defined for any rectangle, an empty one included).
+        let identity = || {
+            let (lo, hi) = (source.lo, source.hi);
+            Box::new(Perspective::new(
+                [lo, Point::new(lo.x, hi.y), hi, Point::new(hi.x, lo.y)],
+                source,
+            )) as Box<dyn xarast_geom::mould::MouldGeometry>
+        };
+        match self {
+            MouldParams::Envelope { shape, .. } => match Envelope::new(*shape, source) {
+                Ok(e) => Box::new(e),
+                Err(_) => identity(),
+            },
+            MouldParams::Envelope2x2 { shape, .. } => match Envelope::new_2x2(*shape, source) {
+                Ok(e) => Box::new(e),
+                Err(_) => identity(),
+            },
+            // A perspective with no area (a flat or collapsed cage, what
+            // the importer leaves for a missing one) is the identity too;
+            // any other quadrilateral is mapped, bilinearly when invalid.
+            MouldParams::Perspective { corners, .. } => {
+                if matches!(
+                    Perspective::validate(*corners),
+                    Err(xarast_geom::mould::MouldError::Flat)
+                ) || corners.iter().all(|c| *c == corners[0])
+                {
+                    identity()
+                } else {
+                    Box::new(Perspective::new(*corners, source))
+                }
+            }
+        }
+    }
 }
 
 /// Parameters of a brush stroke.

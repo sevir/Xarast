@@ -11,6 +11,7 @@ mod blend;
 mod builder;
 mod foreign;
 mod invariants;
+mod mould;
 mod props;
 mod regen;
 mod tree;

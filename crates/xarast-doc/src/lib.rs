@@ -66,6 +66,7 @@ pub mod foreign;
 pub mod history;
 pub mod kind;
 pub mod live;
+pub mod mould;
 pub mod palette;
 pub mod photo;
 pub mod regen;

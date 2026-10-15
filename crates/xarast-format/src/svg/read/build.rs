@@ -965,6 +965,19 @@ impl<'d, 'r, 'f> Reader<'d, 'r, 'f> {
             self.joins.pop();
         }
         res?;
+        // A mould's source sits inside its parameters, where no SVG
+        // renderer draws it (`research/06 §6.8.5`); it follows the
+        // generated node, as in the model.
+        if kind == "mould"
+            && let Some(src) = params.and_then(|p| {
+                p.children.iter().find_map(|c| match c {
+                    Child::Elem(i) => self.elem(*i).filter(|x| x.is(NS_XARAST, "mould-source")),
+                    _ => None,
+                })
+            })
+        {
+            self.children(src, &cctx, &|_| false, 0, &mut bag)?;
+        }
         self.b.pop_scope();
         self.store(node, bag);
         Ok(())
@@ -1066,24 +1079,51 @@ impl<'d, 'r, 'f> Reader<'d, 'r, 'f> {
                     .is_some()
                     .then(|| self.shadow_colour(g("colour"), g("colour-ref"))),
             })),
-            "mould" => LiveKind::Mould(Box::new(MouldParams {
-                kind: if g("type") == Some("perspective") {
-                    MouldKind::Perspective
-                } else {
-                    MouldKind::Envelope
-                },
-                source: {
-                    let v = g("bounds").and_then(parse::mps);
-                    match v.as_deref() {
-                        Some([x, y, w, h]) => {
-                            let a = self.pt(ctx, *x, y.saturating_add(*h));
-                            let b = self.pt(ctx, x.saturating_add(*w), *y);
-                            Rect::new(a, b)
-                        }
-                        _ => Rect::new(Point::ORIGIN, Point::ORIGIN),
+            "mould" => {
+                let kind = g("type")
+                    .and_then(MouldKind::from_name)
+                    .unwrap_or(MouldKind::Envelope);
+                let source = match g("bounds").and_then(parse::mps).as_deref() {
+                    Some([x, y, w, h]) => {
+                        let a = self.pt(ctx, *x, y.saturating_add(*h));
+                        let b = self.pt(ctx, x.saturating_add(*w), *y);
+                        Rect::new(a, b)
                     }
-                },
-            })),
+                    _ => Rect::EMPTY,
+                };
+                let threshold = g("threshold")
+                    .and_then(|v| v.parse::<i32>().ok())
+                    .unwrap_or(xarast_geom::mould::DEFAULT_THRESHOLD);
+                // The cage, from `<xarast:mould-shape>`; a missing or
+                // malformed one is flat, which draws the source unmoulded.
+                let shape = p.and_then(|p| {
+                    p.children.iter().find_map(|c| match c {
+                        Child::Elem(i) => self.elem(*i).filter(|x| x.is(NS_XARAST, "mould-shape")),
+                        _ => None,
+                    })
+                });
+                let path = shape.and_then(|e| {
+                    let d = attr(e, "", "d")?;
+                    let segs = self.path_data(d, e.start);
+                    Some(self.path_of(ctx, &segs))
+                });
+                let cage = path.and_then(|path| match kind {
+                    MouldKind::Perspective => xarast_geom::mould::corners_from_path(&path)
+                        .ok()
+                        .map(|c| c.to_vec()),
+                    MouldKind::Envelope => xarast_geom::mould::cage_from_path(&path, 4).ok(),
+                    MouldKind::Envelope2x2 => xarast_geom::mould::cage_from_path(&path, 8).ok(),
+                });
+                let cage = cage.unwrap_or_else(|| vec![Point::ORIGIN; kind.cage_len()]);
+                let params = MouldParams::from_cage(kind, &cage, source, threshold).unwrap_or(
+                    MouldParams::Perspective {
+                        corners: [Point::ORIGIN; 4],
+                        source,
+                        threshold,
+                    },
+                );
+                LiveKind::Mould(Box::new(params))
+            }
             "brush" => LiveKind::Brush(Box::new(BrushParams {
                 brush: Arc::from(g("name").unwrap_or("")),
                 spacing: mpv("spacing"),
@@ -1288,7 +1328,11 @@ impl<'d, 'r, 'f> Reader<'d, 'r, 'f> {
             true,
         );
         self.b.push_scope()?;
-        if kind == "contour" {
+        if kind == "mould" {
+            // The moulded copy is derived: the walker and the next save
+            // regenerate it from the source.
+            self.children(e, &cctx, &|c| c.is(NS_SVG, "path"), 0, &mut bag)?;
+        } else if kind == "contour" {
             // The rings are derived: the walker and the next save
             // regenerate them. What the node itself holds — the start of
             // the ring blend — is the paint of the ring marked
