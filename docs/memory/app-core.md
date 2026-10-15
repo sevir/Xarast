@@ -756,7 +756,37 @@ placer (XARA-T-0259, 2026-09-24, ext4, load ≈ 3): ProbeX16 UI thread
   path's source subtree is skipped.
 - This is T-0316's drawing half. The `RegenQueue` stays unused: the key
   catches every change (undo included), so a lazy cache per walker is
-  enough; the drag-per-frame and damage tests of T-0316 are still open.
+  enough.
+
+### Previewed regeneration and the rest of T-0316 (XARA-T-0340, 2026-10-16)
+
+- **T-0316 is closed without wiring `RegenQueue` into `Session`**, by
+  decision: every consumer that draws or writes a live output computes
+  it from the document through a keyed cache or directly — the session's
+  walker, every headless/thumbnail walker, and the `.xarast` writer
+  (`regenerate` in `svg/emit.rs`) — so nothing can see a stale output
+  and there is nothing for `flush_urgent` to make fresh before export.
+  A queue would only add a second source of truth. Wire it when a
+  consumer appears that reads a cache it does not key itself.
+- `SceneWalker::live_output` keys each contour/blend on
+  `regen_key_with(doc, controller, 0.0, RegenOverride { kind, moved })`,
+  built from this frame's `Preview::live` and `Preview::transform`
+  (copied into `live_preview`/`moved_preview` at the start of the
+  walk, as `photo_preview`). One cache slot per controller: the
+  preview's output replaces the committed one and the commit's
+  replaces the preview's (one regeneration each way). Moulds still use
+  the plain key (no mould tool yet).
+- `WalkStats::live_regenerated` is the cache's lifetime count
+  (`LiveCache::regenerated`, also counted by `RegenQueue` flushes): the
+  tests assert +1 per drag frame and +0 for a frame drawn again.
+- A controller in `Preview::live` is never culled (its previewed rings
+  may reach past its committed bounds); `Session::rebuild_scene` widens
+  `scene_ink` by a previewed contour's source box grown by its
+  `growth()`, as it does for a moved selection.
+- The double invalidation is the render thread's scene diff, now tested:
+  a contour that shrinks and one that grows repaint, incrementally,
+  exactly what a fresh full frame shows
+  (`tests/contour_blend_tools.rs`, `a_contour_change_repaints_exactly_the_full_frame`).
 
 ### Blend steps in the walker (XARA-T-0333, 2026-10-15)
 

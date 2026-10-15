@@ -582,6 +582,21 @@ New in Phase 2:
     of its source rectangle (an 8×8 sample grid + 2 %), grown by the
     stroke extent. A blend end that is a mould controller blends from
     its moulded copy.
+53. **Tools build and edit contours and blends through `Tx`**
+    (XARA-T-0340). Two narrow additions: `Tx::attach` lets a node made
+    in this transaction become the `LastChild` of another made in it,
+    even a generated one (a new contour's start attributes; still
+    refused when locked), and `Tx::set_live_kind` also rewrites the
+    generated nodes directly under the controller's **source** (a
+    blend's pairs), so a tool-edited blend carries what a reader builds.
+    Previews regenerate under `regen::RegenOverride` (`kind` in place of
+    the controller's, `moved` nodes strictly inside it with a matrix):
+    `regen_key_with` = `regen_key` when the override is inert, else the
+    override's canon and the moved tags and matrix bits;
+    `regenerate_with` → `contour::generate_with(params)` and
+    `blend::generate_with(params, moved)` (a moved end's outline and
+    geometry-linked attributes through the matrix; a mould end ignores
+    the move). `LiveCache::regenerated()` counts computed outputs.
 
 ## The `.xar` attribute tag reconciliation
 

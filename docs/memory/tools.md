@@ -1097,6 +1097,183 @@ of a shadow and a bevel made by scripted gestures). Unit tests in
       A); revisit only if users ask. Draft-quality effects stay with
       XARA-T-0315.
 
+## Phase 13: the contour and blend tools (XARA-T-0340, E6, F8)
+
+| Piece | Where | State |
+|---|---|---|
+| `LiveEffect::{Contour, Blend}`, `LiveEdit::Blend { start, end, kind }`, contour apply/remove/side, blend new/add/merge/remove, `contour_start`, `blend_members`, `blend_holding` | `xarast-app/src/live_edit.rs` | done |
+| `ContourTool` (Ctrl+F7): eight size handles, live resize, dashed outline of a new contour, infobar | `contour_tool.rs` | done |
+| `BlendTool` (F7): object-to-object drag with a line, add to a blend at the touched end, merge, Ctrl-drag an end (live), infobar, Remove | `blend_tool.rs` | done |
+| `ToolAction::RemoveEffect` (infobar "Remove" button) | `tool.rs`, `command.rs` | done |
+| Previewed regeneration: `RegenOverride` (`kind`, `moved`), `regen_key_with`, `regenerate_with`, `LiveCache::current_or_regenerate_with`/`regenerated`, `contour::generate_with`, `blend::generate_with` | `xarast-doc/src/regen.rs`, `contour.rs`, `blend.rs` | done |
+| Walker draws `Preview::live` and `Preview::transform` into contours and blends (`live_output`); `WalkStats::live_regenerated` | `walker.rs` | done |
+
+Tests: `tests/contour_blend_tools.rs` (17: registration, keys,
+cursors, status; handle out = outer contour, one exact "Apply Contour"
+step, dashed outline while dragging, lightened start colour; handle in =
+inner contour after its source; a resize regenerates **exactly once per
+drag frame** and none for a repeated frame, digest/history untouched,
+commit = preview, `Esc` leaves nothing; the render thread's repaint of a
+shrinking and of a growing contour equals a fresh full frame; every
+contour field typed, one exact step each, same value no step, clamps; a
+colour-profile slider previews and commits once; apply + remove =
+identity, one contour per object; a contour inside a shadow, none on a
+bevel; object → object blend, one exact "Blend" step, members in order
+with one generated node between; drags to nothing/itself/`Esc` do
+nothing; an object joins a blend at the touched end (both ends); a
+Ctrl-dragged end regenerates once per frame and commits one "Move" equal
+to its preview; every blend field one exact step, one regeneration, the
+generated nodes carry the parameters; blend + remove = identity; two
+blends merge; the golden `tests/golden/contour_blend_tools.png`). Unit
+tests in `contour_tool.rs` (2) and `xarast-doc` `tests/blend.rs`
+(the override keys and outputs, the cache counter).
+
+### Facts from the original (paraphrased; `tools/cntrtool.cpp`, `tools/opcntr.cpp`, `Kernel/ncntrcnt.cpp`, `wxOil/xrc/barsource/cntrbar.ini`, `tools/blndtool.cpp`, `Kernel/nodeblnd.cpp`)
+
+- **Contour drag** (`cntrtool.cpp:463-638`, `1180-1233`, `1289-1558`,
+  `3836-4109`): only from one of eight handles round the selection's
+  bounds (corners and edge middles; hit area about twice a blob); a drag
+  elsewhere does nothing. Signed width against the selection's box:
+  outside = negative (outer), the distance to the nearest edge (the
+  larger of the x and y gaps diagonally); inside = positive (inner), the
+  distance to the nearest edge; |width| clamped to 10..250000 mp. Applied
+  width = signed(pointer) − signed(handle) + the first selected contour's
+  signed width. No modifiers; the pointer snaps. Feedback: a red XOR
+  hairline of the offset paths (existing contour's join, mitre by
+  default); the infobar's width and side update live. Release: with no
+  contour selected one create op (3 steps, the dragged width, the inset
+  flag), else one change-width op; Esc or no movement = no op. Inner
+  widths are clamped to the largest possible (`opcntr.cpp:1580-1600`). A
+  click goes to the selector; a bevel in the selection refuses
+  ("Can't contour bevelled objects", `cntrtool.cpp:779-838`).
+- **New contour** (`ncntrcnt.cpp:187-192`, `2689-2693`, `2833-2969`):
+  model defaults 5 steps, 5000 mp, fade, no inset; the tool uses 3 steps
+  (`cntrtool.cpp:3243`, `4089`) and the slider/edit creation is always
+  outer. The contour node copies the object's colour fill, transparency
+  fill, stroke colour, stroke transparency, line width, join and the two
+  mappings; a visible flat fill is lightened in HSV (V four fifths of the
+  way to full, S divided by 5) unless inset; with no fill the first
+  colour fill under the controller is cloned and lightened; the winding
+  rule is forced negative. Outer = node before the first ink child,
+  inner = last child (`2904-2916`). An open path first gets a flat fill
+  in its stroke colour (`opcntr.cpp:328-389`).
+- **Contour infobar** (`cntrbar.ini:20-46`, `cntrtool.cpp:1682-3256`):
+  steps/distance toggle and one edit (steps 0..999, entry n stored n − 1,
+  shown steps + 1; distance = |width| / (steps + 1), > 0); Remove
+  button; effect combo fade/rainbow/alt-rainbow; width slider 10..250000
+  (logarithmic, bias 0.7), XOR preview while sliding, op on release,
+  keeps each contour's side, with none makes an outer one; width edit
+  (≤ 0 warns); Outer/Inner buttons (mixed = both off, Outer lit by
+  default); object and attribute profiles (only when everything selected
+  is a contour); inset-path toggle (disabled inside a blend); join
+  buttons apply a join attribute through the attribute manager. No tool
+  keys; no hotkey found in the original's tables (`research/04` gives
+  Ctrl+F7). Cursors: pointer, a select cursor over a handle. Status:
+  "click select; drag handles to create a contour or change its width".
+- **Contour remove** (`opcntr.cpp:745-1063`): greyed without a contour;
+  localise, move the objects out before the controller, select them,
+  hide the controller; the lightened copy goes. One contour per item of
+  the selection (a group is one); existing contours dissolve first;
+  a shadowed object's shadow source is contoured (`opcntr.cpp:257-479`).
+- **Blend drag** (`blndtool.cpp:584-1143`, `3138-3328`, `4230-4630`,
+  `4783-4841`): starts on any object that can become a path; a straight
+  XOR line (about 2 px, black; red and thicker for point mapping/remap)
+  from the press to the pointer; the end is hit-tested only on release;
+  a missing end or the same object does nothing. Dispatch: blend + blend
+  merge (the end blend's children move into the start blend, which stays
+  selected); blend + object (either order) adds a stage at the end whose
+  member's box centre is nearest the drag point; else a new blend. No
+  modifiers; a click goes to the base tool. One op, "Blend". Point
+  mapping (drag between end-point blobs of selected paths) and remap
+  (between corresponding blobs of a selected blend) exist.
+- **New blend** (`nodeblnd.cpp:143-258`, `blndtool.cpp:4293-4310`):
+  5 steps, one-to-one off, fade, tangential off, antialias on, steps
+  mode. All deselected; the blend is inserted right after (above) the
+  end object; the start then the end move in (start lower) with the
+  blender after the start; common attributes are factored onto the
+  blend; the blend is selected. Ends are promoted to enclosing
+  shadow/bevel/contour controllers (`3241-3259`).
+- **Blend infobar** (`blndtool.cpp:1412-2431`): one steps/distance edit
+  applied on commit (1..999; distance only for blends on a curve with a
+  linear profile); effect combo fade/rainbow/alt-rainbow, applied at
+  once; one-to-one and antialias toggles; tangential only on a curve;
+  position and attribute profiles (a run of drags is one undo step, only
+  when the selection is all blends); Remove; blend-along-path toggle.
+- **Blend ends** (`nodeblnd.cpp:3010-3045`, `blndtool.cpp:8943-9296`):
+  only blends on a curve show end blobs; dragging one shows XOR
+  outlines and recalculates the blend **on drop**, not live. Off-curve
+  ends move through the selector (select inside).
+- **Remove blend** (`blndtool.cpp:5437-5706`): localise; every object
+  (not the blenders) moves before the blend's place in its order and is
+  selected; a blend path is detached; refused when the blend is
+  bevelled or contoured. "Remove blend". F7 = tool 16
+  (`Kernel/tool.h:145`, `STANDARD_HOTKEYS.res:90`); no tool keys.
+
+### Decisions (ours)
+
+92. **Contours and blends regenerate; the edit is the command.** A
+    parameter change is one `set_live_kind` on the controller and its
+    generated/source nodes — for a blend also the generated nodes
+    *under the source* (`Tx::set_live_kind` now covers them, so a
+    tool-edited blend digests as a reloaded one). Rings and steps are
+    never written into the tree; the walker recomputes them keyed on the
+    document's state. Undo is the inverse `set_kind`.
+93. **Previews regenerate under an override, not in the document.**
+    `Preview::live` (other parameters) and `Preview::transform` (an end
+    moved) reach `regenerate_with` through `RegenOverride`; the key
+    (`regen_key_with`) hashes the override's parameters in place of the
+    controller's and the moved nodes' tags plus the matrix, so a drag
+    frame regenerates **once**, a repeated frame never, and the commit
+    regenerates once more (the content revisions moved). A move of the
+    controller itself (or anything above it) is inert: the walker's
+    group transform moves the output whole. Moved ends transform their
+    outline and every geometry-linked attribute (fills), as the walker's
+    group transform draws the moved object itself. A controller with a
+    previewed kind is never culled, and `Session::rebuild_scene` widens
+    the scene ink by a previewed contour's growth.
+94. **A generated node may be furnished in the transaction that made
+    it.** `Tx::attach` lets a node created in this transaction become
+    the `LastChild` of another node created in it, even a generated one
+    (not a locked one): a new contour's start attributes. Every other
+    edit of generated data is still refused. A contour that changes side
+    moves its **source** (after the controller's attributes for inner,
+    last for outer); the generated node never moves.
+95. **Contour tool, ours**: the box is the union of the selected
+    objects' own boxes (a contour's source, rings excluded); four rings
+    (the original's 3 steps); the steps field shows rings (1–999) and
+    stores rings − 1, as the original's box; the width is a typed length
+    clamped to 10..250000 mp (not refused); a width or a side chosen for
+    bare objects gives them a contour (the side: 5 pt; the width:
+    outer), where the original's buttons do nothing; join is the
+    parameter (`ContourParams::join = Some`), not a join attribute; the
+    inner-width clamp to the largest possible inset is not done (the
+    generator lets inner rings collapse); no snapping; an open path is
+    not given a fill first. New contours copy the eight slots and lighten
+    a flat fill (`live_edit::contour_start`); the "no fill" clone is not
+    done. Feedback for an existing contour is the live contour; for a new
+    one the dashed offset outline (mitre), or the dashed box past 24
+    objects.
+96. **Blend tool, ours**: the drag starts on any object the picker hits
+    (not only path-convertible ones); the line is a solid overlay
+    polyline; the cursor is a crosshair over a target. A new blend stands
+    right after the end object with the start beneath (as the original)
+    but common attributes are **not** factored onto the controller (each
+    object keeps or gets — `materialise` — what it inherited); an object
+    joining a blend is localised the same way; merging takes the end
+    blend's objects (its pair parameters are dropped: the start blend's
+    apply). Undo labels "Blend", "Remove Blend", "Blend Steps", "Blend
+    Colours", "Blend One To One", "Blend Antialias", "Blend Profile",
+    "Blend Attribute Profile"; contour: "Apply Contour", "Remove
+    Contour", "Contour Steps", "Contour Width", "Contour Side", "Contour
+    Join", "Contour Colours", "Contour Profile", "Contour Colour
+    Profile", "Inset Path". **Ends move live**: Ctrl-drag an end in the
+    blend tool (or move one selected inside with the selector) and the
+    steps follow every frame (the original recomputes on drop only). The
+    effect list adds "None" (no colour blend, the model's fourth type).
+    Not done: point mapping and remap, blend along a path (F6), the
+    distance mode, tangential, the "long job" question, refusing to
+    remove a bevelled/contoured blend.
+
 ## Provisional values (observe in the VM before trusting)
 
 - Segment grab = 4 + 3 device px; freehand chunk 96 samples; freehand
@@ -1170,8 +1347,23 @@ of a shadow and a bevel made by scripted gestures). Unit tests in
     whose render equals the preview, and `Esc` leaves nothing; applying
     then removing an effect is the identity by digest
     (`tests/live_tools.rs`).
+19. A contour or blend drag emits nothing before release, regenerates
+    its output **exactly once per frame that changes it** (none for a
+    repeated frame: `WalkStats::live_regenerated`) and never records a
+    regeneration; the release is one step whose render equals the
+    preview; applying then removing a contour or a blend is the identity
+    by digest; a contour change repaints exactly what a full frame shows
+    (`tests/contour_blend_tools.rs`).
 
 ## Dead ends (do not retry)
+
+- **Building a contour's generated node and then attaching its
+  attributes to it**: `Tx::check_permitted` refuses every anchor inside
+  generated data. Furnish it while it is new (decision 94).
+- **Moving a contour's generated node to change sides**: refused for the
+  same reason; move the source instead.
+- **Contour test drags of 2000 mp per frame** at page fit stay under the
+  4 px drag threshold: the first frames are not a drag yet.
 
 - **An anchor grid built from nested egui `horizontal` rows**: each row
   takes a full interaction height and pushed the whole infobar out of its
@@ -1239,3 +1431,10 @@ of a shadow and a bevel made by scripted gestures). Unit tests in
       shadow and keys 1–4/A; the bevel size drag's contoured-path outline
       (we draw the box) and snapping; Draft-quality effects during drags
       (J3, render crate); arrow-key nudges of a wall shadow's offset.
+- [ ] Contour and blend tools (XARA-T-0340 follow-ups): blend along a
+      path (F6) with attach/detach, tangential and the distance mode;
+      point mapping and remap drags; the contour steps/distance toggle;
+      the inner-width clamp to the deepest possible inset; the open-path
+      fill and the "no fill" clone on a new contour; snapping of the size
+      handles; refusing to remove a bevelled or contoured blend; the
+      "long job" question for heavy blends.

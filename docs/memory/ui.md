@@ -145,6 +145,29 @@ Full note: [`tools.md`](tools.md). What the interface side owns:
   `OverlayShape::Arrow` and `HandleShape::FillCentreSelected` (the light);
   the shadow tool draws only dashed boxes while dragging out a new shadow.
 
+### Contour and blend tools (phase 13, XARA-T-0340)
+
+- **Palette**: Blend (F7) and Contour (Ctrl+F7) open the live-effect
+  group (the separator now stands before Blend), then Shadow and Bevel.
+  Glyphs are ours: three outlined squares growing into a solid disc; two
+  rounded rings round a solid square. Both are in `AppCommand::ALL`
+  (64 entries).
+- **Infobars** use existing items only: contour = steps `Scalar` (shown
+  as rings, 1–999), width `Measure`, side `Choice` (Outer/Inner), join
+  `Choice`, colours `Choice` (Fade/Rainbow/Alt rainbow), four `Real`
+  profile sliders (object bias/gain, colour bias/gain; previewed, one
+  step on release), inset `Toggle`, and a `Command` button for
+  `ToolAction::RemoveEffect` ("Remove"); blend = steps `Scalar`
+  (1–999), colours `Choice` (+ None), one-to-one and antialias
+  `Toggle`s, four `Real` profile sliders, Remove. Eighteen new
+  `InfobarField`s with labels and descriptions.
+- **Overlay**: the contour tool reuses `HandleShape::Bounds` and draws a
+  new contour's last ring as dashed polylines (`bevel_tool::push_outline`);
+  the blend tool draws its drag line as a two-point open polyline.
+- **Cursors**: contour `Resize` over a handle and while dragging; blend
+  `Crosshair` over an object or a valid target, `Move` over a
+  Ctrl-held blend end and while moving one.
+
 ### Fill and transparency tools (phase 8, XARA-US-0039)
 
 - **Palette**: Fill (F5) and Transparency (F6) are now available and
