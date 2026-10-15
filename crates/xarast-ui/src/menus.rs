@@ -24,6 +24,11 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The licence shown in the About box.
 pub const LICENCE: &str = "MIT OR Apache-2.0";
 
+/// The third-party notices: the one source of truth, also installed into the
+/// AppImage by `packaging/linux/build-appimage.sh`. Every statement in
+/// `docs/11-licensing-and-clean-room.md` §4.1 appears in it verbatim.
+pub const THIRD_PARTY_NOTICES: &str = include_str!("../../../packaging/THIRD-PARTY-NOTICES.txt");
+
 /// The accessible name and title of the About box.
 pub const ABOUT_TITLE: &str = "About Xarast";
 
@@ -234,13 +239,13 @@ impl AppMenu {
                         .color(tokens.text)
                         .size(15.0),
                 );
-                ui.label(
-                    egui::RichText::new(
-                        "The licences of the libraries Xarast is built from will be \
-                         listed here.",
-                    )
-                    .color(tokens.text_muted),
-                );
+                egui::ScrollArea::vertical()
+                    .max_height(140.0)
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(THIRD_PARTY_NOTICES).color(tokens.text_muted),
+                        );
+                    });
                 ui.add_space(8.0);
                 if ui.button("Close").clicked() {
                     close = true;
@@ -488,6 +493,39 @@ pub fn empty_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The quoted statements of the section 4.1 table in the licensing document.
+    fn required_statements() -> Vec<String> {
+        let doc = include_str!("../../../docs/11-licensing-and-clean-room.md");
+        let section = doc
+            .split("### 4.1")
+            .nth(1)
+            .and_then(|s| s.split("\n---").next())
+            .expect("section 4.1");
+        let statements: Vec<String> = section
+            .lines()
+            .filter(|l| l.starts_with("| `"))
+            .filter_map(|l| {
+                let cell = l.trim_end_matches(['|', ' ']).rsplit('|').next()?;
+                let cell = cell.trim();
+                Some(cell.strip_prefix('"')?.strip_suffix('"')?.to_owned())
+            })
+            .collect();
+        assert!(!statements.is_empty(), "no statements parsed from 4.1");
+        statements
+    }
+
+    #[test]
+    fn the_about_text_carries_every_required_statement() {
+        for statement in required_statements() {
+            assert!(
+                THIRD_PARTY_NOTICES.contains(&statement),
+                "missing from the notices: {statement}"
+            );
+        }
+        assert!(THIRD_PARTY_NOTICES
+            .contains("This software is based in part on the work of the Independent JPEG Group."));
+    }
 
     #[test]
     fn a_recent_label_names_the_file_then_its_folder() {

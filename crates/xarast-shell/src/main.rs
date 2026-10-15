@@ -173,6 +173,7 @@ fn main() -> ExitCode {
     if version {
         println!("xarast {}", env!("CARGO_PKG_VERSION"));
         if verbose {
+            println!("build: {}", xarast_app::crash::build_id());
             println!("platform: {}", platform_summary());
         }
         return ExitCode::SUCCESS;

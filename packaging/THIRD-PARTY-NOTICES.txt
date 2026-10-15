@@ -1,0 +1,9 @@
+Xarast third-party notices
+==========================
+
+Xarast is licensed under MIT OR Apache-2.0. Some libraries it is built from
+ask for a statement in the documentation of a binary distribution. Each one
+is given here.
+
+jpeg-encoder (JPEG export)
+  This software is based in part on the work of the Independent JPEG Group.
