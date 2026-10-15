@@ -248,6 +248,11 @@ impl TextPlacer for SvgTextPlacer {
         Some(placement)
     }
 
+    fn outlines(&self, doc: &Document, story: NodeId) -> Option<Vec<xarast_doc::OutlineRun>> {
+        let fonts = fonts::for_document(&self.fonts, doc);
+        crate::text::story_outlines(&fonts, doc, story).map(|(runs, _)| runs)
+    }
+
     fn font_file(&self, face: &PlacedFace, chars: &[char]) -> Option<FontFile> {
         let (fonts, id) = self
             .faces

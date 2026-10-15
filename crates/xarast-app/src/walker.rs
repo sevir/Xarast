@@ -577,6 +577,26 @@ impl SceneWalker {
                             walk.control(xarast_doc::Descend::Skip);
                             continue;
                         }
+                        // A mould's copy, regenerated from its source through
+                        // the cage, drawn where its generated node stands; the
+                        // source itself is drawn only through it.
+                        NodeKind::Live(l)
+                            if l.role == xarast_doc::LiveRole::Generated
+                                && matches!(l.kind, xarast_doc::LiveKind::Mould(_)) =>
+                        {
+                            walk.control(xarast_doc::Descend::Skip);
+                            if !self.paint_mould(doc, node, &mut attrs, quality, &mut b) {
+                                self.stats.live_pending += 1;
+                            }
+                            continue;
+                        }
+                        NodeKind::Live(l)
+                            if l.role == xarast_doc::LiveRole::Source
+                                && matches!(l.kind, xarast_doc::LiveKind::Mould(_)) =>
+                        {
+                            walk.control(xarast_doc::Descend::Skip);
+                            continue;
+                        }
                         NodeKind::Layer(l) => {
                             if !l.visible || l.guide {
                                 walk.control(xarast_doc::Descend::Skip);
@@ -1167,6 +1187,7 @@ impl SceneWalker {
                         | xarast_doc::LiveKind::Bevel(_)
                         | xarast_doc::LiveKind::Contour(_)
                         | xarast_doc::LiveKind::Blend(_)
+                        | xarast_doc::LiveKind::Mould(_)
                 ) =>
             {
                 return;
@@ -1407,6 +1428,75 @@ impl SceneWalker {
                 &path,
                 step.filled,
                 step.stroked,
+                attrs,
+                quality,
+                b,
+                ContentHash(bytes),
+            );
+            attrs.pop_scope();
+        }
+        true
+    }
+
+    /// Draws a mould's copy at its generated node `node`: regenerated (or
+    /// found in the cache) from the controller above it, text laid out
+    /// with the walker's fonts and moulded as curves (G8). Every shape
+    /// carries all the attributes it is drawn with, its moulded fills
+    /// among them. `false` when there is nothing it could regenerate.
+    fn paint_mould(
+        &mut self,
+        doc: &Document,
+        node: NodeId,
+        attrs: &mut AttrStack,
+        quality: RenderQuality,
+        b: &mut SceneBuilder<'_>,
+    ) -> bool {
+        let Some(controller) = doc.tree.links(node).parent else {
+            return false;
+        };
+        let fonts = self.story_fonts(doc);
+        let mut generate = |doc: &Document, c: NodeId, _dpi: f64| {
+            let shapes = xarast_doc::mould::generate_with(doc, c, &mut |doc, story| {
+                crate::text::story_outlines(&fonts, doc, story).map(|(runs, _)| runs)
+            });
+            Ok(match shapes {
+                Some(s) => xarast_doc::LiveOutput::Shapes(Arc::from(s)),
+                None => xarast_doc::LiveOutput::Stored,
+            })
+        };
+        // Moulds are geometry: the same at every resolution.
+        let Some((key, out)) = self
+            .live
+            .current_or_regenerate(doc, controller, 0.0, &mut generate)
+        else {
+            return false;
+        };
+        let xarast_doc::LiveOutput::Shapes(shapes) = &*out else {
+            return false;
+        };
+        let tag = u64::from(doc.tree.get(node).map_or(0, |d| d.tag.0));
+        let version = u64::from_le_bytes(first8(&key.0));
+        for (i, shape) in shapes.iter().enumerate() {
+            if shape.path.is_empty() {
+                continue;
+            }
+            attrs.push_scope();
+            for a in shape.attrs.iter() {
+                attrs.push(Arc::new(a.clone()));
+            }
+            // As a contour's rings: the shape index above the tag.
+            let index = (i as u64 + 1) & 0x3fff_ffff;
+            let id = SceneNodeId(tag | (index << 32));
+            let mut bytes = [0u8; 16];
+            bytes[..8].copy_from_slice(&mix64(version, index).to_le_bytes());
+            bytes[8..].copy_from_slice(&self.scope.to_le_bytes());
+            let path = PathRef::from_arc(Arc::clone(&shape.path));
+            self.paint_geometry(
+                doc,
+                id,
+                &path,
+                shape.filled,
+                shape.stroked,
                 attrs,
                 quality,
                 b,
