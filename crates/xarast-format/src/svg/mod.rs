@@ -305,6 +305,8 @@ pub struct Stats {
     /// Contour rings baked as real offset paths (§6.8.3), the start ring
     /// of each contour included even when it is empty.
     pub contour_rings: usize,
+    /// Blend steps baked as real paths (§6.8.4).
+    pub blend_steps: usize,
     /// `ClipRegion` attributes, which nothing draws yet.
     pub clip_regions_ignored: usize,
     /// Non-attribute children of ink nodes, drawn before them as siblings.

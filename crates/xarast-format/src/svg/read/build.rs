@@ -12,13 +12,13 @@ use std::sync::Arc;
 use xarast_color::{ColourDef, ColourId, ColourKind, ColourModel, Rgba8};
 use xarast_doc::{
     AttrValue, BevelParams, BevelType, BitmapData, BitmapId, BitmapInfo, BitmapNode,
-    BitmapResource, BlendParams, BrushParams, BuildId, ClipViewMode, ClipViewNode, ContourParams,
-    DiagCode, Diagnostic, DocumentBuilder, DocumentNode, EffectParams, ForeignAttr, ForeignBaggage,
-    ForeignChild, ForeignChildKind, ForeignMarks, GridKind, GridNode, GroupNode, GuidelineNode,
-    ImageFormat, Justification, LayerNode, LineSpacing, LiveKind, LiveNode, LiveRole, MouldKind,
-    MouldParams, NodeFlags, NodeKind, OpaqueNode, OriginalEncoded, PageNode, PathNode, QuickShape,
-    RegenState, Severity, ShadowKind, ShadowParams, ShapeKind, ShapeNode, SpreadNode, Tag,
-    TextItem, TextLayout, TextStoryNode, TypefaceRef, default_for,
+    BitmapResource, BlendParams, BlenderParams, BrushParams, BuildId, ClipViewMode, ClipViewNode,
+    ContourParams, DiagCode, Diagnostic, DocumentBuilder, DocumentNode, EffectParams, ForeignAttr,
+    ForeignBaggage, ForeignChild, ForeignChildKind, ForeignMarks, GridKind, GridNode, GroupNode,
+    GuidelineNode, ImageFormat, Justification, LayerNode, LineSpacing, LiveKind, LiveNode,
+    LiveRole, MouldKind, MouldParams, NodeFlags, NodeKind, OpaqueNode, OriginalEncoded, PageNode,
+    PathNode, QuickShape, RegenState, Severity, ShadowKind, ShadowParams, ShapeKind, ShapeNode,
+    SpreadNode, Tag, TextItem, TextLayout, TextStoryNode, TypefaceRef, default_for,
 };
 use xarast_geom::{BiasGain, Join, Matrix, Mp, Path, Point, Rect, Vector};
 
@@ -1104,9 +1104,59 @@ impl<'d, 'r, 'f> Reader<'d, 'r, 'f> {
                 tangential: is_true(g("tangential")),
                 reverse: is_true(g("reverse")),
                 profile: prof("position-profile"),
-                ..BlendParams::default()
+                attr_profile: prof("attribute-profile"),
+                colour_effect: match g("colour-effect") {
+                    Some("rainbow") => Some(xarast_color::FillEffect::Rainbow),
+                    Some("alt-rainbow") => Some(xarast_color::FillEffect::AltRainbow),
+                    Some("none") => None,
+                    _ => Some(xarast_color::FillEffect::Fade),
+                },
+                blenders: self.blenders_of(p),
             })),
         }
+    }
+
+    /// A blend's `xarast:blender` children (`research/06 §6.8.4` as
+    /// implemented): each pair's recorded start points and its
+    /// `xarast:blend-map`. At most one entry per pair a document can hold;
+    /// malformed numbers are dropped.
+    fn blenders_of(&self, p: Option<&Elem>) -> Vec<BlenderParams> {
+        let Some(p) = p else {
+            return Vec::new();
+        };
+        let kids = |e: &Elem| -> Vec<&Elem> {
+            e.children
+                .iter()
+                .filter_map(|c| match c {
+                    Child::Elem(i) => self.elem(*i),
+                    _ => None,
+                })
+                .collect()
+        };
+        let index = |e: &Elem, n: &str| xa(e, n).and_then(|v| v.parse::<u32>().ok());
+        kids(p)
+            .into_iter()
+            .filter(|e| e.is(NS_XARAST, "blender"))
+            .map(|e| BlenderParams {
+                start_index: index(e, "start-point"),
+                end_index: index(e, "end-point"),
+                pairs: kids(e)
+                    .into_iter()
+                    .find(|m| m.is(NS_XARAST, "blend-map"))
+                    .and_then(|m| xa(m, "pairs"))
+                    .map(|v| {
+                        v.split_ascii_whitespace()
+                            .filter_map(|t| {
+                                let (a, b) = t.split_once(':')?;
+                                Some((a.parse().ok()?, b.parse().ok()?))
+                            })
+                            .take(1 << 16)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            })
+            .take(1 << 20)
+            .collect()
     }
 
     /// The live kind of the controller the builder is currently inside, if
@@ -1118,6 +1168,21 @@ impl<'d, 'r, 'f> Reader<'d, 'r, 'f> {
             Some(NodeKind::Live(l))
                 if l.role == LiveRole::Controller
                     && l.kind.type_name().eq_ignore_ascii_case(name) =>
+            {
+                Some(l.kind.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// The live kind of the source the builder is currently inside, if it
+    /// is one of kind `name` (where a blend's pairs stand).
+    fn enclosing_source(&self, name: &str) -> Option<LiveKind> {
+        let doc = self.b.document();
+        let scope = self.b.current_scope()?;
+        match doc.tree.kind(scope.node_id()) {
+            Some(NodeKind::Live(l))
+                if l.role == LiveRole::Source && l.kind.type_name().eq_ignore_ascii_case(name) =>
             {
                 Some(l.kind.clone())
             }
@@ -1167,12 +1232,20 @@ impl<'d, 'r, 'f> Reader<'d, 'r, 'f> {
         ctx: &Ctx,
     ) -> Result<(), SvgReadError> {
         let by = xa(e, "generated-by");
-        let parent_id = e
-            .parent
-            .and_then(|p| self.elem(p))
-            .and_then(|p| attr(p, "", "id"));
-        let resolves = by.is_some_and(|b| Some(b) == parent_id);
-        let controller = if resolves {
+        let parent = e.parent.and_then(|p| self.elem(p));
+        let parent_id = parent.and_then(|p| attr(p, "", "id"));
+        // A blend's pairs stand between its objects, under its source, and
+        // name the blend itself (`research/06 §6.8.4` as implemented).
+        let pair_of = parent
+            .filter(|p| kind == "blend" && xa(p, "kind") == Some("live-source"))
+            .and_then(|p| p.parent)
+            .and_then(|g| self.elem(g))
+            .and_then(|g| attr(g, "", "id"));
+        let is_pair = pair_of.is_some() && by.is_some_and(|b| Some(b) == pair_of);
+        let resolves = is_pair || by.is_some_and(|b| Some(b) == parent_id);
+        let controller = if is_pair {
+            self.enclosing_source(kind)
+        } else if resolves {
             self.enclosing_live(kind)
         } else {
             None
@@ -1222,6 +1295,10 @@ impl<'d, 'r, 'f> Reader<'d, 'r, 'f> {
             // `xarast:contour-start`, with the join attribute in force
             // there (`research/06 §6.8.3`).
             self.contour_start(e, &cctx)?;
+            self.children(e, &cctx, &|c| c.is(NS_SVG, "path"), 0, &mut bag)?;
+        } else if is_pair {
+            // The steps are derived: the walker and the next save
+            // regenerate them from the objects on either side.
             self.children(e, &cctx, &|c| c.is(NS_SVG, "path"), 0, &mut bag)?;
         } else {
             self.children(e, &cctx, &|_| false, 0, &mut bag)?;

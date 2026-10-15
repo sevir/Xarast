@@ -1870,6 +1870,7 @@ impl<'d, 'b> Emitter<'d, 'b> {
         let mut prelude = None;
         let mut shadow = None;
         let mut bevel = None;
+        let mut steps = None;
         match l.role {
             LiveRole::Controller => {
                 el.a("xarast:kind", kind);
@@ -1893,12 +1894,20 @@ impl<'d, 'b> Emitter<'d, 'b> {
             }
             LiveRole::Generated => {
                 el.a("xarast:generated", kind);
-                if let Some(p) = self.doc.tree.links(n).parent {
+                // A blend's pairs stand under its source; they name the
+                // blend itself (XARA-T-0333).
+                steps = self.blend_pair(n);
+                let by = match steps {
+                    Some(_) => xarast_doc::controller_of(&self.doc.tree, n),
+                    None => self.doc.tree.links(n).parent,
+                };
+                if let Some(p) = by {
                     el.a("xarast:generated-by", node_id(self.doc, p));
                 }
-                // A contour regenerates its rings (XARA-T-0330); the other
-                // kinds' baked geometry must survive a reader (§6.8.7).
-                if !matches!(l.kind, LiveKind::Contour(_)) {
+                // A contour regenerates its rings (XARA-T-0330), a blend its
+                // steps (XARA-T-0333); the other kinds' baked geometry must
+                // survive a reader (§6.8.7).
+                if !matches!(l.kind, LiveKind::Contour(_)) && steps.is_none() {
                     el.a("xarast:base-authoritative", "true");
                 }
             }
@@ -1929,7 +1938,88 @@ impl<'d, 'b> Emitter<'d, 'b> {
             self.contour_rings(n, el);
             return;
         }
+        if let Some((controller, k)) = steps {
+            self.blend_steps(n, controller, k, el);
+            return;
+        }
         self.container(n, el, prelude);
+    }
+
+    /// The blend controller and pair index of a blend's generated node
+    /// that stands between two objects under its source; `None` for any
+    /// other node (a generated node a file stored elsewhere keeps its
+    /// content).
+    fn blend_pair(&self, n: NodeId) -> Option<(NodeId, usize)> {
+        let tree = &self.doc.tree;
+        if !matches!(tree.kind(n), Some(NodeKind::Live(l)) if matches!(l.kind, LiveKind::Blend(_)))
+        {
+            return None;
+        }
+        let source = tree.links(n).parent?;
+        if !matches!(tree.kind(source), Some(NodeKind::Live(l)) if l.role == LiveRole::Source) {
+            return None;
+        }
+        let controller = tree.links(source).parent?;
+        let k = xarast_doc::blend::blenders(tree, source)
+            .iter()
+            .position(|&(g, _, _)| g == n)?;
+        Some((controller, k))
+    }
+
+    /// A blend pair's generated node, baked (`research/06 §6.8.4`): its
+    /// steps as **real paths**, regenerated at every save and painted in
+    /// paint order with the attributes in force here plus each step's
+    /// blended ones. The reader drops them; the walker and the next save
+    /// regenerate them.
+    fn blend_steps(&mut self, n: NodeId, controller: NodeId, k: usize, el: El) {
+        let tag = el.tag;
+        self.open_container(Some(n), el);
+        self.body.push('>');
+        self.newline();
+        self.depth += 1;
+        let steps = xarast_doc::blend::generate(self.doc, controller)
+            .and_then(|mut g| (k < g.len()).then(|| g.swap_remove(k)))
+            .unwrap_or_default();
+        for step in &steps {
+            if step.path.is_empty() {
+                continue;
+            }
+            self.attrs.push_scope();
+            for a in step.attrs.iter() {
+                self.attrs.push(Arc::new(a.clone()));
+            }
+            let mut el = El::new("path");
+            el.ink = true;
+            let f = self.frame;
+            el.a("d", path_data(&step.path, |q| f.pt(q)));
+            let bounds = Some(self.path_box(&step.path));
+            let mut known = Vec::new();
+            self.paint(&mut el, bounds, step.filled, step.stroked, &mut known);
+            let t = el.tag;
+            self.open(None, el);
+            if known.is_empty() {
+                self.body.push_str("/>");
+                self.newline();
+            } else {
+                self.body.push('>');
+                self.newline();
+                self.depth += 1;
+                for k in known {
+                    self.indent();
+                    self.body.push_str(&k);
+                    self.newline();
+                }
+                self.depth -= 1;
+                self.close(t);
+            }
+            self.attrs.pop_scope();
+            self.stats.blend_steps += 1;
+        }
+        let mut next = 0usize;
+        self.fragments(n, &mut next, None);
+        self.depth -= 1;
+        self.close_group();
+        self.close(tag);
     }
 
     /// A contour's generated node, baked (`research/06 §6.8.3`): its rings
@@ -2666,7 +2756,6 @@ fn live_params(
     colour: Option<(String, Option<String>)>,
     join: Option<Join>,
 ) -> String {
-    let profile = |p: xarast_geom::BiasGain| format!("{} {}", f64s(p.bias, 6), f64s(p.gain, 6));
     let mut s = String::new();
     match k {
         LiveKind::Blend(b) => {
@@ -2679,7 +2768,50 @@ fn live_params(
             attr(&mut s, "xarast:antialias", bool_s(b.antialias));
             attr(&mut s, "xarast:tangential", bool_s(b.tangential));
             attr(&mut s, "xarast:reverse", bool_s(b.reverse));
-            attr(&mut s, "xarast:position-profile", &profile(b.profile));
+            // Shortest exact spellings, as a contour's: a reload is bit for
+            // bit (the corpus profiles are two-decimal `f64`s).
+            let exact =
+                |p: xarast_geom::BiasGain| format!("{} {}", f64s_exact(p.bias), f64s_exact(p.gain));
+            attr(&mut s, "xarast:position-profile", &exact(b.profile));
+            attr(&mut s, "xarast:attribute-profile", &exact(b.attr_profile));
+            match b.colour_effect {
+                Some(xarast_color::FillEffect::Fade) => {}
+                Some(xarast_color::FillEffect::Rainbow) => {
+                    attr(&mut s, "xarast:colour-effect", "rainbow");
+                }
+                Some(xarast_color::FillEffect::AltRainbow) => {
+                    attr(&mut s, "xarast:colour-effect", "alt-rainbow");
+                }
+                None => attr(&mut s, "xarast:colour-effect", "none"),
+            }
+            if b.blenders.is_empty() {
+                s.push_str("/>");
+                return s;
+            }
+            // One `xarast:blender` per pair, in order: where each end's
+            // outline starts, and an explicit correspondence as
+            // `xarast:blend-map`.
+            s.push('>');
+            for p in &b.blenders {
+                s.push_str("<xarast:blender");
+                if let Some(i) = p.start_index {
+                    attr(&mut s, "xarast:start-point", &i.to_string());
+                }
+                if let Some(i) = p.end_index {
+                    attr(&mut s, "xarast:end-point", &i.to_string());
+                }
+                if p.pairs.is_empty() {
+                    s.push_str("/>");
+                } else {
+                    let pairs: Vec<String> =
+                        p.pairs.iter().map(|(a, e)| format!("{a}:{e}")).collect();
+                    s.push_str("><xarast:blend-map");
+                    attr(&mut s, "xarast:pairs", &pairs.join(" "));
+                    s.push_str("/></xarast:blender>");
+                }
+            }
+            s.push_str("</xarast:blend>");
+            return s;
         }
         LiveKind::Contour(c) => {
             s.push_str("<xarast:contour");

@@ -2172,3 +2172,116 @@ fn no_fill_rule_written_is_non_zero_as_when_the_default_was_one() {
         );
     }
 }
+
+/// A three-object blend: each pair's steps baked between its objects.
+fn blend_doc() -> Document {
+    let mut b = xarast_doc::builder::skeleton(BuildLimits::default()).unwrap();
+    let kind = LiveKind::Blend(Box::new(xarast_doc::BlendParams {
+        steps: 3,
+        one_to_one: true,
+        profile: BiasGain::new(0.123_456_7, -0.3),
+        attr_profile: BiasGain::new(0.25, 0.5),
+        colour_effect: None,
+        blenders: vec![
+            xarast_doc::BlenderParams {
+                start_index: Some(2),
+                ..xarast_doc::BlenderParams::default()
+            },
+            xarast_doc::BlenderParams {
+                end_index: Some(0),
+                pairs: vec![(0, 0)],
+                ..xarast_doc::BlenderParams::default()
+            },
+        ],
+        ..xarast_doc::BlendParams::default()
+    }));
+    let live = |role| {
+        NodeKind::Live(Box::new(LiveNode {
+            role,
+            kind: kind.clone(),
+            regen: RegenState::Clean,
+            name: None,
+        }))
+    };
+    b.node(live(LiveRole::Controller)).unwrap();
+    b.push_scope().unwrap();
+    b.attribute(AttrValue::LineWidth(Mp::new(500))).unwrap();
+    b.node(live(LiveRole::Source)).unwrap();
+    b.push_scope().unwrap();
+    let objects = [
+        (triangle(50_000, 300_000), rgb(0.9, 0.1, 0.1)),
+        (
+            shape(
+                ShapeKind::Rect,
+                (250_000, 280_000),
+                (60_000, 0),
+                (0, 60_000),
+            ),
+            rgb(0.1, 0.1, 0.9),
+        ),
+        (triangle(450_000, 300_000), rgb(0.1, 0.9, 0.1)),
+    ];
+    for (i, (node, colour)) in objects.into_iter().enumerate() {
+        if i > 0 {
+            b.node(live(LiveRole::Generated)).unwrap();
+        }
+        b.node(node).unwrap();
+        b.push_scope().unwrap();
+        b.attribute(flat(colour)).unwrap();
+        b.pop_scope();
+    }
+    b.pop_scope();
+    b.pop_scope();
+    b.finish().unwrap().0
+}
+
+#[test]
+fn a_blend_bakes_its_steps_between_its_objects_and_reads_back_exactly() {
+    let doc = blend_doc();
+    let first = package(&doc, SvgOptions::default());
+    let svg = svg_of(&first);
+    assert!(
+        svg.contains("xarast:position-profile=\".1234567 -.3\""),
+        "{svg}"
+    );
+    assert!(svg.contains("xarast:attribute-profile=\".25 .5\""), "{svg}");
+    assert!(svg.contains("xarast:colour-effect=\"none\""), "{svg}");
+    assert!(
+        svg.contains("<xarast:blender xarast:start-point=\"2\"/>"),
+        "{svg}"
+    );
+    assert!(
+        svg.contains("xarast:end-point=\"0\"><xarast:blend-map xarast:pairs=\"0:0\"/>"),
+        "{svg}"
+    );
+    // Two pairs, three real paths each, between the objects.
+    let groups: Vec<&str> = svg.split("xarast:generated=\"blend\"").skip(1).collect();
+    assert_eq!(groups.len(), 2);
+    for g in &groups {
+        let body = &g[..g.find("</g>").unwrap()];
+        assert_eq!(body.matches("<path").count(), 3, "{body}");
+        assert!(!g[..g.find('>').unwrap()].contains("base-authoritative"));
+    }
+    let mut o = open(&first);
+    assert!(o.diagnostics.is_empty(), "{:?}", o.diagnostics);
+    same_text(&normal_form(&doc), &normal_form(&o.document));
+    // The steps are not read back: the pairs are empty again.
+    let generated: Vec<_> = o
+        .document
+        .tree
+        .preorder(o.document.tree.root())
+        .filter(|&n| {
+            matches!(o.document.tree.kind(n), Some(NodeKind::Live(l))
+                if l.role == LiveRole::Generated)
+        })
+        .collect();
+    assert_eq!(generated.len(), 2);
+    assert!(
+        generated
+            .iter()
+            .all(|g| o.document.tree.children(*g).next().is_none())
+    );
+    let again = resave(&mut o);
+    same_text(&svg, &svg_of(&again));
+    assert!(first == again, "a fixed point");
+}
