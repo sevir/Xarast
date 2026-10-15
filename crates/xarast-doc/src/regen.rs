@@ -258,25 +258,26 @@ impl LiveCache {
     /// one when its key still matches, else regenerated with `generate`
     /// and cached. What a consumer that walks the tree once per frame
     /// (the scene walker) uses instead of a queue: the key catches every
-    /// change, so nothing has to be marked. `None` when `controller` is
-    /// not a controller or could not be regenerated (and nothing stale is
-    /// kept).
+    /// change, so nothing has to be marked. Returns the key with it (a
+    /// version of the output, for render caches). `None` when
+    /// `controller` is not a controller or could not be regenerated (and
+    /// nothing stale is kept).
     pub fn current_or_regenerate(
         &mut self,
         doc: &Document,
         controller: NodeId,
         dpi: f64,
         generate: &mut Generator<'_>,
-    ) -> Option<Arc<LiveOutput>> {
+    ) -> Option<(RegenKey, Arc<LiveOutput>)> {
         let key = regen_key(doc, controller, dpi)?;
         if let Some(out) = self.current(controller, key) {
-            return Some(Arc::clone(out));
+            return Some((key, Arc::clone(out)));
         }
         match generate(doc, controller, dpi) {
             Ok(out) => {
                 let out = Arc::new(out);
                 self.entries.insert(controller, (key, Arc::clone(&out)));
-                Some(out)
+                Some((key, out))
             }
             Err(_) => {
                 self.entries.remove(&controller);
