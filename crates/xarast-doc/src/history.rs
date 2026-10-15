@@ -610,6 +610,58 @@ impl<'d> Tx<'d> {
         Ok(())
     }
 
+    /// Replaces the parameters of a live controller, and of its own
+    /// generated and source children of the same kind, which carry the
+    /// same parameters (as the readers build them).
+    ///
+    /// A generated node is refused to every other edit (it is the
+    /// controller's to recompute); changing the controller's parameters is
+    /// the one edit that speaks for it. Children already holding `kind`
+    /// are left alone, so nothing is recorded for them.
+    ///
+    /// # Errors
+    ///
+    /// [`EditError::WrongKind`] when `controller` is not a live controller
+    /// of `kind`'s sort; [`EditError::NotPermitted`] when it may not be
+    /// edited.
+    pub fn set_live_kind(
+        &mut self,
+        controller: NodeId,
+        kind: &crate::live::LiveKind,
+    ) -> Result<(), EditError> {
+        use crate::live::LiveRole;
+        self.check_permitted(controller)?;
+        let tree = &self.doc.tree;
+        match tree.kind(controller) {
+            Some(NodeKind::Live(l))
+                if l.role == LiveRole::Controller
+                    && l.kind.discriminant() == kind.discriminant() => {}
+            _ => return Err(EditError::WrongKind(controller)),
+        }
+        let mut nodes = vec![controller];
+        nodes.extend(tree.children(controller).filter(|c| {
+            matches!(tree.kind(*c), Some(NodeKind::Live(x))
+                if x.role != LiveRole::Controller
+                    && x.kind.discriminant() == kind.discriminant())
+        }));
+        for n in nodes {
+            let Some(NodeKind::Live(old)) = self.doc.tree.kind(n) else {
+                continue;
+            };
+            if &old.kind == kind {
+                continue;
+            }
+            let mut new = (**old).clone();
+            new.kind = kind.clone();
+            self.act(Action::SetKind {
+                node: n,
+                new: Box::new(NodeKind::Live(Box::new(new))),
+            })?;
+            self.mark_foreign(n, ForeignMarks::STALE)?;
+        }
+        Ok(())
+    }
+
     /// Replaces a node's payload.
     pub fn set_kind(&mut self, node: NodeId, kind: NodeKind) -> Result<(), EditError> {
         self.check_permitted(node)?;
