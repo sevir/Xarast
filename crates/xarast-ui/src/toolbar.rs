@@ -495,6 +495,22 @@ impl InfobarRow {
                     InfobarItem::Features { options } => features_menu(ui, options, out),
                     // Drawn on the horizontal ruler (`rulers::TextRulerStrip`).
                     InfobarItem::TextRuler(_) => {}
+                    InfobarItem::Swatch { field, colour } => {
+                        ui.label(field.label());
+                        let (rect, r) =
+                            ui.allocate_exact_size(egui::vec2(28.0, 16.0), egui::Sense::hover());
+                        if let Some(c) = colour {
+                            let c = egui::Color32::from_rgba_unmultiplied(c.r, c.g, c.b, c.a);
+                            ui.painter().rect_filled(rect, 2.0, c);
+                        }
+                        ui.painter().rect_stroke(
+                            rect,
+                            2.0,
+                            egui::Stroke::new(1.0_f32, tokens.text_muted),
+                            egui::StrokeKind::Inside,
+                        );
+                        r.on_hover_text(field.description());
+                    }
                     InfobarItem::Note(text) => {
                         ui.label(egui::RichText::new(text).color(tokens.text_muted));
                     }

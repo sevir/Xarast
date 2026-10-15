@@ -572,6 +572,17 @@ fn apply_click(
         return Ok(Changed::empty());
     }
     let colour = source.colour();
+    // The shadow tool: a left click colours the selected shadows, and only
+    // them (a selection without a shadow falls through to its fill).
+    if slot == PaintSlot::Fill && session.tools().current() == ToolId::Shadow {
+        let sel: Vec<NodeId> = session.edit.selection().collect();
+        if let Some(cmd) = crate::shadow_tool::colour_command(&session.doc, &sel, &colour) {
+            return apply(session, cmd);
+        }
+        if crate::shadow_tool::has_shadow(&session.doc, &sel) {
+            return Ok(Changed::empty());
+        }
+    }
     if slot == PaintSlot::Fill
         && let Some((nodes, target)) = selected_stop(session)
     {

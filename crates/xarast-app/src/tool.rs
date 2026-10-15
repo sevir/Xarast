@@ -547,6 +547,8 @@ pub enum InfobarField {
     TextTabRemove(u16),
     /// The shadow's type: none, wall, floor or glow (phase 13, C7).
     ShadowType,
+    /// The shadow's colour (set from the colour bar).
+    ShadowColour,
     /// A wall shadow's horizontal offset.
     ShadowX,
     /// A wall shadow's vertical offset.
@@ -624,6 +626,7 @@ impl InfobarField {
             InfobarField::TextTabMove(_) => "Tab stop",
             InfobarField::TextTabRemove(_) => "Remove tab stop",
             InfobarField::ShadowType | InfobarField::BevelType => "Type",
+            InfobarField::ShadowColour => "Colour",
             InfobarField::ShadowX => "X",
             InfobarField::ShadowY => "Y",
             InfobarField::ShadowBlur => "Blur",
@@ -688,6 +691,9 @@ impl InfobarField {
             InfobarField::TextTabMove(_) => "Move a tab stop",
             InfobarField::TextTabRemove(_) => "Remove a tab stop",
             InfobarField::ShadowType => "The kind of shadow: none, wall, floor or glow",
+            InfobarField::ShadowColour => {
+                "The shadow's colour; click a colour in the colour bar to change it"
+            }
             InfobarField::ShadowX => "Horizontal offset of the shadow",
             InfobarField::ShadowY => "Vertical offset of the shadow",
             InfobarField::ShadowBlur => "How soft the shadow's edge is",
@@ -835,6 +841,14 @@ pub enum InfobarItem {
     /// but on the horizontal ruler, which raises the margin, indent and
     /// tab stop fields.
     TextRuler(TextRuler),
+    /// A colour swatch: shown, not edited in the bar. A colour is set from
+    /// the colour bar (the shadow tool: [`InfobarField::ShadowColour`]).
+    Swatch {
+        /// Which field.
+        field: InfobarField,
+        /// The colour; `None` when the selection mixes several.
+        colour: Option<xarast_color::Rgba8>,
+    },
     /// A line of text.
     Note(String),
 }

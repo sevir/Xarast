@@ -89,6 +89,28 @@ fn selected_shadows(doc: &xarast_doc::Document, sel: &[NodeId]) -> Vec<(NodeId, 
         .collect()
 }
 
+/// The command that gives the shadows among `selection` the colour
+/// `colour`, as one step; `None` when none of them is a shadow or all
+/// already have it. What a colour clicked in the colour bar does while the
+/// shadow tool is in force.
+pub(crate) fn colour_command(
+    doc: &xarast_doc::Document,
+    selection: &[NodeId],
+    colour: &Colour,
+) -> Option<EditCommand> {
+    let shadows = selected_shadows(doc, selection);
+    if shadows.is_empty() {
+        return None;
+    }
+    let edits = shadow_edits(&shadows, "Shadow Colour", |p| p.colour = colour.clone());
+    (!edits.is_empty()).then_some(EditCommand::Live { edits })
+}
+
+/// Whether any of `selection` has a shadow.
+pub(crate) fn has_shadow(doc: &xarast_doc::Document, selection: &[NodeId]) -> bool {
+    !selected_shadows(doc, selection).is_empty()
+}
+
 /// The same, with the parameters a preview stands in.
 fn live_shadows(view: &ToolView<'_>) -> Vec<(NodeId, ShadowParams)> {
     let sel: Vec<NodeId> = view.edit.selection().collect();
@@ -593,6 +615,14 @@ impl Tool for ShadowTool {
             ));
             return Infobar { items };
         };
+        items.push(InfobarItem::Swatch {
+            field: InfobarField::ShadowColour,
+            colour: common(
+                shadows
+                    .iter()
+                    .map(|(_, p)| p.colour.resolve(&view.doc.resources.colours).to_rgba8()),
+            ),
+        });
         let of = |f: fn(&ShadowParams) -> Mp| common(shadows.iter().map(|(_, p)| f(p)));
         let real = |f: fn(&ShadowParams) -> f64| common(shadows.iter().map(|(_, p)| shown(f(p))));
         match first.kind {
@@ -717,6 +747,46 @@ impl Tool for ShadowTool {
             cx.commands.emit(EditCommand::Live { edits });
         }
         cx.requests.overlay_changed = true;
+    }
+
+    fn takes_nudge(&self, view: ToolView<'_>) -> bool {
+        let sel: Vec<NodeId> = view.edit.selection().collect();
+        selected_shadows(view.doc, &sel)
+            .iter()
+            .any(|(_, p)| p.kind == ShadowKind::Wall)
+    }
+
+    fn nudge(&mut self, by: xarast_geom::Vector, cx: &mut ToolCtx<'_>) -> bool {
+        let sel: Vec<NodeId> = cx.edit.selection().collect();
+        let walls: Vec<(NodeId, ShadowParams)> = selected_shadows(cx.doc, &sel)
+            .into_iter()
+            .filter(|(_, p)| p.kind == ShadowKind::Wall)
+            .collect();
+        if walls.is_empty() {
+            return false;
+        }
+        let max = MAX_SHADOW_OFFSET.raw();
+        let edits = shadow_edits(&walls, "Shadow Position", |p| {
+            p.offset = Point::raw(
+                p.offset
+                    .x
+                    .raw()
+                    .saturating_add(by.dx.raw())
+                    .clamp(-max, max),
+                p.offset
+                    .y
+                    .raw()
+                    .saturating_add(by.dy.raw())
+                    .clamp(-max, max),
+            );
+        });
+        // A key that would change nothing (the offset at its limit) is
+        // taken but writes no step.
+        if !edits.is_empty() {
+            cx.commands.emit(EditCommand::Live { edits });
+            cx.requests.overlay_changed = true;
+        }
+        true
     }
 
     fn cursor(&self, state: InteractionState) -> CursorKind {
