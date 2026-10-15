@@ -2,14 +2,15 @@
 id: XARA-T-0322
 type: task
 title: "D1–D4, D7, D8 — Bevels as a live effect: import 4052–4057, face generation, lighting, .xarast round trip"
-status: in_progress
+status: done
 priority: high
 parent: XARA-US-0069
 author: mcp
 labels: [phase-13, live-effects, render, xar, format]
 created: 2026-10-15T12:14:08Z
-updated: 2026-10-15T12:14:08Z
+updated: 2026-10-15T13:50:43Z
 started: 2026-10-15T12:14:08Z
+closed: 2026-10-15T13:50:43Z
 ---
 
 ## Description
