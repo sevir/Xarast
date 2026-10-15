@@ -1828,8 +1828,10 @@ impl<'o> Mapper<'o> {
             antialias: r.flags & 2 != 0,
             tangential: r.flags & 4 != 0,
             reverse: false,
-            profile: BiasGain::new(profiles[0].0, profiles[0].1),
-            attr_profile: BiasGain::new(profiles[1].0, profiles[1].1),
+            // `+ 0.0` turns a negative zero (several corpus profiles) into the
+            // zero a reload reads back.
+            profile: BiasGain::new(profiles[0].0 + 0.0, profiles[0].1 + 0.0),
+            attr_profile: BiasGain::new(profiles[1].0 + 0.0, profiles[1].1 + 0.0),
             colour_effect,
             blenders,
         };

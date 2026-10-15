@@ -82,7 +82,7 @@ struct Piece {
 
 /// One end of a pair: its objects' attributes and subpaths.
 struct End {
-    attrs: Vec<ResolvedAttrs>,
+    attrs: Vec<Vec<AttrValue>>,
     filled: Vec<bool>,
     stroked: Vec<bool>,
     pieces: Vec<Piece>,
@@ -107,12 +107,12 @@ pub fn generate(doc: &Document, controller: NodeId) -> Option<Vec<Vec<GeneratedS
     let source = parts(tree, controller)?.source;
     let blenders = blenders(tree, source);
     let mut out = Vec::with_capacity(blenders.len());
-    for (k, &(g, start, end)) in blenders.iter().enumerate() {
+    for (k, &(_, start, end)) in blenders.iter().enumerate() {
         let (Some(start), Some(end)) = (start, end) else {
             out.push(Vec::new());
             continue;
         };
-        out.push(pair_steps(doc, params, k, g, start, end));
+        out.push(pair_steps(doc, params, k, start, end));
     }
     Some(out)
 }
@@ -155,11 +155,12 @@ fn end_of(doc: &Document, node: NodeId, start_point: Option<u32>) -> End {
             continue;
         };
         let object = end.attrs.len();
-        end.attrs.push(resolve_uncached(tree, n, &doc.defaults));
         let (f, s) = match tree.kind(n) {
             Some(NodeKind::Path(p)) => (p.filled, p.stroked),
             _ => (true, true),
         };
+        let resolved = resolve_uncached(tree, n, &doc.defaults);
+        end.attrs.push(shown_attrs(doc, &resolved, f, s));
         end.filled.push(f);
         end.stroked.push(s);
         for (sub, outline) in Outline::subpaths(&path).into_iter().enumerate() {
@@ -182,12 +183,11 @@ fn end_of(doc: &Document, node: NodeId, start_point: Option<u32>) -> End {
     end
 }
 
-/// The steps of pair `k`, generated node `g`, from `start` to `end`.
+/// The steps of pair `k`, from `start` to `end`.
 fn pair_steps(
     doc: &Document,
     params: &BlendParams,
     k: usize,
-    g: NodeId,
     start: NodeId,
     end: NodeId,
 ) -> Vec<GeneratedShape> {
@@ -222,7 +222,6 @@ fn pair_steps(
             )
         })
         .collect();
-    let at_g = resolve_uncached(&doc.tree, g, &doc.defaults);
     let n = params.drawn_steps();
     let mut order: Vec<usize> = (1..=n).collect();
     if params.reverse {
@@ -245,14 +244,14 @@ fn pair_steps(
             builder = match builder.take() {
                 Some((so_far, _)) if continues => Some((append(&so_far, &path), p)),
                 Some((done, q)) => {
-                    out.push(shape(doc, &a, &b, pairs[q], done, r, &at_g, params));
+                    out.push(shape(doc, &a, &b, pairs[q], done, r, params));
                     Some((path, p))
                 }
                 None => Some((path, p)),
             };
         }
         if let Some((done, q)) = builder {
-            out.push(shape(doc, &a, &b, pairs[q], done, r, &at_g, params));
+            out.push(shape(doc, &a, &b, pairs[q], done, r, params));
         }
     }
     out
@@ -267,23 +266,17 @@ fn shape(
     (i, j): (usize, usize),
     path: Path,
     r: StepRatios,
-    at_g: &ResolvedAttrs,
     params: &BlendParams,
 ) -> GeneratedShape {
     let (oa, ob) = (a.pieces[i].object, b.pieces[j].object);
-    let attrs = step_attrs(
-        doc,
-        &a.attrs[oa],
-        &b.attrs[ob],
-        at_g,
-        r,
-        params.colour_effect,
-    );
+    let (filled, stroked) = (a.filled[oa] || b.filled[ob], a.stroked[oa] || b.stroked[ob]);
+    let mut attrs = step_attrs(doc, &a.attrs[oa], &b.attrs[ob], r, params.colour_effect);
+    canonical(doc, &mut attrs, filled, stroked);
     GeneratedShape {
         path: Arc::new(path),
         attrs: Arc::from(attrs),
-        filled: a.filled[oa] || b.filled[ob],
-        stroked: a.stroked[oa] || b.stroked[ob],
+        filled,
+        stroked,
     }
 }
 
@@ -296,31 +289,117 @@ fn append(first: &Path, more: &Path) -> Path {
     Path::from_parts(verbs, points, Vec::new()).unwrap_or_else(|_| first.clone())
 }
 
-/// The attributes a step is drawn with, on top of `at_g` (those in force
-/// where it is drawn): every slot whose blend of `start` and `end` differs
-/// from what is in force there.
+/// The attributes a step is drawn with: every slot, blended from `start`
+/// and `end`. All of them, as the original renders a whole blended
+/// attribute map: what is in force where the step is drawn must not
+/// change it (a `.xarast` reload moves a blend's own attributes onto its
+/// objects, and the steps must come out the same).
 #[must_use]
 pub fn step_attrs(
     doc: &Document,
-    start: &ResolvedAttrs,
-    end: &ResolvedAttrs,
-    at_g: &ResolvedAttrs,
+    start: &[AttrValue],
+    end: &[AttrValue],
     r: StepRatios,
     effect: Option<FillEffect>,
 ) -> Vec<AttrValue> {
-    let mut out = Vec::new();
-    for slot in ALL_ATTR_SLOTS {
-        let (x, y) = (start.get(slot), end.get(slot));
+    let mut out = Vec::with_capacity(ALL_ATTR_SLOTS.len());
+    for (slot, (x, y)) in ALL_ATTR_SLOTS.into_iter().zip(start.iter().zip(end)) {
         let v = if x == y {
             x.clone()
         } else {
             blend_value(doc, slot, x, y, r, effect)
         };
-        if &v != at_g.get(slot) {
-            out.push(v);
-        }
+        out.push(v);
     }
     out
+}
+
+/// An object's attributes, one value per slot in [`ALL_ATTR_SLOTS`]
+/// order, with what nothing shows set to the defaults (Xarast's rule): an
+/// unfilled or unstroked object's paint, an invisible outline's width,
+/// join and the like, a flat fill's repeat. A `.xarast` round trip keeps
+/// only what shows, so neither an end nor a step may depend on the rest.
+#[must_use]
+pub fn shown_attrs(
+    doc: &Document,
+    attrs: &ResolvedAttrs,
+    filled: bool,
+    stroked: bool,
+) -> Vec<AttrValue> {
+    let mut out: Vec<AttrValue> = ALL_ATTR_SLOTS
+        .into_iter()
+        .map(|s| attrs.get(s).clone())
+        .collect();
+    canonical(doc, &mut out, filled, stroked);
+    out
+}
+
+/// [`shown_attrs`]' rule on a slot vector.
+fn canonical(doc: &Document, out: &mut [AttrValue], filled: bool, stroked: bool) {
+    let get = |out: &[AttrValue], s: AttrSlot| out.get(s as usize).cloned();
+    let stroke_shows = stroked
+        && matches!(get(out, AttrSlot::StrokeColour), Some(AttrValue::StrokeColour(p)) if visible(doc, &p));
+    let flat_fill = matches!(
+        get(out, AttrSlot::FillGeometry),
+        Some(AttrValue::Fill(FillGeometry::Flat { .. }))
+    );
+    let flat_transp = matches!(
+        get(out, AttrSlot::TranspFillGeometry),
+        Some(AttrValue::TranspFill(FillGeometry::Flat { .. }))
+    );
+    let set = |out: &mut [AttrValue], s: AttrSlot, v: AttrValue| {
+        if let Some(x) = out.get_mut(s as usize) {
+            *x = v;
+        }
+    };
+    let none = || FillGeometry::Flat {
+        value: Colour::Direct(ColourValue::Rgbt {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            t: 1.0,
+        }),
+    };
+    if !stroke_shows {
+        set(out, AttrSlot::StrokeColour, AttrValue::StrokeColour(none()));
+    }
+    if !filled {
+        set(out, AttrSlot::FillGeometry, AttrValue::Fill(none()));
+    }
+    let mut reset = |slots: &[AttrSlot]| {
+        for &s in slots {
+            if let Some(v) = out.get_mut(s as usize) {
+                *v = (**doc.defaults.get(s)).clone();
+            }
+        }
+    };
+    if !stroke_shows {
+        reset(&[
+            AttrSlot::StrokeTransp,
+            AttrSlot::LineWidth,
+            AttrSlot::JoinType,
+            AttrSlot::DashPattern,
+            AttrSlot::StartCap,
+            AttrSlot::StartArrow,
+            AttrSlot::EndArrow,
+            AttrSlot::MitreLimit,
+        ]);
+    }
+    if !filled {
+        reset(&[
+            AttrSlot::FillMapping,
+            AttrSlot::FillEffect,
+            AttrSlot::TranspFillGeometry,
+            AttrSlot::TranspFillMapping,
+        ]);
+    } else {
+        if flat_fill {
+            reset(&[AttrSlot::FillMapping, AttrSlot::FillEffect]);
+        }
+        if flat_transp {
+            reset(&[AttrSlot::TranspFillMapping]);
+        }
+    }
 }
 
 /// Blends one slot's two values; anything that does not blend is the
