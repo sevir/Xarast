@@ -388,7 +388,9 @@ fn transparency_mode(t: &xarast_doc::fill::TranspPaint) -> Option<TranspMode> {
 /// editor's current attributes, not part of the drawing, and the importer
 /// skips them (`docs/memory/xar-import.md`, finding 3). So are those inside
 /// `TAG_SHADOW` (4051): a shadow's own fill and transparency become its
-/// colour and darkness parameters, not attributes (finding 20).
+/// colour and darkness parameters, not attributes (finding 20); and those
+/// inside `TAG_BEVELINK` (4057): copies of the bevelled object's fill, a
+/// flat one becoming the bevel's colour parameter (finding 21).
 ///
 /// # Errors
 ///
@@ -409,7 +411,7 @@ pub fn tag_census(bytes: &[u8]) -> Result<FillCensus, String> {
         if text_below.is_some_and(|d| depth <= d) {
             text_below = None;
         }
-        if n.tag() == TAG_CURRENTATTRIBUTES || n.tag() == TAG_SHADOW {
+        if n.tag() == TAG_CURRENTATTRIBUTES || n.tag() == TAG_SHADOW || n.tag() == TAG_BEVELINK {
             skip_below = Some(depth);
             return;
         }
@@ -499,6 +501,7 @@ pub fn tag_census(bytes: &[u8]) -> Result<FillCensus, String> {
 
 const TAG_CURRENTATTRIBUTES: u32 = 4119;
 const TAG_SHADOW: u32 = 4051;
+const TAG_BEVELINK: u32 = 4057;
 const TAG_TEXT_LINE: u32 = 2200;
 
 /// Opens one document and takes its census.
