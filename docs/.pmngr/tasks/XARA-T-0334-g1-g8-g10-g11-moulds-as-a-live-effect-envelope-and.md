@@ -2,14 +2,15 @@
 id: XARA-T-0334
 type: task
 title: "G1–G8, G10, G11 — Moulds as a live effect: envelope and perspective maths, fills/bitmaps/text under a mould, import 107–110/4012, .xarast"
-status: in_progress
+status: done
 priority: high
 parent: XARA-US-0071
 author: mcp
 labels: [phase-13, live-effects, geom, xar, format]
 created: 2026-10-15T21:24:56Z
-updated: 2026-10-15T21:24:56Z
+updated: 2026-10-15T22:43:28Z
 started: 2026-10-15T21:24:56Z
+closed: 2026-10-15T22:43:28Z
 ---
 
 ## Description
