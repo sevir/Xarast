@@ -21,6 +21,7 @@
 use std::collections::{HashMap, HashSet};
 
 use xarast_doc::fill::FillGeometry;
+use xarast_format::svg::procedural::TileColours;
 use xarast_geom::BiasGain;
 use xarast_image::procedural::Procedural;
 use xarast_render::{ImageId, ImageRef, Resolver};
@@ -36,6 +37,9 @@ pub(crate) struct TileKey {
     /// The bias/gain profile's bits; `None` for the identity (and for a
     /// transparency, whose profile shapes its level ramp instead).
     profile: Option<(u64, u64)>,
+    /// A colour fill's colours, baked into the tile; `None` for a
+    /// transparency, whose tile stays grey.
+    colours: Option<TileColours>,
 }
 
 impl TileKey {
@@ -45,8 +49,9 @@ impl TileKey {
     /// ([`xarast_format::svg::procedural::fill_tile`]).
     pub(crate) fn of<S: xarast_color::Stop>(
         fill: &FillGeometry<S>,
-        with_profile: bool,
+        colours: Option<TileColours>,
     ) -> Option<TileKey> {
+        let with_profile = colours.is_some();
         let tile = xarast_format::svg::procedural::fill_tile(fill)?.procedural()?;
         let profile = match fill {
             FillGeometry::Fractal { profile, .. } | FillGeometry::Noise { profile, .. }
@@ -56,14 +61,22 @@ impl TileKey {
             }
             _ => None,
         };
-        Some(TileKey { tile, profile })
+        Some(TileKey {
+            tile,
+            profile,
+            colours,
+        })
     }
 
-    /// The tile as straight RGBA, top row first, the profile applied.
+    /// The tile as straight RGBA, top row first, the profile applied:
+    /// the colours' table, or grey.
     fn rgba(&self) -> (u32, Vec<u8>) {
         let profile = self
             .profile
             .map(|(b, g)| BiasGain::new(f64::from_bits(b), f64::from_bits(g)));
+        if let Some(c) = self.colours {
+            return xarast_format::svg::procedural::tile_rgba(&self.tile, profile, c);
+        }
         let (dim, grey) = xarast_format::svg::procedural::tile_pixels(&self.tile, profile);
         let mut out = Vec::with_capacity(grey.len() * 4);
         for g in grey {

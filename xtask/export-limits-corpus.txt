@@ -10,8 +10,11 @@
 # PDF approximates conical fills with a wedge fan. (SVG bakes conical,
 # diamond and 3/4-colour fills into geometry since XARA-US-0043: Fill Types
 # simple 19.7 -> 1.9, WATCH2 16.5 -> 0.7, WATCH 5.1 -> 2.4, all under the
-# default now.)
-Fill Types simple pdf 8.5
+# default now.) Since XARA-T-0336 its eleven fractal and noise fills are
+# textures, not flat colours, and the PDF rasterises them as it does bitmap
+# fills, which the viewers resample: 7.11 -> 8.55 (Poppler; gs 16.14),
+# 2026-10-16.
+Fill Types simple pdf 9.8
 WATCH pdf 5.6
 
 # resvg draws seams between the tiles of a bitmap-fill <pattern>; PDF

@@ -1219,10 +1219,10 @@ fn what_svg_cannot_draw_reads_back_exactly() {
     let first = package(&doc, SvgOptions::default());
     let mut o = open(&first);
     assert!(o.diagnostics.is_empty(), "{:?}", o.diagnostics);
-    // A browser draws the contone fill through the writer's filter, and
-    // the noise fill's baked tile through another (XARA-T-0336).
+    // A browser draws the contone fill through the writer's filter; the
+    // noise fill's tile is baked coloured (XARA-T-0336).
     let svg = svg_of(&first);
-    assert_eq!(svg.matches("xarast:filter=\"contone\"").count(), 2, "{svg}");
+    assert_eq!(svg.matches("xarast:filter=\"contone\"").count(), 1, "{svg}");
     assert!(svg.contains("xarast:baked-dpi="), "{svg}");
     assert!(svg.contains("href=\"resources/baked/b3-"), "{svg}");
     assert!(svg.contains("<feFuncR type=\"table\""), "{svg}");

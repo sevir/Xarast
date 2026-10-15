@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::io::Write as _;
 use std::sync::Arc;
 
-use xarast_color::Stop;
+use xarast_color::{ColourValue, FillEffect, Rgba8, Stop};
 use xarast_doc::fill::FillGeometry;
 use xarast_geom::{BiasGain, Point};
 use xarast_image::procedural::{FillTile, Procedural};
@@ -97,8 +97,50 @@ pub fn tile_pixels(p: &Procedural, profile: Option<BiasGain>) -> (u32, Vec<u8>) 
     (dim, out)
 }
 
-/// An 8-bit greyscale PNG, deterministic for the same pixels.
-fn grey_png(dim: u32, pixels: &[u8]) -> Vec<u8> {
+/// The colours a colour fill maps its tile through: black takes `from`,
+/// white `to`, interpolated in the fill effect's space. Their alpha is
+/// kept, so a fill from "no colour" fades out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TileColours {
+    /// The colour at black (the start colour).
+    pub from: Rgba8,
+    /// The colour at white (the end colour).
+    pub to: Rgba8,
+    /// How the two are interpolated.
+    pub effect: FillEffect,
+}
+
+/// [`tile_pixels`] mapped through `colours` (a 256-entry table, as a
+/// contone bitmap is): straight RGBA, top row first. What the canvas
+/// draws and what the `.xarast` writer bakes, byte for byte.
+#[must_use]
+pub fn tile_rgba(
+    p: &Procedural,
+    profile: Option<BiasGain>,
+    colours: TileColours,
+) -> (u32, Vec<u8>) {
+    let (dim, grey) = tile_pixels(p, profile);
+    let (s, e) = (
+        ColourValue::from_rgba8(colours.from),
+        ColourValue::from_rgba8(colours.to),
+    );
+    let lut: Vec<[u8; 4]> = (0..=255u8)
+        .map(|v| {
+            let c =
+                xarast_color::interpolate(s, e, f32::from(v) / 255.0, colours.effect).to_rgba8();
+            [c.r, c.g, c.b, c.a]
+        })
+        .collect();
+    let mut out = Vec::with_capacity(grey.len() * 4);
+    for g in grey {
+        out.extend_from_slice(lut.get(usize::from(g)).unwrap_or(&[0; 4]));
+    }
+    (dim, out)
+}
+
+/// An 8-bit greyscale (`rgba` false) or RGBA PNG, deterministic for the
+/// same pixels.
+fn png(dim: u32, rgba: bool, pixels: &[u8]) -> Vec<u8> {
     fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
         out.extend_from_slice(&u32::try_from(data.len()).unwrap_or(u32::MAX).to_be_bytes());
         out.extend_from_slice(kind);
@@ -108,9 +150,9 @@ fn grey_png(dim: u32, pixels: &[u8]) -> Vec<u8> {
         crc.update(data);
         out.extend_from_slice(&crc.sum().to_be_bytes());
     }
-    let side = dim as usize;
-    let mut raw = Vec::with_capacity((side + 1) * side);
-    for row in pixels.chunks_exact(side) {
+    let stride = dim as usize * if rgba { 4 } else { 1 };
+    let mut raw = Vec::with_capacity(pixels.len() + dim as usize);
+    for row in pixels.chunks_exact(stride.max(1)) {
         raw.push(0);
         raw.extend_from_slice(row);
     }
@@ -121,7 +163,7 @@ fn grey_png(dim: u32, pixels: &[u8]) -> Vec<u8> {
     let mut ihdr = Vec::with_capacity(13);
     ihdr.extend_from_slice(&dim.to_be_bytes());
     ihdr.extend_from_slice(&dim.to_be_bytes());
-    ihdr.extend_from_slice(&[8, 0, 0, 0, 0]);
+    ihdr.extend_from_slice(&[8, if rgba { 6 } else { 0 }, 0, 0, 0]);
     let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
     chunk(&mut out, b"IHDR", &ihdr);
     chunk(&mut out, b"IDAT", &idat);
@@ -129,8 +171,9 @@ fn grey_png(dim: u32, pixels: &[u8]) -> Vec<u8> {
     out
 }
 
-/// What a tile is baked by: the generator's input and the profile bits.
-type BakeKey = (Procedural, Option<(u64, u64)>);
+/// What a tile is baked by: the generator's input, the profile bits and
+/// the colours, if any.
+type BakeKey = (Procedural, Option<(u64, u64)>, Option<TileColours>);
 
 /// The baked tiles of one serialisation, each generated and encoded once.
 #[derive(Debug, Default)]
@@ -151,15 +194,34 @@ impl Baker {
         }
     }
 
-    /// The reference of `tile`'s PNG, with `profile` applied.
-    pub(crate) fn tile(&mut self, tile: &Procedural, profile: Option<BiasGain>) -> BitmapRef {
+    /// The reference of `tile`'s PNG, with `profile` applied: coloured
+    /// through `colours` (a colour fill), else grey (a mask).
+    pub(crate) fn tile(
+        &mut self,
+        tile: &Procedural,
+        profile: Option<BiasGain>,
+        colours: Option<TileColours>,
+    ) -> BitmapRef {
         let profile = profile.filter(|p| *p != BiasGain::IDENTITY);
-        let key = (*tile, profile.map(|p| (p.bias.to_bits(), p.gain.to_bits())));
+        let key = (
+            *tile,
+            profile.map(|p| (p.bias.to_bits(), p.gain.to_bits())),
+            colours,
+        );
         if let Some(r) = self.done.get(&key) {
             return r.clone();
         }
-        let (dim, pixels) = tile_pixels(tile, profile);
-        let png = grey_png(dim, &pixels);
+        let png = match colours {
+            Some(c) => {
+                let (dim, px) = tile_rgba(tile, profile, c);
+                png(dim, true, &px)
+            }
+            None => {
+                let (dim, px) = tile_pixels(tile, profile);
+                png(dim, false, &px)
+            }
+        };
+        let dim = tile.dim();
         let href = if self.interchange {
             format!("data:image/png;base64,{}", super::xml::base64(&png))
         } else {
@@ -190,8 +252,8 @@ mod tests {
             grain: fixed16(10.0),
         });
         let (dim, px) = tile_pixels(&p, None);
-        let a = grey_png(dim, &px);
-        let b = grey_png(dim, &px);
+        let a = png(dim, false, &px);
+        let b = png(dim, false, &px);
         assert_eq!(a, b);
         let h = crate::thumbnail::png_header(&a).expect("a PNG header");
         assert_eq!((h.width, h.height), (256, 256));
@@ -207,13 +269,17 @@ mod tests {
             grain: fixed16(10.0),
         });
         let mut b = Baker::new(false);
-        let r1 = b.tile(&p, None);
-        let r2 = b.tile(&p, Some(BiasGain::IDENTITY));
+        let r1 = b.tile(&p, None, None);
+        let r2 = b.tile(&p, Some(BiasGain::IDENTITY), None);
         assert_eq!(r1.href, r2.href);
         assert_eq!(b.files.len(), 1);
         assert!(r1.href.starts_with("resources/baked/b3-"), "{}", r1.href);
         let mut i = Baker::new(true);
-        assert!(i.tile(&p, None).href.starts_with("data:image/png;base64,"));
+        assert!(
+            i.tile(&p, None, None)
+                .href
+                .starts_with("data:image/png;base64,")
+        );
         assert!(i.files.is_empty());
     }
 }

@@ -949,20 +949,25 @@ pub(crate) fn colour_paint(
                 ctx.stats.fills_approximated += 1;
                 return flat_approx(mean(&[a, b]), side);
             };
-            let bm = ctx.baker.tile(&tile, Some(*profile));
+            // The tile coloured into the PNG itself, alpha and all: a
+            // filter on a pattern image is clipped or skipped by some
+            // renderers at large pattern scales (resvg drew the raw grey).
+            let colours = super::procedural::TileColours {
+                from: a,
+                to: b,
+                effect,
+            };
+            let bm = ctx.baker.tile(&tile, Some(*profile), Some(colours));
             let mut body = bitmap_pattern_head(ctx, *origin, *axis_x, *axis_y);
             attr(&mut body, "xarast:generated", "fill-bake");
             attr(&mut body, "xarast:baked-dpi", &f64s(dpi, 2));
-            let filter = contone_filter(ctx, from, to, effect);
-            bitmap_pattern_tail(&mut body, &bm, Some(&filter));
+            bitmap_pattern_tail(&mut body, &bm, None);
             let id = ctx.defs.add('p', "pattern", &body);
             ctx.stats.fills_baked += 1;
-            // The colours' mean alpha rides on the opacity, as for the flat
-            // base this replaced: the reader divides it back out of
-            // `fill-opacity` to recover the transparency.
+            // The colours' alpha is in the tile: `fill-opacity` is the
+            // transparency alone (the reader takes the twin as opaque).
             PaintOut {
                 value: format!("url(#{id})"),
-                opacity: opacity_of(mean(&[a, b]).a),
                 sidecar: Some(side),
                 ..PaintOut::default()
             }
@@ -1450,7 +1455,7 @@ pub(crate) fn transparency(
             let tile = super::procedural::fill_tile(t).and_then(|f| f.procedural());
             let mask = match (bounds, tile) {
                 (Some(b), Some(tile)) => {
-                    let bm = ctx.baker.tile(&tile, None);
+                    let bm = ctx.baker.tile(&tile, None, None);
                     ctx.stats.fills_baked += 1;
                     Some(bitmap_mask(
                         ctx,

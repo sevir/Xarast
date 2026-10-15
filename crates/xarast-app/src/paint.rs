@@ -480,7 +480,12 @@ pub(crate) fn colour_paint(
             to,
             ..
         } => {
-            let Some(key) = crate::procedural::TileKey::of(fill, true) else {
+            let colours = xarast_format::svg::procedural::TileColours {
+                from: rgba(from, ctx.colours),
+                to: rgba(to, ctx.colours),
+                effect,
+            };
+            let Some(key) = crate::procedural::TileKey::of(fill, Some(colours)) else {
                 return fallback_solid(fill, ctx);
             };
             let id = ctx.procedural.image(ctx.resolver, key);
@@ -489,7 +494,7 @@ pub(crate) fn colour_paint(
                 mapping: bitmap_frame(*origin, *axis_x, *axis_y, None),
                 repeat: bitmap_repeat(Tiling::None, tiling),
                 filter: ctx.filter,
-                contone: Some((rgba(from, ctx.colours), rgba(to, ctx.colours), space)),
+                contone: None,
                 adjust: BitmapAdjust::default(),
             }
         }
@@ -731,7 +736,7 @@ pub(crate) fn transparency(
             if from.mode == TranspMode::None {
                 return Transparency::OPAQUE;
             }
-            let Some(key) = crate::procedural::TileKey::of(t, false) else {
+            let Some(key) = crate::procedural::TileKey::of(t, None) else {
                 return Transparency::flat(
                     family_of(from.mode),
                     mean_level(&[from.level, to.level]),

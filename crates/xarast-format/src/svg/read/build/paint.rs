@@ -173,9 +173,8 @@ fn approx_alpha(p: &Paint, t: &xarast_color::ColourTable) -> u8 {
         FillGeometry::FourColour { c0, c1, c2, c3, .. } => {
             ((u32::from(a(c0)) + u32::from(a(c1)) + u32::from(a(c2)) + u32::from(a(c3))) / 4) as u8
         }
-        FillGeometry::Fractal { from, to, .. } | FillGeometry::Noise { from, to, .. } => {
-            ((u32::from(a(from)) + u32::from(a(to))) / 2) as u8
-        }
+        // The baked tile carries the colours' alpha per pixel
+        // (XARA-T-0336): `fill-opacity` is the transparency alone.
         _ => 255,
     }
 }
