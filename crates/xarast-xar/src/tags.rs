@@ -84,6 +84,12 @@ pub const TAG_BEVEL: u32 = 4052;
 /// The generated bevel node inside a bevel controller: before the objects
 /// for an outer bevel, after them for an inner one.
 pub const TAG_BEVELINK: u32 = 4057;
+/// A contour controller: its attributes, the object(s) it contours and one
+/// [`TAG_CONTOUR`].
+pub const TAG_CONTOURCONTROLLER: u32 = 4066;
+/// The generated contour node inside a contour controller: before the
+/// objects for an outer contour, after them for an inner one.
+pub const TAG_CONTOUR: u32 = 4067;
 /// Per-point path flags, the first child of the path record.
 pub const TAG_PATH_FLAGS: u32 = 111;
 /// A relative path, stroked.

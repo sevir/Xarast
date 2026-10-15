@@ -807,6 +807,23 @@ impl<'o> Mapper<'o> {
                 );
                 After::Drop
             }
+            Decoded::ContourController(r) => {
+                let r = *r;
+                self.emit_contour(node, r)?;
+                After::Drop
+            }
+            // A contour node outside a controller has nothing to contour;
+            // its attributes go with it, as a stray bevel node's do.
+            Decoded::ContourInk => {
+                self.mapped = self.mapped.saturating_add(1);
+                self.skipped = self.skipped.saturating_add(count_subtree(&node.children));
+                self.diags.push(
+                    Diagnostic::new(DiagCode::ContourDegraded)
+                        .at(at.0, at.1)
+                        .with_detail(1),
+                );
+                After::Drop
+            }
             // The original reads these four and discards the value
             // (`docs/memory/xar-import.md`, finding 21).
             Decoded::BevelAttribute(_) => {
@@ -1475,6 +1492,165 @@ impl<'o> Mapper<'o> {
         self.builder.node(live(xarast_doc::LiveRole::Controller))?;
         self.push_scope()?;
         let r = self.live_children(children, ink_at, &live);
+        self.pop_scope();
+        r
+    }
+
+    /// A `TAG_CONTOURCONTROLLER` and everything under it.
+    ///
+    /// In the file the controller holds its attributes, the object(s) it
+    /// contours and one `TAG_CONTOUR`: first for an outer contour (its
+    /// rings are drawn beneath the objects), last for an inner one. The
+    /// contour node's own attribute children are what its last ring is
+    /// drawn in, and the start of the blend towards the first object's
+    /// (`xarast_doc::contour`). The model keeps that order:
+    ///
+    /// ```text
+    /// Live (Controller, Contour)   the record's parameters
+    ///   attributes…                the controller's, before the first object
+    ///   Live (Generated, Contour)  the contour node's attributes (outer)
+    ///   Live (Source, Contour)
+    ///     the object(s)…
+    ///   Live (Generated, Contour)  … or here, after them (inner)
+    /// ```
+    ///
+    /// The record's width is negative for an outer contour
+    /// (`Kernel/ncntrcnt.h:255`); the model keeps its magnitude and the
+    /// direction apart (`docs/memory/xar-import.md`, finding 22).
+    fn emit_contour(
+        &mut self,
+        node: &RecordNode,
+        r: crate::decode::ContourRecord,
+    ) -> Result<(), XarError> {
+        let rec = &node.record;
+        let at = (rec.number, rec.tag);
+        self.mapped = self.mapped.saturating_add(1);
+        let max_steps = xarast_doc::live::MAX_CONTOUR_RINGS.saturating_sub(1);
+        let steps = match usize::try_from(r.steps) {
+            Ok(s) if s <= max_steps => s,
+            _ => {
+                self.diags.push(
+                    Diagnostic::new(DiagCode::ContourDegraded)
+                        .at(at.0, at.1)
+                        .with_detail(3),
+                );
+                if r.steps < 0 { 0 } else { max_steps }
+            }
+        };
+        let colour_effect = match r.kind & 0x7f {
+            0 => xarast_color::FillEffect::Fade,
+            1 => xarast_color::FillEffect::Rainbow,
+            2 => xarast_color::FillEffect::AltRainbow,
+            other => {
+                self.diags.push(
+                    Diagnostic::new(DiagCode::ContourDegraded)
+                        .at(at.0, at.1)
+                        .with_detail(2),
+                );
+                self.diags.push(
+                    Diagnostic::new(DiagCode::UnknownEnumValue)
+                        .at(at.0, at.1)
+                        .with_detail(u64::from(other)),
+                );
+                xarast_color::FillEffect::Fade
+            }
+        };
+        let params = xarast_doc::ContourParams {
+            steps: u32::try_from(steps).unwrap_or(0),
+            width: Mp::new(r.width.saturating_abs()),
+            outer: r.width < 0,
+            include_line_widths: false,
+            join: None,
+            profile: BiasGain::new(r.object_profile.0, r.object_profile.1),
+            colour_profile: BiasGain::new(r.attr_profile.0, r.attr_profile.1),
+            colour_effect,
+            inset: r.kind & 0x80 != 0,
+        };
+        let children = node.children.as_slice();
+        let ink_at = children
+            .iter()
+            .position(|c| c.record.tag == crate::tags::TAG_CONTOUR);
+        if ink_at.is_none() {
+            self.diags.push(
+                Diagnostic::new(DiagCode::ContourDegraded)
+                    .at(at.0, at.1)
+                    .with_detail(0),
+            );
+        }
+        let live = |role| {
+            NodeKind::Live(Box::new(xarast_doc::LiveNode {
+                role,
+                kind: xarast_doc::LiveKind::Contour(Box::new(params.clone())),
+                regen: xarast_doc::RegenState::Clean,
+                name: None,
+            }))
+        };
+        self.builder.node(live(xarast_doc::LiveRole::Controller))?;
+        self.push_scope()?;
+        let first_ink = children
+            .iter()
+            .enumerate()
+            .position(|(i, c)| {
+                Some(i) != ink_at && class_of(c.record.tag) == Some(TagClass::Object)
+            })
+            .unwrap_or(children.len());
+        let mut r = Ok(());
+        for (i, c) in children.iter().enumerate().take(first_ink) {
+            if Some(i) != ink_at {
+                r = self.visit(c);
+                if r.is_err() {
+                    break;
+                }
+            }
+        }
+        // The contour node goes where the file put it relative to the
+        // objects; without one, where its direction would put it.
+        let generated_first = ink_at.map_or(params.outer, |i| i < first_ink);
+        let ink = ink_at.and_then(|i| children.get(i));
+        if r.is_ok() && generated_first {
+            r = self.contour_ink(ink, &live);
+        }
+        if r.is_ok() {
+            self.builder.node(live(xarast_doc::LiveRole::Source))?;
+            self.push_scope()?;
+            for (i, c) in children.iter().enumerate().skip(first_ink) {
+                if Some(i) == ink_at {
+                    continue;
+                }
+                r = self.visit(c);
+                if r.is_err() {
+                    break;
+                }
+            }
+            self.pop_scope();
+        }
+        if r.is_ok() && !generated_first {
+            r = self.contour_ink(ink, &live);
+        }
+        self.pop_scope();
+        r
+    }
+
+    /// The generated contour node, holding the `TAG_CONTOUR`'s attribute
+    /// children (none without one).
+    fn contour_ink(
+        &mut self,
+        ink: Option<&RecordNode>,
+        live: &dyn Fn(xarast_doc::LiveRole) -> NodeKind,
+    ) -> Result<(), XarError> {
+        self.builder.node(live(xarast_doc::LiveRole::Generated))?;
+        let Some(ink) = ink else {
+            return Ok(());
+        };
+        self.mapped = self.mapped.saturating_add(1);
+        self.push_scope()?;
+        let mut r = Ok(());
+        for c in &ink.children {
+            r = self.visit(c);
+            if r.is_err() {
+                break;
+            }
+        }
         self.pop_scope();
         r
     }
@@ -2928,7 +3104,7 @@ mod tests {
         let bytes = XarBuilder::new()
             .record(40, &[])
             .down()
-            .record(4066, &[1, 2, 3, 4])
+            .record(4061, &[1, 2, 3, 4])
             .up()
             .end_of_file()
             .finish();
@@ -2942,7 +3118,7 @@ mod tests {
                 _ => None,
             })
             .expect("the record was kept");
-        assert_eq!(kept.tag, 4066);
+        assert_eq!(kept.tag, 4061);
         assert_eq!(&*kept.payload, &[1, 2, 3, 4]);
     }
 
@@ -3676,5 +3852,152 @@ mod tests {
         let parts = xarast_doc::live::parts(&doc.tree, c).expect("a controller");
         let src = doc.tree.bounds(parts.source).get().unwrap();
         assert_eq!(b.hi.x.raw(), src.hi.x.raw() + 3_951);
+    }
+
+    /// `TAG_CONTOURCONTROLLER`: steps, width (negative: outer), type,
+    /// object and attribute profiles.
+    fn contour_record(steps: i32, width: i32, kind: u8) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(&steps.to_le_bytes());
+        v.extend_from_slice(&width.to_le_bytes());
+        v.push(kind);
+        for f in [0.25f64, -0.5, 0.125, 0.0] {
+            v.extend_from_slice(&f.to_le_bytes());
+        }
+        v
+    }
+
+    fn contours(doc: &xarast_doc::Document) -> Vec<xarast_doc::ContourParams> {
+        doc.tree
+            .preorder(doc.tree.root())
+            .filter_map(|id| match doc.tree.kind(id) {
+                Some(NodeKind::Live(l)) if l.role == xarast_doc::LiveRole::Controller => {
+                    match &l.kind {
+                        xarast_doc::LiveKind::Contour(p) => Some((**p).clone()),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn contour_diags(report: &ImportReport) -> Vec<u64> {
+        report
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == DiagCode::ContourDegraded)
+            .map(|d| d.detail)
+            .collect()
+    }
+
+    #[test]
+    fn an_outer_contour_keeps_its_node_first_with_its_own_attributes() {
+        // The layout testimp1 uses: controller attributes, the contour node
+        // with its fill, then the object.
+        let bytes = layer_with(|b| {
+            b.record(4066, &contour_record(3, -16_714, 0))
+                .down()
+                .record(176, &[0])
+                .record(152, &500i32.to_le_bytes())
+                .record(4067, &[])
+                .down()
+                .record(150, &(-2i32).to_le_bytes())
+                .up()
+                .record(116, &square_path(100_000, 100_000, 50_000))
+                .up()
+        });
+        let (doc, report) = import(&bytes, &ImportOptions::default()).unwrap();
+        balanced(&report);
+        assert!(contour_diags(&report).is_empty());
+        assert_eq!(report.records_stripped, 0);
+        assert!(doc.validate().errors.is_empty(), "{:?}", doc.validate());
+        let c = first_of(&doc, "Live").unwrap();
+        assert_eq!(kinds_under(&doc, c), ["Attr", "Attr", "Live", "Live"]);
+        let parts = xarast_doc::live::parts(&doc.tree, c).expect("a controller");
+        let generated = parts.generated.expect("a generated node");
+        assert_eq!(kinds_under(&doc, generated), ["Attr"]);
+        assert_eq!(kinds_under(&doc, parts.source), ["Path"]);
+        // The generated node comes first: its rings are beneath the object.
+        assert_eq!(doc.tree.children(c).nth(2), Some(generated));
+        let [p] = contours(&doc).try_into().unwrap();
+        assert_eq!(
+            p,
+            xarast_doc::ContourParams {
+                steps: 3,
+                width: Mp::new(16_714),
+                outer: true,
+                include_line_widths: false,
+                join: None,
+                profile: BiasGain::new(0.25, -0.5),
+                colour_profile: BiasGain::new(0.125, 0.0),
+                colour_effect: xarast_color::FillEffect::Fade,
+                inset: false,
+            }
+        );
+        // The controller covers its rings.
+        let mut doc = doc;
+        doc.update_bounds();
+        let b = doc.tree.bounds(c).get().unwrap();
+        let src = doc.tree.bounds(parts.source).get().unwrap();
+        assert!(b.hi.x.raw() >= src.hi.x.raw() + 16_714);
+    }
+
+    #[test]
+    fn an_inner_contour_follows_its_object_and_degraded_ones_are_reported() {
+        let bytes = layer_with(|b| {
+            // Inner, rainbow, the node after the object.
+            b.record(4066, &contour_record(6, 1_088, 1))
+                .down()
+                .record(116, &square_path(0, 0, 50_000))
+                .record(4067, &[])
+                .down()
+                .record(150, &(-2i32).to_le_bytes())
+                .up()
+                .up()
+                // No contour node; an inset path; a colour type out of range.
+                .record(4066, &contour_record(2, 500, 0x85))
+                .down()
+                .record(116, &square_path(0, 0, 50_000))
+                .up()
+                // Too many steps, and a record that stops before its profiles.
+                .record(4066, &contour_record(100_000, -700, 2)[..9])
+                .down()
+                .record(4067, &[])
+                .record(116, &square_path(0, 0, 50_000))
+                .up()
+                // A stray contour node: its fill must not reach the path
+                // after it.
+                .record(4067, &[])
+                .down()
+                .record(150, &(-3i32).to_le_bytes())
+                .up()
+                .record(116, &square_path(0, 0, 50_000))
+        });
+        let (doc, report) = import(&bytes, &ImportOptions::default()).unwrap();
+        balanced(&report);
+        assert!(doc.validate().errors.is_empty(), "{:?}", doc.validate());
+        // 2: type 5; 0: no node; 3: steps; 1: the stray node.
+        assert_eq!(contour_diags(&report), [2, 0, 3, 1]);
+        let c = first_of(&doc, "Live").unwrap();
+        let parts = xarast_doc::live::parts(&doc.tree, c).expect("a controller");
+        let generated = parts.generated.unwrap();
+        assert_eq!(doc.tree.children(c).next_back(), Some(generated));
+        let got = contours(&doc);
+        assert_eq!(got.len(), 3);
+        assert!(!got[0].outer);
+        assert_eq!(got[0].width, Mp::new(1_088));
+        assert_eq!(got[0].colour_effect, xarast_color::FillEffect::Rainbow);
+        assert!(got[1].inset);
+        assert_eq!(got[1].rings(), 1);
+        assert_eq!(got[2].rings(), xarast_doc::live::MAX_CONTOUR_RINGS);
+        assert_eq!(got[2].profile, BiasGain::IDENTITY);
+        assert_eq!(got[2].colour_effect, xarast_color::FillEffect::AltRainbow);
+        let stray_fill = doc.tree.preorder(doc.tree.root()).any(|id| {
+            matches!(doc.tree.kind(id), Some(NodeKind::Attr(a))
+                if a.value == AttrValue::Fill(Paint::Flat { value: crate::colour::ColourRegistry::new()
+                    .resolve(Ref::parse(-3), &mut DiagSink::new(), (1, 150)).unwrap() }))
+        });
+        assert!(!stray_fill);
     }
 }

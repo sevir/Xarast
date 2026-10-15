@@ -141,6 +141,12 @@ pub enum DiagCode {
     /// fill is not a flat colour (an outer bevel is drawn in its first
     /// colour), 3 a style outside 0..=14 (drawn flat).
     BevelDegraded,
+    /// A contour could not be mapped as the original draws it. The detail
+    /// says how: 0 a controller with no `TAG_CONTOUR` (its rings are drawn
+    /// in the controller's attributes), 1 a stray `TAG_CONTOUR` outside a
+    /// controller (dropped with its attributes), 2 a colour blend outside
+    /// 0..=3 (faded), 3 a step count outside 0..=255 rings (clamped).
+    ContourDegraded,
 }
 
 impl DiagCode {
@@ -172,6 +178,7 @@ impl DiagCode {
             DiagCode::ClipViewDegraded => "ClipViewDegraded",
             DiagCode::ShadowDegraded => "ShadowDegraded",
             DiagCode::BevelDegraded => "BevelDegraded",
+            DiagCode::ContourDegraded => "ContourDegraded",
         }
     }
 
@@ -223,7 +230,8 @@ impl DiagCode {
             | DiagCode::BitmapNotNormalised
             | DiagCode::ClipViewDegraded
             | DiagCode::ShadowDegraded
-            | DiagCode::BevelDegraded => D::UnsupportedFeature,
+            | DiagCode::BevelDegraded
+            | DiagCode::ContourDegraded => D::UnsupportedFeature,
         }
     }
 }

@@ -365,6 +365,28 @@ pub struct ShadowControllerRecord {
     pub width: i32,
 }
 
+/// `TAG_CONTOURCONTROLLER` (4066, 41 bytes), field by field
+/// (`docs/research/01-xar-format.md`, record table;
+/// `docs/memory/xar-import.md`, finding 22).
+///
+/// The steps, the width and the type are required (the original fails a
+/// shorter record); a record that stops before the profiles keeps them
+/// flat.
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub struct ContourRecord {
+    /// Steps between the outline and the last ring (`steps + 1` rings).
+    pub steps: i32,
+    /// The width, in millipoints: **negative for an outer contour**.
+    pub width: i32,
+    /// Bits 0–6: the colour blend (0 fade, 1 rainbow, 2 alternate
+    /// rainbow, 3 none); bit 7: an inset path.
+    pub kind: u8,
+    /// The object (spacing) profile's bias and gain.
+    pub object_profile: (f64, f64),
+    /// The attribute (colour) profile's bias and gain.
+    pub attr_profile: (f64, f64),
+}
+
 /// `TAG_BEVEL` (4052, 24 bytes), field by field
 /// (`docs/research/01-xar-format.md`, record table; `docs/memory/xar-import.md`,
 /// finding 21).
@@ -534,6 +556,13 @@ pub enum Decoded {
     /// (4053..=4056): one `INT32` each, which the original reads and
     /// discards. None occurs in the corpus.
     BevelAttribute(i32),
+    /// `TAG_CONTOURCONTROLLER` (4066): a contour's controller; its
+    /// children are its attributes, the object(s) it contours and one
+    /// `TAG_CONTOUR` (`research/02 §6.8`).
+    ContourController(ContourRecord),
+    /// `TAG_CONTOUR` (4067): the generated contour node. Empty; its own
+    /// attribute children are what the last ring is drawn in.
+    ContourInk,
     /// `TAG_SETSENTINEL`.
     SetSentinel,
     /// `TAG_SPREADINFORMATION`.
@@ -801,7 +830,7 @@ pub const fn has_decoder(tag: u32) -> bool {
         | 2100 | 2101 | 2110..=2117 | 2150 | 2151
         | 2200..=2204 | 2206
         | 2900..=2920
-        | 4010 | 4011 | 4050..=4057 | 4070 | 4075..=4078 | 4084 | 4085 | 4086 | 4087 | 4088
+        | 4010 | 4011 | 4050..=4057 | 4066 | 4067 | 4070 | 4075..=4078 | 4084 | 4085 | 4086 | 4087 | 4088
         | 4114 | 4115 | 4116 | 4119 | 4120 | 4121 | 4123 | 4124 | 4129
         | 4030 | 4031 | 4201..=4203)
 }
@@ -1043,6 +1072,15 @@ pub fn decode(
         }),
         4053..=4056 => Decoded::BevelAttribute(c.i32()?),
         4057 => Decoded::BevelInk,
+        4066 => Decoded::ContourController(ContourRecord {
+            steps: c.i32()?,
+            width: c.i32()?,
+            kind: c.u8()?,
+            object_profile: c.opt_profile(),
+            attr_profile: c.opt_profile(),
+        }),
+        // Empty (`Kernel/nodecntr.cpp:1655-1670`); a payload is ignored.
+        4067 => Decoded::ContourInk,
         4086 => Decoded::Feather {
             size: c.mp()?,
             bias: c.opt_f64().unwrap_or(0.0),

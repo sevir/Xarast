@@ -92,10 +92,10 @@ pub mod tree;
 pub use colour::{ColourRecord, ColourRegistry};
 pub use cur::Cur;
 pub use decode::{
-    BevelRecord, BitmapDefinition, BitmapFormat, Decoded, FillEffect, FillGeometry, FillKind,
-    FillRepeat, FontDefinition, FractalParams, GradientFill, GradientTransparency, LayerFlags,
-    RegularShape, ShadowControllerRecord, ShapeFlags, SpreadInformation, TextAttr, TextPlacement,
-    TextStory, decode, has_decoder,
+    BevelRecord, BitmapDefinition, BitmapFormat, ContourRecord, Decoded, FillEffect, FillGeometry,
+    FillKind, FillRepeat, FontDefinition, FractalParams, GradientFill, GradientTransparency,
+    LayerFlags, RegularShape, ShadowControllerRecord, ShapeFlags, SpreadInformation, TextAttr,
+    TextPlacement, TextStory, decode, has_decoder,
 };
 pub use diag::{DiagCode, DiagSink, Diagnostic, Severity, severity_str};
 pub use error::XarError;

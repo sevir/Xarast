@@ -287,6 +287,70 @@ fn file_seeds() -> Vec<(String, Vec<u8>)> {
             .finish()
     }));
 
+    // Contours: an outer contour (negative width) whose contour node comes
+    // first with its own fill, an inner one with the node last, a rainbow
+    // inset path, a record that stops before its profiles, a colour type
+    // and a step count out of range, a short record, a controller with no
+    // contour node and a stray `TAG_CONTOUR`. Declared atomic, as real
+    // files do.
+    out.push(("contour".into(), {
+        let contour = |steps: i32, width: i32, kind: u8| {
+            let mut v = Vec::new();
+            v.extend_from_slice(&steps.to_le_bytes());
+            v.extend_from_slice(&width.to_le_bytes());
+            v.push(kind);
+            for f in [0.25f64, -0.5, 0.0, 0.75] {
+                v.extend_from_slice(&f.to_le_bytes());
+            }
+            v
+        };
+        XarBuilder::new()
+            .record(10, &[0xE2, 0x0F, 0, 0, 0xE3, 0x0F, 0, 0])
+            .record(40, &[])
+            .down()
+            .record(4066, &contour(3, -16_000, 0))
+            .down()
+            .record(176, &[0])
+            .record(152, &500i32.to_le_bytes())
+            .record(4067, &[])
+            .down()
+            .record(150, &(-2i32).to_le_bytes())
+            .up()
+            .record(116, &minimal_payload(116))
+            .up()
+            .record(4066, &contour(6, 1_088, 1))
+            .down()
+            .record(116, &minimal_payload(116))
+            .record(4067, &[])
+            .up()
+            .record(4066, &contour(0, 2_000, 0x82))
+            .down()
+            .record(116, &minimal_payload(116))
+            .record(4067, &[])
+            .up()
+            .record(4066, &contour(2, -500, 0)[..9])
+            .down()
+            .record(4067, &[])
+            .record(116, &minimal_payload(116))
+            .up()
+            .record(4066, &contour(i32::MAX, i32::MIN, 0x7f))
+            .down()
+            .record(116, &minimal_payload(116))
+            .up()
+            .record(4066, &contour(1, 1, 0)[..5])
+            .record(4066, &contour(-4, 0, 3))
+            .down()
+            .record(116, &minimal_payload(116))
+            .up()
+            .record(4067, &[])
+            .down()
+            .record(150, &(-3i32).to_le_bytes())
+            .up()
+            .up()
+            .end_of_file()
+            .finish()
+    }));
+
     // One file per decodable tag, carrying a plausible minimal payload.
     out.push(("every-tag".into(), {
         let mut b = XarBuilder::new();

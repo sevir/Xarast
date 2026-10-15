@@ -125,8 +125,8 @@
 4051 | 98 | object | yes | TAG_SHADOW
 4052 | 22 | object | yes | TAG_BEVEL
 4057 | 22 | object | yes | TAG_BEVELINK
-4066 | 4 | object | NO | TAG_CONTOURCONTROLLER
-4067 | 4 | object | NO | TAG_CONTOUR
+4066 | 4 | object | yes | TAG_CONTOURCONTROLLER
+4067 | 4 | object | yes | TAG_CONTOUR
 4070 | 59 | ignorable | yes | TAG_SETSENTINEL
 4072 | 480 | ignorable | NO | TAG_BLENDPROFILES
 4073 | 508 | ignorable | NO | TAG_BLENDERADDITIONAL
