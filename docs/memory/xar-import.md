@@ -981,6 +981,43 @@ group.
   259 → 3, scope3 simple 21 → 5, TextCurve 10 → 2, testimp1 13 → 9.
   Fuzz seed `mould`. The opaque-record test now uses tag 118.
 
+### 25. Fractal and noise fills keep their parallelogram (XARA-T-0336, 2026-10-16)
+
+The four records already decoded (since phase 8); what was missing was
+the **geometry**: the mapping dropped `start`, `end`, `end2`, so
+`FillGeometry::Fractal`/`Noise` had nowhere to draw. They now carry
+`origin`, `axis_x`, `axis_y` (as a bitmap fill does: `start` is the tile's
+first row, `research/03 §2.8` "Orientation"), and the renderer draws the
+generated tile (`render.md`, "Clouds and plasma").
+
+- **Corpus census** (`xar-dump --tags`, 2026-10-16): 196 records in 8
+  files — `TAG_FRACTALFILL` 159: **78** (Spitfire 66, Fill Types simple
+  6, scope3 simple 5, leafgirl 1); `TAG_NOISEFILL` 4010: **112**
+  (Groucho2 54, Watch4 46, amurdove 7, Fill Types simple 5);
+  `TAG_FRACTALTRANSPARENTFILL` 172: **4** (SimpleSphere 3, scope3
+  simple 1); `TAG_NOISETRANSPARENTFILL` 4011: **2** (SimpleSphere).
+- **Parameters seen**: gravity and squash are **0 in every record**;
+  clouds graininess 0.6–70 (5 in 73 of 82), dpi 10–337, tileable on 5
+  of 82; plasma graininess 10–60 (30 in 94 of 114), dpi 10–2487,
+  tileable on all but Watch4's ten at graininess 35. Fractal fills are mostly followed by
+  `TAG_FILL_REPEATINGINVERTED` (Spitfire's 66, scope3's 5).
+- **Field facts, verified against the writer** (the 54ec8d6 lesson):
+  159 `seed, graininess, gravity, squash` (`FIXED16`), `dpi`, then
+  `tileable` as a `BYTE` of the in-memory `BOOL`
+  (`Kernel/fillattr.cpp:16929-16946`); 4010 has **graininess before
+  seed** and no gravity/squash (`:17143-17157`); 172 and 4011 put
+  `t0, t1, type` where the colours were (`:17951-17970`,
+  `:18119-18136`). No enum is stored, so no enum mapping to check.
+- **Not bit-identical to the original**: the clouds generator follows
+  the original's integer algorithm exactly (`research/03 §2.8.1`) but
+  nothing has compared it with the original's output; plasma's random
+  table came from the C library's `rand()` and differs per platform in
+  the original itself — Xarast uses the Microsoft runtime's
+  (`image.md`, "Procedural generators"). The acceptance bar is "the same
+  family, responding to the same parameters".
+- Fuzz seed `procedural-fills` (well formed, extreme, truncated);
+  `xarast-app/tests/procedural_fills.rs` imports and renders it.
+
 ## Caps and joins (XARA-T-0329, 2026-10-15)
 
 - **`TAG_STARTCAP`/`TAG_ENDCAP`/`TAG_JOINSTYLE` hold the original's

@@ -828,9 +828,8 @@ The generated bitmap is cached by the full parameter set and D
 (`CacheFractalData` / `IsSameAsCachedFractal`, `fillval.h:317-318`;
 `GetGlobalFractalList()->CheckFractalBitmap`, `fillval.cpp:470`), is never
 saved (`SetAsFractal`, `bitmap.h:573`), and `Randomise()` only draws a new
-seed (`fillval.h:274`). The corpus (`docs/memory/xar-import.md`,
-"Fractal and noise fills") holds no fill with gravity or squash other
-than 0.
+seed (`fillval.h:274`). The corpus (`docs/memory/xar-import.md` §25)
+holds no fill with gravity or squash other than 0.
 
 ## 2.9 Live effects: which part CDraw did
 
