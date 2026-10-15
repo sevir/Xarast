@@ -104,7 +104,7 @@ Every one is deliberate, and every one is a phase that owns it:
 
 | Tags | Count | Why not |
 |---|---:|---|
-| 105, 106, 4072, 4073 blends | 1 976 | Live objects, Phase 13 |
+| ~~105, 106, 4072, 4073 blends~~ | 1 976 | done, XARA-T-0333 (finding 23) |
 | 107–110, 4012 moulds | 788 | Live objects, Phase 13 |
 | 4050, 4051 shadows; 4052, 4057 bevels; 4066, 4067 contours | 248 | Live objects, Phase 13. All six are on the corpus **atomic** list, so their subtrees are stripped — which is the format's own rule, not a shortcut |
 | 4079–4113 brushes | 24 | One corpus file, very complex, base path present regardless; Phase 13 |
@@ -753,7 +753,7 @@ that owns it:
 | ~~4050, 4051 shadow controller / shadow (atomic: the whole subtree, source objects included, is stripped)~~ | 98 controllers | done, XARA-T-0318 (finding 20) |
 | ~~4052–4057 bevel (atomic)~~ | 22 controllers | done, XARA-T-0322 (finding 21) |
 | ~~4066, 4067 contour (atomic)~~ | 4 controllers | done, XARA-T-0330 (finding 22) |
-| 105, 106, 4060–4062, 4072–4074 blend | 1 976 records | XARA-US-0070 (F9) |
+| ~~105, 106, 4060–4062, 4072–4074 blend~~ | 1 976 records | done, XARA-T-0333 (finding 23); along a path not drawn (F6) |
 | 107–110, 4012 mould | 197 controllers | XARA-US-0071 (G10) |
 | 4127 feather effect (the effect-stack form) | 0 in the corpus | XARA-US-0069 |
 
@@ -902,6 +902,50 @@ profiles.
 - Snapshots: stripped records testimp1 13 → **0**, Girard_simple 43 →
   **0**; no file strips anything now. Fuzz seed `contour`.
 
+### 23. Blends are live objects, their steps regenerated (XARA-T-0333, 2026-10-15)
+
+Decoders for `TAG_BLEND` (105), `TAG_BLENDER` (106),
+`TAG_BLENDERADDITIONAL` (4073), `TAG_BLENDPROFILES` (4072) and the
+along-a-path records 4060–4062, 4074. Corpus census (pinned by
+`tests/corpus.rs::blends_import_…`): **480 blends, 508 pairs** in 8 files
+(ProbeX16 288, WATCH2 61, Watch4 65, scope3 simple 55 with up to 8
+objects each, WATCH 7, leafgirl 2, BLUECAR 1, testimp1 1). Flags 0, 1, 2,
+3 and 19: one-to-one and antialias vary, **no tangential, no blend
+along a path, no 4060–4062/4074 record**; colour types 0 (479) and 1
+(rainbow, 1). Steps 3–35. Object profiles non-flat in 23 Watch4 blends,
+attribute profiles in 7; the position profile is always 0 (the writer
+writes zeros, `Kernel/nodeblnd.cpp:3530-3545`). Ends: paths, regular
+shapes, 2 groups; 9 pairs end at perspective moulds (opaque, no steps
+yet). Watch4 has one blender with no 4073.
+
+- **Field facts.** 105: `UINT16` steps, `BYTE` flags = one-to-one |
+  antialiased << 1 | tangential << 2 | colour type << 4, the colour type
+  being the original's in-memory `ColourBlendType` (0 fade, 1 rainbow, 2
+  alt-rainbow, 3 none, `Kernel/blendatt.h:117`; verified against the
+  writer, `Kernel/nodeblnd.cpp:3546-3560`, as the cap/join lesson
+  requires). 106: two `INT32` path indices — the point each end's
+  outline starts at, written only for an end that is one subpath (−1
+  otherwise, `Kernel/nodebldr.cpp:4470-4485`). 4073: `INT32` on-curve,
+  path index (−1), object index start/end (counting every ink child of
+  the blend, blenders included: 0, 2, 4…), then an optional bit field
+  (bit 0 reversed on a path); it is a *sibling* after its blender. 4072
+  is a sibling *before* its blend: six `double`s, object, attribute,
+  position bias/gain, applied to the next blend read
+  (`Kernel/nodeblnd.cpp:4173-4250`).
+- **Mapping** (`Mapper::emit_blend`): `Live (Controller, Blend)` with
+  the blend's attributes, `Live (Source, Blend)` holding the objects with
+  a `Live (Generated, Blend)` where each blender stood. Every node carries
+  the same `BlendParams` (`blenders[k]` = pair `k`). Negative zeros in
+  profiles become zero (a reload spells them `0`). `BlendDegraded`: 0 a
+  blender without two objects, 1 a stray blender, 2 a colour type outside
+  0..=3 (faded, plus `UnknownEnumValue`), 3 along a path (the path is
+  dropped, drawn straight), 4 object indices that disagree with the
+  neighbours (the neighbours win), 5 more than 999 steps (kept, 999
+  drawn). None fires on the corpus.
+- Snapshots: skipped records BLUECAR 6 → 2, Watch4 775 → 513 (its moulds
+  remain), scope3 295 → 21, ProbeX16 1 411 → 259, WATCH2 246 → 2. Fuzz
+  seed `blend`.
+
 ## Caps and joins (XARA-T-0329, 2026-10-15)
 
 - **`TAG_STARTCAP`/`TAG_ENDCAP`/`TAG_JOINSTYLE` hold the original's
@@ -1018,8 +1062,8 @@ profiles.
   is not in the format at all).
 - Live objects: 1 594 records currently round-trip as `NodeKind::Opaque`
   and should become `NodeKind::Live` in Phase 13. Shadows done
-  (finding 20), bevels done (finding 21), contours done (finding 22);
-  blends and moulds remain.
+  (finding 20), bevels done (finding 21), contours done (finding 22), blends done (finding 23);
+  moulds remain.
 - ~~A release-profile import benchmark~~: done 2026-09-23 as
   `cargo bench -p xarast-xar --bench import`. ~~`ProbeX16.xar` 644 ms
   against the 350 ms budget~~: 329–343 ms after XARA-T-0031 (finding 13).

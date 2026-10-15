@@ -939,6 +939,42 @@ XARA-T-0330 it was misused for include-line-widths) and
   the four corpus contours.
 - Not done: an inset path's source is still drawn by an SVG viewer.
 
+## Blends: steps baked as real paths, parameters read back (XARA-T-0333, 2026-10-15)
+
+`<xarast:blend>` in the controller (`research/06 §6.8.4` as implemented):
+`xarast:steps`, `one-to-one`, `antialias`, `tangential`, `reverse`,
+`step-distance` (when set), `xarast:position-profile` (the object
+profile) and `xarast:attribute-profile` in the shortest exact spellings,
+`xarast:colour-effect` (fade omitted; `rainbow`, `alt-rainbow`, `none`),
+and one `<xarast:blender>` child per pair with `xarast:start-point` /
+`xarast:end-point` when recorded and an `<xarast:blend-map
+xarast:pairs="0:0 1:2">` for explicit pairs. No `from`/`to`: a pair's
+ends are the objects either side of its group.
+
+- **Each pair's generated group stands under the live source between its
+  objects** (so an SVG viewer paints object, steps, object, as the
+  original) and its `xarast:generated-by` names the **controller** (the
+  reader accepts a blend group whose parent is a `live-source` whose
+  parent has that id, and takes the kind from the enclosing source). It
+  holds the steps as `<path>`s, painted with their blended attributes,
+  regenerated at every save (`Emitter::blend_steps`); it is **not**
+  base-authoritative and the reader drops the paths. A blend generated
+  node anywhere else (an older file's baked steps under the controller)
+  keeps the old base-authoritative container. `Stats::blend_steps`.
+- The byte fixed point needed the steps to be independent of what the
+  reload moves: a blend's own attributes land on its objects, and
+  invisible slots (a no-colour outline's width and join, a flat fill's
+  repeat, an unfilled path's fill) are not kept. Hence the whole map and
+  the "only what shows" rule (`document-model.md` decision 51); negative
+  zero profiles are normalised at import (`f64s_exact(-0.0)` is `0`).
+- Pinned by `tests/svg_read.rs::a_blend_bakes_its_steps_between_…` and the
+  corpus round trip: 59/59 normal form and byte-identical with the 480
+  blends.
+- Not done: the §4.6 Case C rule (a baked subtree over 256 KiB replaced by
+  a raster in `resources/baked/`): `xarast-format` has no rasteriser; it
+  would need an application-provided one, like the thumbnail. The corpus'
+  largest blend is 35 steps.
+
 ## The default fill rule became even-odd (XARA-T-0331, 2026-10-15)
 
 The model's default rule is now `EvenOdd` (the original's), while SVG's

@@ -518,6 +518,35 @@ New in Phase 2:
     needed. An outer contour's controller bounds grow by `growth()`:
     the distance × 11.47 when the corners may be mitred (a cheap
     conservative bound, see TODO).
+51. **A blend's pairs are generated nodes between its objects; its steps
+    are never nodes** (XARA-T-0333, phase 13 F1/F5/F7). The tree mirrors
+    the original's: `Controller (Blend)` › attributes, `Source (Blend)` ›
+    object, `Generated`, object, `Generated`, object… Generated node `k`
+    (direct children of the source, in order) blends the ink sibling
+    before it into the one after (`blend::blenders`), with
+    `BlendParams::blenders[k]` (`BlenderParams`: recorded start points,
+    explicit subpath `pairs`; defaults when missing). `BlendParams` adds
+    `attr_profile`, `colour_effect: Option<FillEffect>` (`None` = the
+    original's "no colour blend"), `MAX_BLEND_STEPS` 999 (`drawn_steps`).
+    `blend::generate` → `LiveOutput::Groups` (one group per generated
+    node, `GeneratedShape` now says `filled`/`stroked`): step `k` of `n`
+    at `k/(n+1)`, geometry at the object profile (`xarast_geom::blend`),
+    attributes slot by slot (colour fills, flat transparencies, line
+    widths at the attribute profile with bias **and** gain negated,
+    graduated transparencies at the object profile, the rest at the
+    attribute profile; colours fade/rainbow/alt-rainbow, no colour as
+    white unless both are none; anything else start ≤ ½ < end). A step
+    carries **every slot** (a whole blended map, as the original), and
+    both ends and every step keep **only what shows**
+    (`blend::shown_attrs`): an unfilled/unstroked object's paint is no
+    colour, an invisible outline's width/join/caps/dashes/arrows and a
+    flat fill's repeat are the defaults. Both rules exist because a
+    `.xarast` reload moves a blend's own attributes onto its objects and
+    keeps only what shows; anything else breaks the byte fixed point.
+    Pairs continuing one object's subpaths make one path; filled/stroked
+    when either end is; `reverse` draws the steps from the end. The
+    controller's bounds need nothing: a straight blend's steps lie in its
+    ends' union.
 
 ## The `.xar` attribute tag reconciliation
 
@@ -785,6 +814,19 @@ the digest recorded for that state serial.
 
 ## Open TODOs
 
+- **Blend follow-ups (XARA-T-0333).** F6 (along a path: the record
+  family is decoded and reported, the path dropped; none in the corpus;
+  bounds would then need the path); blends whose ends are moulds,
+  shadows or other live objects (9 corpus pairs end at moulds: no
+  steps) — the original blends what those *draw*; text ends (not
+  outlined in the document); nested blends blend only their own ends;
+  `step_distance` is kept but not used to derive the count; a fill
+  family mismatch picks instead of blending the original's way (start's
+  fill type, colours blended); the F2 rule in the phase plan ("drop the
+  smallest redundant subpaths") is not the original's (it pairs every
+  subpath with the stepper and strips only blend-path-derived ones), so
+  it was not implemented; the 12-pair VM comparison of the matching rule
+  was not run (`geometry.md`, "Blends"). F8, the tool.
 - **Contour follow-ups (XARA-T-0330).** Exact controller bounds from the
   regenerated rings (today `growth()` is ×11.47 for mitred corners, which
   over-sizes culling, damage and "fit drawing"); text sources are not

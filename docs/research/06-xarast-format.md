@@ -1687,6 +1687,23 @@ that join attribute, and drops the other rings.
 - A “one-to-one” blend between groups (`one-to-one`) **MUST** record the correspondence
   of sub-objects with `<xarast:blend-map>` so that the effect is reconstructed exactly.
 
+As implemented (XARA-T-0333): a blend of N objects has N − 1 pairs, and each
+pair's `<g xarast:generated="blend">` stands **between its two objects inside the
+live source** (paint order: object, steps, object), with `xarast:generated-by`
+naming the controller. It is **not** base-authoritative: a reader drops its steps
+and regenerates them. `xarast:from`/`xarast:to` are not written (a pair's ends are
+its neighbours). `xarast:attribute-profile` and `xarast:colour-effect` (`fade`
+default, `rainbow`, `alt-rainbow`, `none`) are as the contour's; the
+position profile is the original's object profile. Per pair, an
+`<xarast:blender>` child of `<xarast:blend>` (in order) carries
+`xarast:start-point`/`xarast:end-point` (the point each outline starts at, from
+the original's blender record) and, for an explicit correspondence, an
+`<xarast:blend-map xarast:pairs="0:0 1:2">` (start subpath : end subpath). The
+original stores no explicit correspondence: one-to-one only pairs segments of
+subpaths with equal counts, so a `.xar` import never writes a map. The Case C
+rasterisation is not applied yet (the writer has no rasteriser); steps are always
+baked as paths.
+
 #### 6.8.5 Moulds (`TAG_MOULD_ENVELOPE` 107, `TAG_MOULD_PERSPECTIVE` 108, `TAG_MOULD_GROUP` 109, `TAG_MOULD_PATH` 110, `TAG_MOULD_BOUNDS` 4012)
 
 ```xml
@@ -2792,9 +2809,12 @@ Contour =
 
 Blend =
   element x:blend {
-    attribute x:steps             { xsd:positiveInteger },
-    attribute x:from              { IdRef },
-    attribute x:to                { IdRef },
+    attribute x:steps             { xsd:nonNegativeInteger },
+    attribute x:from              { IdRef }?,
+    attribute x:to                { IdRef }?,
+    attribute x:step-distance     { Num }?,
+    attribute x:reverse           { Bool }?,
+    attribute x:colour-effect     { "fade" | "rainbow" | "alt-rainbow" | "none" }?,
     attribute x:position-profile  { Profile }?,
     attribute x:attribute-profile { Profile }?,
     attribute x:one-to-one        { Bool }?,
@@ -2805,6 +2825,11 @@ Blend =
     attribute x:end-angle         { Num }?,
     attribute x:tangential        { Bool }?,
     element x:blend-map { attribute x:pairs { text } }?,
+    element x:blender {
+      attribute x:start-point { xsd:nonNegativeInteger }?,
+      attribute x:end-point   { xsd:nonNegativeInteger }?,
+      element x:blend-map { attribute x:pairs { text } }?
+    }*,
     AnyForeign*
   }
 

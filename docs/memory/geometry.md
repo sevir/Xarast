@@ -614,6 +614,44 @@ Decisions:
   within 1 %), curved insets past the inradius empty, hostile
   distances/rules/limits sane and bounded (≤ 256 × (segments + 4)).
 
+### Blends: `geom::blend` (XARA-T-0333, 2026-10-15)
+
+- **`Outline`**: one subpath in `f64` (`Outline::subpaths`; an explicit
+  closing point is kept, a missing one becomes a closing line).
+  `align(start_point)`: the original's rules (`Kernel/nodebldr.cpp:5042-
+  5110`) — a closed outline rotates to the end point at the recorded
+  point index (a control point means the end point before it; the index
+  counts the subpath's points as `.xar` does: move 1, line 1, curve 3, so
+  it is our `Path` point index), else to the **end point nearest the
+  bottom-left corner of the end points' box** (the original's computed
+  but unused rule; its real one uses a point `GWinding` in closed CDraw
+  returns), then runs anticlockwise (positive area, y up). An open one
+  is reversed when the index is its last point, or (no index or a middle
+  one) when its start is less bottom-left (`x + y` larger) than its end.
+- **`pair_up(m, n)`**: the original's `ListStepper`
+  (`Kernel/nodebldr.cpp:163-200`): `max(m, n)` pairs, the longer list one
+  by one, the shorter advancing by a Bresenham step. Every subpath takes
+  part; nothing is dropped.
+- **`correspond(a, b, one_to_one)`**: a line meeting a shape runs there
+  and back (`ConvertLineToShape`); a lone move is a zero-length line.
+  One-to-one with equal segment counts pairs segments in order (the
+  original's `GBlend` 1-to-1). Otherwise **Xarast's rule** (the
+  original's `GBlend::BlendMtoN` greedily groups segments in 28-bit
+  fixed point): segment lengths (kurbo, 1 mp accuracy) as fractions of
+  the total, then a two-pointer walk; breakpoints closer than half the
+  shorter of the two current segments are one corner, any other splits
+  the other side's segment at that length fraction, used as the curve
+  parameter (as the original does). At most `m + n` pieces. A line with a
+  curve becomes a curve with controls at its thirds. `at(t)` lerps every
+  point and quantises; closed if either end is.
+- Property tests (`tests/blend.rs`): the outline at 0 and 1 holds every
+  end point of its end, in order, with the area within a split's
+  rounding (perimeter × ½ mp); curves within 0.1 %; one-to-one exact; the
+  stepper complete and monotone; hostile `i32` input never panics.
+- **Not done:** F6 (arc-length distribution along a path, tangential
+  rotation; nothing in the corpus); the phase plan's "VM comparison over
+  12 pairs" of the matching rule.
+
 ### Bevel cross-sections (XARA-T-0322, 2026-10-15)
 
 `xarast_geom::bevel`: `BevelType` (the original's fifteen styles, record

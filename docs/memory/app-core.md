@@ -758,6 +758,22 @@ placer (XARA-T-0259, 2026-09-24, ext4, load ≈ 3): ProbeX16 UI thread
   catches every change (undo included), so a lazy cache per walker is
   enough; the drag-per-frame and damage tests of T-0316 are still open.
 
+### Blend steps in the walker (XARA-T-0333, 2026-10-15)
+
+- At a blend's **generated node** (one per pair, under the source
+  between its two objects) the walk skips the subtree and `paint_blend`
+  takes the controller (the source's parent), the pair index
+  (`xarast_doc::blend::blenders`) and the group of
+  `LiveCache::current_or_regenerate`'s `LiveOutput::Groups`; each step is
+  pushed with its whole attribute map and painted with its own
+  `filled`/`stroked` (two stroked lines blend to stroked lines). Paint
+  order is the original's: object, steps, next object.
+- Scene ids: node tag | (step + 1) << 32, as rings; content hash mixes
+  the key's first 8 bytes with the pair and step index. Blend
+  controllers and sources are not `live_pending`.
+- `tests/xar_blends.rs` (+ golden): fading squares, widening stroked
+  lines, a three-object rainbow blend.
+
 ---
 
 ## Invariants that must not be broken
