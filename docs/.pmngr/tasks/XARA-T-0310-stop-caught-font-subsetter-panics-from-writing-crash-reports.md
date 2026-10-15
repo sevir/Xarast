@@ -2,13 +2,14 @@
 id: XARA-T-0310
 type: task
 title: Stop caught font-subsetter panics from writing crash reports
-status: in_progress
+status: done
 parent: XARA-US-0064
 author: mcp
 labels: [phase-12, stability]
 created: 2026-09-24T17:46:34Z
-updated: 2026-10-15T19:44:23Z
+updated: 2026-10-15T20:02:44Z
 started: 2026-10-15T19:44:23Z
+closed: 2026-10-15T20:02:44Z
 ---
 
 ## Description

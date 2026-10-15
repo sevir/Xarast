@@ -2,11 +2,12 @@
 id: XARA-T-0191
 type: task
 title: "Proptest failure: xarast-geom tests/hit.rs stroke_matches_the_renderers_outline"
-status: backlog
+status: in_progress
 author: mcp
 labels: [phase-7, geometry, bug]
 created: 2026-09-23T19:29:14Z
-updated: 2026-09-23T19:29:14Z
+updated: 2026-10-15T20:02:49Z
+started: 2026-10-15T20:02:49Z
 ---
 
 ## Description
