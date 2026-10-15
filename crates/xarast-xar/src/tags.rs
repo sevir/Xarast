@@ -103,6 +103,12 @@ pub const TAG_BLENDPROFILES: u32 = 4072;
 pub const TAG_BLEND_PATH: u32 = 4061;
 /// Whether the last blend path is filled.
 pub const TAG_NODEBLENDPATH_FILLED: u32 = 4074;
+/// A mould's cage: an absolute path, inside a mould record.
+pub const TAG_MOULD_PATH: u32 = 110;
+/// The group holding a mould's originals, inside a mould record.
+pub const TAG_MOULD_GROUP: u32 = 109;
+/// The rectangle a mould's cage maps from, inside a mould record.
+pub const TAG_MOULD_BOUNDS: u32 = 4012;
 /// Per-point path flags, the first child of the path record.
 pub const TAG_PATH_FLAGS: u32 = 111;
 /// A relative path, stroked.

@@ -432,6 +432,107 @@ fn file_seeds() -> Vec<(String, Vec<u8>)> {
             .finish()
     }));
 
+    // Moulds: an envelope whose cage mixes lines and curves, a perspective,
+    // each with its bounds and a group of objects and attributes; a nested
+    // mould; a cage with three sides, a mould with no group and one with
+    // an extra object and a second cage; a short record; stray parts
+    // outside a mould. Declared atomic, as real files do.
+    out.push(("mould".into(), {
+        let abs = |pts: &[(u8, i32, i32)]| {
+            let mut v = Vec::new();
+            v.extend_from_slice(&(pts.len() as i32).to_le_bytes());
+            for (verb, _, _) in pts {
+                v.push(*verb);
+            }
+            for (_, x, y) in pts {
+                v.extend_from_slice(&x.to_le_bytes());
+                v.extend_from_slice(&y.to_le_bytes());
+            }
+            v
+        };
+        let envelope = abs(&[
+            (6, 0, 0),
+            (2, 0, 9_000),
+            (4, 3_000, 12_000),
+            (4, 6_000, 12_000),
+            (4, 9_000, 9_000),
+            (2, 9_000, 0),
+            (3, 0, 0),
+        ]);
+        let perspective = abs(&[
+            (6, 0, 0),
+            (2, 2_000, 9_000),
+            (2, 7_000, 9_000),
+            (2, 9_000, 0),
+            (3, 0, 0),
+        ]);
+        let three = abs(&[(6, 0, 0), (2, 0, 9_000), (2, 9_000, 0), (3, 0, 0)]);
+        let bounds = {
+            let mut v = Vec::new();
+            for c in [0i32, 0, 9_000, 9_000] {
+                v.extend_from_slice(&c.to_le_bytes());
+            }
+            v
+        };
+        XarBuilder::new()
+            .record(
+                10,
+                &[107, 0, 0, 0, 108, 0, 0, 0, 109, 0, 0, 0, 110, 0, 0, 0],
+            )
+            .record(40, &[])
+            .down()
+            .record(107, &32i32.to_le_bytes())
+            .down()
+            .record(150, &(-2i32).to_le_bytes())
+            .record(110, &envelope)
+            .down()
+            .record(111, &[0x05; 13])
+            .up()
+            .record(4012, &bounds)
+            .record(109, &[])
+            .down()
+            .record(152, &500i32.to_le_bytes())
+            .record(116, &minimal_payload(116))
+            .record(108, &1024i32.to_le_bytes())
+            .down()
+            .record(110, &perspective)
+            .record(4012, &bounds)
+            .record(109, &[])
+            .down()
+            .record(116, &minimal_payload(116))
+            .up()
+            .up()
+            .up()
+            .up()
+            .record(108, &0i32.to_le_bytes())
+            .down()
+            .record(110, &three)
+            .record(109, &[])
+            .down()
+            .record(116, &minimal_payload(116))
+            .up()
+            .up()
+            .record(107, &i32::MAX.to_le_bytes())
+            .down()
+            .record(110, &envelope)
+            .record(110, &perspective)
+            .record(116, &minimal_payload(116))
+            .up()
+            .record(107, &[1, 2])
+            .down()
+            .record(109, &[])
+            .up()
+            .record(109, &[])
+            .down()
+            .record(116, &minimal_payload(116))
+            .up()
+            .record(110, &envelope[..9])
+            .record(4012, &bounds[..5])
+            .up()
+            .end_of_file()
+            .finish()
+    }));
+
     // One file per decodable tag, carrying a plausible minimal payload.
     out.push(("every-tag".into(), {
         let mut b = XarBuilder::new();

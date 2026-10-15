@@ -863,6 +863,27 @@ impl<'o> Mapper<'o> {
                 );
                 After::Drop
             }
+            Decoded::Mould {
+                perspective,
+                threshold,
+            } => {
+                let (perspective, threshold) = (*perspective, *threshold);
+                self.emit_mould(node, perspective, threshold)?;
+                After::Drop
+            }
+            // A mould's parts outside a mould: a cage with nothing to
+            // mould, originals that the original never draws on their own,
+            // a stale rectangle. Each goes with its subtree.
+            Decoded::MouldGroup | Decoded::MouldPath(_) | Decoded::MouldBounds(_) => {
+                self.mapped = self.mapped.saturating_add(1);
+                self.skipped = self.skipped.saturating_add(count_subtree(&node.children));
+                self.diags.push(
+                    Diagnostic::new(DiagCode::MouldDegraded)
+                        .at(at.0, at.1)
+                        .with_detail(3),
+                );
+                After::Drop
+            }
             // The original reads these four and discards the value
             // (`docs/memory/xar-import.md`, finding 21).
             Decoded::BevelAttribute(_) => {
@@ -1667,6 +1688,169 @@ impl<'o> Mapper<'o> {
         }
         if r.is_ok() && !generated_first {
             r = self.contour_ink(ink, &live);
+        }
+        self.pop_scope();
+        r
+    }
+
+    /// A `TAG_MOULD_ENVELOPE` or `TAG_MOULD_PERSPECTIVE` and everything
+    /// under it.
+    ///
+    /// In the file the mould holds its attributes, one `TAG_MOULD_PATH`
+    /// (the cage), one `TAG_MOULD_BOUNDS` (the rectangle the cage maps
+    /// from) and one `TAG_MOULD_GROUP` holding the originals; the moulded
+    /// objects themselves are never saved, the original rebuilds them on
+    /// load (`Kernel/nodemold.cpp:2625-2660`). The model's live object is
+    ///
+    /// ```text
+    /// Live (Controller, Mould)   threshold, cage, bounds
+    ///   attributes…              the mould's own
+    ///   Live (Generated, Mould)  empty: regenerated from the source
+    ///   Live (Source, Mould)
+    ///     the mould group's children…
+    /// ```
+    ///
+    /// The cage is the mould path's coordinates in order, a straight side
+    /// turned into a cubic with its handles at the thirds
+    /// (`docs/memory/xar-import.md`, finding 23).
+    fn emit_mould(
+        &mut self,
+        node: &RecordNode,
+        perspective: bool,
+        threshold: i32,
+    ) -> Result<(), XarError> {
+        use crate::tags::{TAG_MOULD_BOUNDS, TAG_MOULD_GROUP, TAG_MOULD_PATH};
+        use xarast_doc::{MouldKind, MouldParams};
+        let rec = &node.record;
+        let at = (rec.number, rec.tag);
+        self.mapped = self.mapped.saturating_add(1);
+        let kind = if perspective {
+            MouldKind::Perspective
+        } else {
+            MouldKind::Envelope
+        };
+        let children = node.children.as_slice();
+        let first = |tag: u32| children.iter().position(|c| c.record.tag == tag);
+        let (path_at, bounds_at, group_at) = (
+            first(TAG_MOULD_PATH),
+            first(TAG_MOULD_BOUNDS),
+            first(TAG_MOULD_GROUP),
+        );
+        let mut source = Rect::EMPTY;
+        if let Some(b) = bounds_at.and_then(|i| children.get(i)) {
+            self.skipped = self.skipped.saturating_add(count_subtree(&b.children));
+            let bat = (b.record.number, b.record.tag);
+            match decode(
+                b.record.tag,
+                &b.record.data,
+                self.origin,
+                &mut self.diags,
+                bat,
+            ) {
+                Ok(Decoded::MouldBounds(r)) => {
+                    self.mapped = self.mapped.saturating_add(1);
+                    source = r;
+                }
+                _ => self.skipped = self.skipped.saturating_add(1),
+            }
+        }
+        let mut cage: Option<Vec<Point>> = None;
+        if let Some(p) = path_at.and_then(|i| children.get(i)) {
+            // The cage's own path flags are editing metadata of a path
+            // nothing draws.
+            self.skipped = self.skipped.saturating_add(count_subtree(&p.children));
+            let pat = (p.record.number, p.record.tag);
+            match decode(
+                p.record.tag,
+                &p.record.data,
+                self.origin,
+                &mut self.diags,
+                pat,
+            ) {
+                Ok(Decoded::MouldPath(path)) => {
+                    self.mapped = self.mapped.saturating_add(1);
+                    cage = match kind {
+                        MouldKind::Perspective => xarast_geom::mould::corners_from_path(&path)
+                            .ok()
+                            .map(|c| c.to_vec()),
+                        _ => xarast_geom::mould::cage_from_path(&path, 4).ok(),
+                    };
+                }
+                _ => self.skipped = self.skipped.saturating_add(1),
+            }
+        }
+        let params = match cage.and_then(|c| MouldParams::from_cage(kind, &c, source, threshold)) {
+            Some(p) => p,
+            None => {
+                self.diags.push(
+                    Diagnostic::new(DiagCode::MouldDegraded)
+                        .at(at.0, at.1)
+                        .with_detail(1),
+                );
+                // A flat cage, which the generator reads as the identity.
+                let flat = vec![Point::ORIGIN; kind.cage_len()];
+                MouldParams::from_cage(kind, &flat, source, threshold).unwrap_or(
+                    MouldParams::Perspective {
+                        corners: [Point::ORIGIN; 4],
+                        source,
+                        threshold,
+                    },
+                )
+            }
+        };
+        if group_at.is_none() {
+            self.diags.push(
+                Diagnostic::new(DiagCode::MouldDegraded)
+                    .at(at.0, at.1)
+                    .with_detail(0),
+            );
+        }
+        let live = |role| {
+            NodeKind::Live(Box::new(xarast_doc::LiveNode {
+                role,
+                kind: xarast_doc::LiveKind::Mould(Box::new(params.clone())),
+                regen: xarast_doc::RegenState::Clean,
+                name: None,
+            }))
+        };
+        self.builder.node(live(xarast_doc::LiveRole::Controller))?;
+        self.push_scope()?;
+        let mut r = Ok(());
+        for (i, c) in children.iter().enumerate() {
+            if [path_at, bounds_at, group_at].contains(&Some(i)) {
+                continue;
+            }
+            let extra = matches!(
+                c.record.tag,
+                TAG_MOULD_PATH | TAG_MOULD_BOUNDS | TAG_MOULD_GROUP
+            );
+            if extra || class_of(c.record.tag) == Some(TagClass::Object) {
+                // A second cage, rectangle or group, or an object outside
+                // the mould group: the original never moulds it.
+                self.skipped = self
+                    .skipped
+                    .saturating_add(count_subtree(std::slice::from_ref(c)));
+                self.diags.push(
+                    Diagnostic::new(DiagCode::MouldDegraded)
+                        .at(c.record.number, c.record.tag)
+                        .with_detail(2),
+                );
+                continue;
+            }
+            r = self.visit(c);
+            if r.is_err() {
+                break;
+            }
+        }
+        if r.is_ok() {
+            self.builder.node(live(xarast_doc::LiveRole::Generated))?;
+            self.builder.node(live(xarast_doc::LiveRole::Source))?;
+            if let Some(g) = group_at.and_then(|i| children.get(i)) {
+                self.mapped = self.mapped.saturating_add(1);
+                self.push_scope()?;
+                r = self.visit_children(&g.children);
+                self.pop_scope();
+            }
         }
         self.pop_scope();
         r
@@ -3390,7 +3574,7 @@ mod tests {
         let bytes = XarBuilder::new()
             .record(40, &[])
             .down()
-            .record(107, &[1, 2, 3, 4])
+            .record(118, &[1, 2, 3, 4])
             .up()
             .end_of_file()
             .finish();
@@ -3404,7 +3588,7 @@ mod tests {
                 _ => None,
             })
             .expect("the record was kept");
-        assert_eq!(kept.tag, 107);
+        assert_eq!(kept.tag, 118);
         assert_eq!(&*kept.payload, &[1, 2, 3, 4]);
     }
 
@@ -4415,5 +4599,178 @@ mod tests {
         // The path the second blend ran along is not one of its objects.
         let source = xarast_doc::live::parts(&doc.tree, got[1].0).unwrap().source;
         assert_eq!(kinds_under(&doc, source), ["Path", "Live", "Path", "Live"]);
+    }
+
+    /// An absolute path payload (`TAG_MOULD_PATH`): count, verbs, points.
+    fn absolute(pts: &[(u8, i32, i32)]) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(&(pts.len() as i32).to_le_bytes());
+        for (verb, _, _) in pts {
+            v.push(*verb);
+        }
+        for (_, x, y) in pts {
+            v.extend_from_slice(&x.to_le_bytes());
+            v.extend_from_slice(&y.to_le_bytes());
+        }
+        v
+    }
+
+    fn rect_payload(x0: i32, y0: i32, x1: i32, y1: i32) -> Vec<u8> {
+        let mut v = Vec::new();
+        for c in [x0, y0, x1, y1] {
+            v.extend_from_slice(&c.to_le_bytes());
+        }
+        v
+    }
+
+    fn moulds(doc: &xarast_doc::Document) -> Vec<xarast_doc::MouldParams> {
+        doc.tree
+            .preorder(doc.tree.root())
+            .filter_map(|id| match doc.tree.kind(id) {
+                Some(NodeKind::Live(l)) if l.role == xarast_doc::LiveRole::Controller => {
+                    match &l.kind {
+                        xarast_doc::LiveKind::Mould(p) => Some((**p).clone()),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn mould_diags(report: &ImportReport) -> Vec<u64> {
+        report
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == DiagCode::MouldDegraded)
+            .map(|d| d.detail)
+            .collect()
+    }
+
+    #[test]
+    fn a_mould_keeps_its_cage_bounds_and_threshold_and_its_group_as_source() {
+        // An envelope whose left side is a line: a cubic with its handles
+        // at the thirds, rounded towards zero as the original divides.
+        let cage = absolute(&[
+            (6, 0, 0),
+            (2, 0, 100_000),
+            (4, 30_000, 130_000),
+            (4, 70_000, 130_000),
+            (4, 100_000, 100_000),
+            (4, 110_000, 60_000),
+            (4, 110_000, 30_000),
+            (4, 100_000, 0),
+            (3, 0, 0),
+        ]);
+        let bytes = layer_with(|b| {
+            b.record(107, &1024i32.to_le_bytes())
+                .down()
+                .record(152, &500i32.to_le_bytes())
+                .record(110, &cage)
+                .down()
+                .record(111, &[4; 9])
+                .up()
+                .record(4012, &rect_payload(0, 0, 50_000, 50_000))
+                .record(109, &[])
+                .down()
+                .record(150, &(-2i32).to_le_bytes())
+                .record(116, &square_path(0, 0, 50_000))
+                .up()
+                .up()
+        });
+        let (doc, report) = import(&bytes, &ImportOptions::default()).unwrap();
+        balanced(&report);
+        assert!(mould_diags(&report).is_empty(), "{:?}", report.diagnostics);
+        assert_eq!(report.records_stripped, 0);
+        assert!(doc.validate().errors.is_empty(), "{:?}", doc.validate());
+        let c = first_of(&doc, "Live").unwrap();
+        assert_eq!(kinds_under(&doc, c), ["Attr", "Live", "Live"]);
+        let parts = xarast_doc::live::parts(&doc.tree, c).expect("a controller");
+        assert_eq!(kinds_under(&doc, parts.generated.unwrap()), [] as [&str; 0]);
+        assert_eq!(kinds_under(&doc, parts.source), ["Attr", "Path"]);
+        let [p] = moulds(&doc).try_into().unwrap();
+        let xarast_doc::MouldParams::Envelope {
+            shape,
+            source,
+            threshold,
+        } = p
+        else {
+            panic!("an envelope: {p:?}");
+        };
+        assert_eq!(threshold, 1024);
+        // The bounds record is translated like any coordinate.
+        assert_eq!(source.width(), Mp::new(50_000));
+        let o = source.lo;
+        let at = |x: i32, y: i32| Point::new(o.x + Mp::new(x), o.y + Mp::new(y));
+        assert_eq!(shape[0], at(0, 0));
+        assert_eq!(shape[1], at(0, 33_333));
+        assert_eq!(shape[2], at(0, 66_666));
+        assert_eq!(shape[3], at(0, 100_000));
+        assert_eq!(shape[9], at(100_000, 0));
+        // The bottom side is the closing line back to the start: its
+        // handles at its thirds too.
+        assert_eq!(shape[10], at(66_666, 0));
+    }
+
+    #[test]
+    fn degraded_moulds_are_reported_and_draw_their_source_unmoulded() {
+        let three = absolute(&[(6, 0, 0), (2, 0, 9_000), (2, 9_000, 0), (3, 0, 0)]);
+        let quad = absolute(&[
+            (6, 0, 0),
+            (2, 2_000, 9_000),
+            (2, 7_000, 9_000),
+            (2, 9_000, 0),
+            (3, 0, 0),
+        ]);
+        let bytes = layer_with(|b| {
+            // A three-sided cage: flat, the identity.
+            b.record(108, &32i32.to_le_bytes())
+                .down()
+                .record(110, &three)
+                .record(109, &[])
+                .down()
+                .record(116, &square_path(0, 0, 50_000))
+                .up()
+                .up()
+                // No group; an object and a second cage inside the mould.
+                .record(108, &32i32.to_le_bytes())
+                .down()
+                .record(110, &quad)
+                .record(116, &square_path(0, 0, 50_000))
+                .record(110, &quad)
+                .up()
+                // A short record, then the stray parts: none may leak.
+                .record(107, &[1, 2])
+                .down()
+                .record(109, &[])
+                .down()
+                .record(150, &(-3i32).to_le_bytes())
+                .up()
+                .up()
+                .record(4012, &rect_payload(0, 0, 1, 1))
+                .record(116, &square_path(0, 0, 50_000))
+        });
+        let (doc, report) = import(&bytes, &ImportOptions::default()).unwrap();
+        balanced(&report);
+        assert!(doc.validate().errors.is_empty(), "{:?}", doc.validate());
+        // 1: three sides; 0: no group; 2, 2: the object and the second
+        // cage; 3: the stray group of the short record; 3: the stray
+        // bounds.
+        assert_eq!(mould_diags(&report), [1, 0, 2, 2, 3, 3]);
+        let got = moulds(&doc);
+        assert_eq!(got.len(), 2);
+        assert!(got[0].cage().iter().all(|p| *p == Point::ORIGIN));
+        assert_eq!(got[1].kind(), xarast_doc::MouldKind::Perspective);
+        let stray_fill = doc.tree.preorder(doc.tree.root()).any(|id| {
+            matches!(doc.tree.kind(id), Some(NodeKind::Attr(a))
+                if a.value == AttrValue::Fill(Paint::Flat { value: crate::colour::ColourRegistry::new()
+                    .resolve(Ref::parse(-3), &mut DiagSink::new(), (1, 150)).unwrap() }))
+        });
+        assert!(!stray_fill);
+        // The flat cage draws the square where it is.
+        let c = first_of(&doc, "Live").unwrap();
+        let shapes = xarast_doc::mould::generate(&doc, c).unwrap();
+        assert_eq!(shapes.len(), 1);
+        assert_eq!(shapes[0].path.bounds().width(), Mp::new(50_000));
     }
 }

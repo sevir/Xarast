@@ -32,10 +32,10 @@
 104 | 19075 | object | yes | TAG_GROUP
 105 | 480 | object | yes | TAG_BLEND
 106 | 508 | object | yes | TAG_BLENDER
-107 | 68 | object | NO | TAG_MOULD_ENVELOPE
-108 | 129 | object | NO | TAG_MOULD_PERSPECTIVE
-109 | 197 | object | NO | TAG_MOULD_GROUP
-110 | 197 | object | NO | TAG_MOULD_PATH
+107 | 68 | object | yes | TAG_MOULD_ENVELOPE
+108 | 129 | object | yes | TAG_MOULD_PERSPECTIVE
+109 | 197 | object | yes | TAG_MOULD_GROUP
+110 | 197 | object | yes | TAG_MOULD_PATH
 111 | 152312 | attribute | yes | TAG_PATH_FLAGS
 115 | 16888 | object | yes | TAG_PATH_RELATIVE_STROKED
 116 | 135227 | object | yes | TAG_PATH_RELATIVE_FILLED_STROKED
@@ -116,7 +116,7 @@
 3509 | 228 | ignorable | NO | TAG_PRINTMARKDEFAULT
 4010 | 112 | attribute | yes | TAG_NOISEFILL
 4011 | 2 | attribute | yes | TAG_NOISETRANSPARENTFILL
-4012 | 197 | ignorable | NO | TAG_MOULD_BOUNDS
+4012 | 197 | ignorable | yes | TAG_MOULD_BOUNDS
 4015 | 6 | ignorable | NO | TAG_EXPORT_HINT
 4030 | 1 | ignorable | yes | TAG_LAYER_FRAMEPROPS
 4031 | 59 | ignorable | yes | TAG_SPREAD_ANIMPROPS

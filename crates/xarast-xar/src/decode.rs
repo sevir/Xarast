@@ -620,6 +620,26 @@ pub enum Decoded {
     /// `TAG_NODEBLENDPATH_FILLED` (4074): whether the last blend path is
     /// filled.
     BlendPathFilled(i32),
+    /// `TAG_MOULD_ENVELOPE` (107) or `TAG_MOULD_PERSPECTIVE` (108): a
+    /// mould's controller. One `INT32`, the refitting threshold
+    /// (`Kernel/nodemold.cpp:2699-2727`); its children are its attributes,
+    /// one `TAG_MOULD_PATH`, one `TAG_MOULD_BOUNDS` and one
+    /// `TAG_MOULD_GROUP` (`research/02 §6.7`).
+    Mould {
+        /// A perspective (108) rather than an envelope (107).
+        perspective: bool,
+        /// The refitting threshold, millipoints.
+        threshold: i32,
+    },
+    /// `TAG_MOULD_GROUP` (109): the group holding the moulded originals.
+    /// Empty.
+    MouldGroup,
+    /// `TAG_MOULD_PATH` (110): the mould's cage, an absolute path
+    /// (`Kernel/ndmldpth.cpp:590-600`).
+    MouldPath(xarast_geom::Path),
+    /// `TAG_MOULD_BOUNDS` (4012): the rectangle of the moulded originals
+    /// when the file was saved (`Kernel/ndmldgrp.cpp:791-822`).
+    MouldBounds(Rect),
     /// `TAG_SETSENTINEL`.
     SetSentinel,
     /// `TAG_SPREADINFORMATION`.
@@ -881,14 +901,14 @@ pub const fn has_decoder(tag: u32) -> bool {
         | 40..=43 | 45 | 46 | 47 | 48 | 49 | 50 | 51 | 52 | 53
         | 60..=64 | 65..=69 | 71
         | 80 | 82 | 87 | 91 | 92 | 93
-        | 100..=106 | 111 | 113..=116
+        | 100..=110 | 111 | 113..=116
         | 150..=186 | 188 | 190..=195 | 198 | 200..=207
         | 1901
         | 2000 | 2001
         | 2100 | 2101 | 2110..=2117 | 2150 | 2151
         | 2200..=2204 | 2206
         | 2900..=2920
-        | 4010 | 4011 | 4050..=4057 | 4060..=4062 | 4066 | 4067 | 4070 | 4072..=4074 | 4075..=4078 | 4084 | 4085 | 4086 | 4087 | 4088
+        | 4010 | 4011 | 4012 | 4050..=4057 | 4060..=4062 | 4066 | 4067 | 4070 | 4072..=4074 | 4075..=4078 | 4084 | 4085 | 4086 | 4087 | 4088
         | 4114 | 4115 | 4116 | 4119 | 4120 | 4121 | 4123 | 4124 | 4129
         | 4030 | 4031 | 4201..=4203)
 }
@@ -1000,6 +1020,12 @@ pub fn decode(
             path_start: c.i32()?,
             path_end: c.i32()?,
         },
+        107 | 108 => Decoded::Mould {
+            perspective: tag == 108,
+            threshold: c.i32()?,
+        },
+        109 => Decoded::MouldGroup,
+        110 => Decoded::MouldPath(decode_absolute(&mut c, origin, diags, at)?),
         111 => Decoded::PathFlags(payload.to_vec()),
         113..=116 => Decoded::Path {
             path: decode_relative(&mut c, origin, diags, at)?,
@@ -1139,6 +1165,7 @@ pub fn decode(
         }),
         4053..=4056 => Decoded::BevelAttribute(c.i32()?),
         4057 => Decoded::BevelInk,
+        4012 => Decoded::MouldBounds(rect(&mut c, origin)?),
         4066 => Decoded::ContourController(ContourRecord {
             steps: c.i32()?,
             width: c.i32()?,

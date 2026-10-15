@@ -154,6 +154,13 @@ pub enum DiagCode {
     /// dropped), 4 object indices that disagree with the blender's neighbours
     /// (the neighbours are blended), 5 more than 999 steps (999 are drawn).
     BlendDegraded,
+    /// A mould could not be mapped as the original draws it. The detail
+    /// says how: 0 a mould with no `TAG_MOULD_GROUP` (nothing to mould),
+    /// 1 no usable `TAG_MOULD_PATH` (the cage is the identity: the source
+    /// is drawn unmoulded), 2 a stray or extra record inside a mould
+    /// (dropped), 3 a stray `TAG_MOULD_GROUP`, `TAG_MOULD_PATH` or
+    /// `TAG_MOULD_BOUNDS` outside one (dropped with its subtree).
+    MouldDegraded,
 }
 
 impl DiagCode {
@@ -187,6 +194,7 @@ impl DiagCode {
             DiagCode::BevelDegraded => "BevelDegraded",
             DiagCode::ContourDegraded => "ContourDegraded",
             DiagCode::BlendDegraded => "BlendDegraded",
+            DiagCode::MouldDegraded => "MouldDegraded",
         }
     }
 
@@ -240,7 +248,8 @@ impl DiagCode {
             | DiagCode::ShadowDegraded
             | DiagCode::BevelDegraded
             | DiagCode::ContourDegraded
-            | DiagCode::BlendDegraded => D::UnsupportedFeature,
+            | DiagCode::BlendDegraded
+            | DiagCode::MouldDegraded => D::UnsupportedFeature,
         }
     }
 }
