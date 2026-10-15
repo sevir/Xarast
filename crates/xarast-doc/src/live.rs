@@ -348,6 +348,45 @@ impl Default for BevelParams {
 }
 
 impl BevelParams {
+    /// The colour an outer bevel is painted in: its own, else the first
+    /// colour of the fill its source's first object is drawn with (the
+    /// original copies that object's fill onto its bevel node,
+    /// `tools/opbevel.cpp`). Read from the object rather than from the
+    /// generated node's inheritance, which a `.xarast` round trip does not
+    /// keep (attributes of a node with no ink are not written).
+    #[must_use]
+    pub fn paint(
+        &self,
+        tree: &Tree,
+        controller: NodeId,
+        defaults: &crate::attr::DefaultAttrs,
+    ) -> Option<Colour> {
+        if let Some(c) = &self.colour {
+            return Some(c.clone());
+        }
+        let source = parts(tree, controller)?.source;
+        let first = tree.preorder(source).find(|&n| {
+            matches!(
+                tree.kind(n),
+                Some(
+                    NodeKind::Path(_)
+                        | NodeKind::Shape(_)
+                        | NodeKind::QuickShape(_)
+                        | NodeKind::TextItem(_)
+                )
+            )
+        })?;
+        let attrs = crate::attr::resolve_uncached(tree, first, defaults);
+        let mut paint = attrs.fill().clone();
+        let mut colour = None;
+        paint.for_each_value_mut(&mut |c| {
+            if colour.is_none() {
+                colour = Some(c.clone());
+            }
+        });
+        colour
+    }
+
     /// How far an outer bevel reaches beyond its object; 0 for an inner
     /// one (and for a negative width).
     #[must_use]

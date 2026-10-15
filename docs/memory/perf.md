@@ -1267,6 +1267,13 @@ shadows alone put a one-shot Groucho2 frame at 108–136 ms (render.md,
 limit (16 ms × calibration, ref 6.5). `perf --tier pr`: 17/17 passed
 (`render-feathers` 3.92 ms against 13.59).
 
+**With bevels (XARA-T-0322, 2026-10-15).** Groucho2 adds 21 bevels
+(its frame, which was stripped before) under the cache. `bench render
+--whole --doc Groucho2.xar --runs 11`, release, load ~9, same machine and
+hour: cbdc3bd warm median 7.19 ms, first 73.1 ms, RSS 62.0 MiB; with
+bevels warm **7.35 ms**, first 109.2 ms, RSS 77.1 MiB, walk 18.8 ms.
+`render-groucho2` (nightly 16 ms) unaffected.
+
 ## Things that were slow, and why
 
 Worth remembering, because each was a factor of several and each has a shape

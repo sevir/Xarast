@@ -1887,21 +1887,8 @@ impl<'d, 'b> Emitter<'d, 'b> {
             self.stats.bevels_unbaked += 1;
             return;
         }
-        // An outer band's paint: its own colour, or the fill its generated
-        // node inherits (the first colour of a gradient).
-        let colour = bv.colour.clone().or_else(|| {
-            let generated = xarast_doc::live::parts(&self.doc.tree, n)?.generated?;
-            let a =
-                xarast_doc::attr::resolve_uncached(&self.doc.tree, generated, &self.doc.defaults);
-            let mut first = None;
-            let mut paint = a.fill().clone();
-            paint.for_each_value_mut(&mut |c| {
-                if first.is_none() {
-                    first = Some(c.clone());
-                }
-            });
-            first
-        });
+        // An outer band's paint: its own colour, or its first object's.
+        let colour = bv.paint(&self.doc.tree, n, &self.doc.defaults);
         let (hex, opacity) = match &colour {
             Some(c) => {
                 let rgba = c.resolve(&self.doc.resources.colours).to_rgba8();

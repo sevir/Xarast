@@ -474,6 +474,18 @@ New in Phase 2:
     its shadow (culling and damage need it). The digest covers the two
     new fields.
 
+49. **A bevel is a controller whose generated node stays empty**
+    (XARA-T-0322), as a shadow is (decision 48). `BevelType` is the
+    original's fifteen styles in record order and lives in
+    `xarast_geom::bevel` beside the cross-sections (re-exported by
+    `xarast-doc`, so `AttrValue::BevelType` keeps its name). Angles are
+    **degrees** (the file's unit), contrast `0..=1`; `colour:
+    Option<Colour>` is the bevel node's own flat fill (`None` = the
+    first colour of the source's first object, `BevelParams::paint`). The join is not a
+    parameter: it is the controller's join attribute, already in the
+    tree. An outer bevel's controller bounds grow by its indent. The
+    digest covers the colour.
+
 ## The `.xar` attribute tag reconciliation
 
 Done tag by tag against `research/01 §8` and `§4.12`. The result **did not

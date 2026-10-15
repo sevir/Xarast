@@ -645,7 +645,7 @@ impl SceneWalker {
                     }
                     // A bevel controller's bevel, over (inner) or beneath
                     // (outer) its source, inside its own feather.
-                    let bevel = bevel_of(doc, parent, &attrs);
+                    let bevel = bevel_of(doc, parent);
                     let bevelled = bevel.is_some();
                     if let Some((effect, margin)) = bevel {
                         // An outer bevel reaches beyond its source; an
@@ -2164,10 +2164,9 @@ fn shadow_of(doc: &Document, node: NodeId, attrs: &AttrStack) -> Option<(LayerEf
 /// beyond its source; an inner one reads that far into it).
 ///
 /// `None` for anything but a bevel controller with a positive width. An
-/// outer bevel is painted in its own colour, or else in the fill the
-/// controller's attributes give its generated node (its first colour when
-/// that is not flat; nothing when it is "no colour").
-fn bevel_of(doc: &Document, node: NodeId, attrs: &AttrStack) -> Option<(LayerEffect, Mp)> {
+/// outer bevel is painted in its own colour, or else in its first object's
+/// (`BevelParams::paint`; nothing when that is "no colour").
+fn bevel_of(doc: &Document, node: NodeId) -> Option<(LayerEffect, Mp)> {
     let Some(NodeKind::Live(l)) = doc.tree.kind(node) else {
         return None;
     };
@@ -2177,45 +2176,15 @@ fn bevel_of(doc: &Document, node: NodeId, attrs: &AttrStack) -> Option<(LayerEff
     if l.role != xarast_doc::LiveRole::Controller || p.indent.raw() <= 0 {
         return None;
     }
-    let colour = match &p.colour {
-        Some(c) => c.resolve(&doc.resources.colours).to_rgba8(),
-        None => {
-            // The controller's own fill (an attribute child) stands over
-            // the inherited one.
-            let own = doc
-                .tree
-                .children(node)
-                .filter_map(|c| match doc.tree.kind(c) {
-                    Some(NodeKind::Attr(a)) => match &a.value {
-                        AttrValue::Fill(paint) => Some(paint),
-                        _ => None,
-                    },
-                    _ => None,
-                });
-            let paint = own.last().or(match attrs.get(AttrSlot::FillGeometry) {
-                AttrValue::Fill(paint) => Some(paint),
-                _ => None,
-            });
-            let mut first = None;
-            if let Some(paint) = paint {
-                let mut paint = paint.clone();
-                paint.for_each_value_mut(&mut |c| {
-                    if first.is_none() {
-                        first = Some(c.clone());
-                    }
-                });
-            }
-            first.map_or(
-                xarast_color::Rgba8 {
-                    r: 0,
-                    g: 0,
-                    b: 0,
-                    a: 0,
-                },
-                |c| c.resolve(&doc.resources.colours).to_rgba8(),
-            )
-        }
-    };
+    let colour = p.paint(&doc.tree, node, &doc.defaults).map_or(
+        xarast_color::Rgba8 {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 0,
+        },
+        |c| c.resolve(&doc.resources.colours).to_rgba8(),
+    );
     let indent = f64::from(p.indent.raw());
     let effect = LayerEffect::Bevel(Box::new(xarast_render::BevelEffect {
         style: p.bevel_type,

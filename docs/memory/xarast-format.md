@@ -792,6 +792,47 @@ renderer draws the shadow) and `<g xarast:kind="live-source">`:
   corpus round trip (59/59 normal form and byte-identical re-save, with
   the 98 shadows now in it).
 
+## Bevels: every parameter, exactly, and a derived filter (XARA-T-0322, 2026-10-15)
+
+`<xarast:bevel>` (`research/06 §6.8.2`) inside the controller's `<g
+xarast:kind="bevel">`, then the empty `<g xarast:generated="bevel">` and
+the `live-source`:
+
+| Attribute | Model | Spelling |
+|---|---|---|
+| `xarast:type` | `bevel_type` | the fifteen names of `BevelType::name` (`flat`, `round`, `half-round`, `frame`, `mesa`, `mesa-2`, `smooth`, `smooth-2`, `point`, `point-2a`, `point-2b`, `ruffle-2a`…`ruffle-3b`) — research/06's five-word vocabulary extended, `chisel`/`ridge` unused |
+| `xarast:indent` | `indent` | points |
+| `xarast:direction` | `outer` | `inner` / `outer` |
+| `xarast:light-angle`, `xarast:light-elevation` | degrees | `f32s` |
+| `xarast:contrast` | `0..=1` | `f32s` (the corpus's 0.47 is not 6 decimals of an f32-safe value otherwise) |
+| `xarast:colour` (+ `-ref`) | `colour` | only when `Some`, as a shadow's |
+
+- The normal form states a bevel's colour as hex + reference, like a
+  shadow's. Pinned by `tests/svg_read.rs`
+  `a_bevel_reads_back_exactly_and_saves_to_the_same_bytes` (all fifteen
+  styles) and the corpus round trip.
+- **Baked** (`svg/effect.rs` `bevel`, `xarast:filter="bevel"`, dropped by
+  the reader like the feather's and shadow's): the silhouette (grown by
+  a disc for an outer bevel) blurred by σ = indent/2 into a height field,
+  `feDiffuseLighting` with `surfaceScale` = 0.25 × indent and
+  `feDistantLight azimuth = 180 − angle` (y-down frame; the light sits
+  opposite its stored travel) and `elevation = tilt`, then `arithmetic`
+  `k1 = contrast / sin(tilt)`, `k2 = 1 − contrast` (unchanged where flat)
+  over `SourceGraphic` (inner) or a flood of the colour composited under
+  the object (outer). research/06's `feSpecularLighting` chain was not
+  used: a diffuse ratio is what the renderer computes. `feDiffuseLighting`
+  differentiates per filter pixel, so the slope depends on resolution;
+  the scale was tuned at 72 dpi (`export.md`). A controller that also
+  owns a feather stays unbaked (`Stats::bevels_unbaked`).
+- **Dead end: an outer bevel's paint from its generated node's
+  inheritance.** The first bake resolved the fill the empty generated
+  node inherits from the controller; on reading, the controller's fill
+  sits on the source's ink only, the generated node inherits nothing, and
+  the corpus round trip failed (testimp1, Groucho2: a re-save differed
+  and the renderer painted the band transparent). `BevelParams::paint`
+  reads the source's first object instead — what the original copies onto
+  its bevel node anyway — in both the walker and the writer.
+
 ## Photo operations: `<xarast:photo-ops>` (XARA-US-0054, 2026-09-24)
 
 `svg/photo.rs` writes and parses a bitmap object's chain

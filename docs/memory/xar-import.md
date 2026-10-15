@@ -625,7 +625,7 @@ shadows) of the 59 files, for clip and mask constructs:
 | `TAG_CLIPVIEWCONTROLLER` / `TAG_CLIPVIEW` / `TAG_CLIPVIEW_PATH` (4084/4085/4137) | **0** | — | mapped since XARA-T-0306 (finding 17); 4137 is never written |
 | Bitmap transparency (171), a bitmap used as a mask | 3 | JagSS100 simple, scope3 simple | renders (XARA-T-0171), with its levels and mode since XARA-T-0307 (finding 18) |
 | `TAG_FEATHER` (4086), a soft-edge mask | 75 | Groucho2 63, feathers 9, Watch4 3 | imported as an attribute; **drawn feathered** since XARA-US-0068 (finding 19) |
-| Shadow (4050) / bevel (4052) / contour (4066) controllers | 98 / 22 / 4 | Groucho2, Girard_simple, SoftShadow, Watch4, testimp1 | live objects, Phase 13; **shadows imported and drawn** since XARA-T-0318 (finding 20) |
+| Shadow (4050) / bevel (4052) / contour (4066) controllers | 98 / 22 / 4 | Groucho2, Girard_simple, SoftShadow, Watch4, testimp1 | live objects, Phase 13; **shadows imported and drawn** since XARA-T-0318 (finding 20), **bevels** since XARA-T-0322 (finding 21) |
 | Perspective / envelope moulds (108 / 107) | 129 / 68 | Watch4, ProbeX16, scope3 simple, TextCurve, testimp1 | live objects, Phase 13 |
 
 So "clips in imported files" is, for this corpus, only bitmap
@@ -751,7 +751,7 @@ that owns it:
 | Tags | Records | Owner |
 |---|---:|---|
 | ~~4050, 4051 shadow controller / shadow (atomic: the whole subtree, source objects included, is stripped)~~ | 98 controllers | done, XARA-T-0318 (finding 20) |
-| 4052–4057 bevel (atomic) | 22 controllers | XARA-US-0069 (D7) |
+| ~~4052–4057 bevel (atomic)~~ | 22 controllers | done, XARA-T-0322 (finding 21) |
 | 4066, 4067 contour (atomic) | 4 controllers | XARA-US-0070 (E7) |
 | 105, 106, 4060–4062, 4072–4074 blend | 1 976 records | XARA-US-0070 (F9) |
 | 107–110, 4012 mould | 197 controllers | XARA-US-0071 (G10) |
@@ -826,6 +826,39 @@ bevel records sit inside Groucho2's shadows (still stripped, so those
 sources are empty and cast nothing), and Watch4's four shadows cast
 blends and moulds (opaque, so no silhouette either).
 
+### 21. Bevels are live objects, drawn by the renderer (XARA-T-0322, 2026-10-15)
+
+Decoders for `TAG_BEVEL` (4052), `TAG_BEVATTR_*` (4053–4056) and
+`TAG_BEVELINK` (4057), so the atomic rule no longer strips them. Corpus
+census (every record): **22 controllers**, Groucho2 21 (18 inside its
+shadows) and testimp1 1; styles flat 13, smooth 1 7, point 1 2; **3
+outer** (testimp1's, and Groucho2's two point bevels on the "made with
+XaraX" text); light angles 300–345, tilt 45 (testimp1 32), contrast
+35–50; every record 24 bytes; no `TAG_BEVATTR_*` anywhere.
+
+- **Field facts** (`Kernel/nbevcont.cpp:500-590`): six `INT32`s — style
+  (the `gdraw2.h` enumeration 0..=14), indent (mp), light angle (whole
+  **degrees**), outer (non-zero), contrast (0..100), tilt (degrees). The
+  first five are required (the original fails a shorter record); the
+  tilt is read only from a 24-byte record, else 45. `TAG_BEVATTR_*` are
+  one `INT32` each, read and discarded (`Kernel/nodebev.cpp:3378-3400`).
+  `TAG_BEVELINK` is empty; its children are copies of the first object's
+  attributes (the inner bevels of Groucho2 carry none: factored out to
+  the controller, a bitmap fill).
+- **Mapping** (`Mapper::emit_bevel`, sharing `live_children` with
+  shadows): `Live (Controller, Bevel)` with the controller's attributes,
+  an empty `Live (Generated, Bevel)`, `Live (Source, Bevel)` with the
+  objects. The bevel node's **flat fill** becomes
+  `BevelParams::colour` (an outer bevel's paint; one Groucho2 outer bevel
+  needs it: its controller has no fill), its other attributes are
+  dropped. `BevelDegraded`: 0 no bevel node (drawn anyway), 1 a stray
+  bevel node (dropped with its attributes), 2 a non-flat bevel fill (its
+  first colour), 3 a style outside 0..=14 (flat, plus `UnknownEnumValue`).
+- Snapshots: stripped records Groucho2 247 → **0**, testimp1 29 → 13
+  (its contour). Groucho2 gains 19 paths, 63 Live nodes and 14 text
+  units (the bevelled "made with XaraX" text). Fuzz seed `bevel`.
+- Open question 2 settled for bevels: whole degrees in an `INT32`.
+
 ## Dead ends (do not retry)
 
 - **Keeping a shadow node's fill as an attribute of the generated node.**
@@ -881,7 +914,8 @@ blends and moulds (opaque, so no silhouette either).
 2. **The inconsistent angle encodings.** `ANGLE` is `FIXED16` radians, but
    `TAG_SHADOWCONTROLLER` uses a bespoke integer encoding and `TAG_BEVEL`
    integer degrees. *Shadows settled* (XARA-T-0318, finding 20): radians
-   × 10⁶ in an `INT32`, reduced modulo 2π. The bevel is still open.
+   × 10⁶ in an `INT32`, reduced modulo 2π. *Bevels settled* (XARA-T-0322,
+   finding 21): whole degrees in an `INT32`.
 3. ~~**Whether `TAG_CURRENTATTRIBUTES` should feed `DefaultAttrs`.**~~
    **Settled: no** (XARA-T-0037). It was first settled "yes" because the
    block differs from the defaults in 53 files, but differing is exactly
@@ -908,7 +942,7 @@ blends and moulds (opaque, so no silhouette either).
   is not in the format at all).
 - Live objects: 1 594 records currently round-trip as `NodeKind::Opaque`
   and should become `NodeKind::Live` in Phase 13. Shadows done
-  (finding 20); bevels, contours, blends and moulds remain.
+  (finding 20), bevels done (finding 21); contours, blends and moulds remain.
 - ~~A release-profile import benchmark~~: done 2026-09-23 as
   `cargo bench -p xarast-xar --bench import`. ~~`ProbeX16.xar` 644 ms
   against the 350 ms budget~~: 329–343 ms after XARA-T-0031 (finding 13).

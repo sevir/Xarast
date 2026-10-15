@@ -1709,6 +1709,88 @@ penumbra** → profile → colour × opacity → content over it.
 
 ---
 
+### Bevels (XARA-T-0322, phase 13 D1–D4, D7, D8, 2026-10-15)
+
+The third consumer of the pipeline. `LayerEffect::Bevel(BevelEffect)`
+wraps a bevel controller's subtree (the walker's `bevel_of`, inside the
+controller's own feather) and needs only the silhouette:
+
+1. **Pieces of outline**: pixels the outline crosses (coverage in
+   1..254, or 255 with an empty 4-neighbour). Each piece's inward normal
+   is the Sobel gradient of the coverage; where the outline crosses it is
+   `centre − (coverage − ½)·n`.
+2. **Faces**: an exact separable feature transform (column sweeps, then
+   the Felzenszwalb–Huttenlocher lower envelope per row, integer
+   arithmetic, `effect.rs` `feature_transform`) gives every pixel within
+   `width + 2` px its nearest piece. Inside the piece's strip
+   (`|across| ≤ 1 px`) the pixel takes the piece's normal and its
+   perpendicular distance (a face, the original's trapezium); beyond it,
+   the radial direction and distance (a round join, the original's
+   triangle fan). Then the rising directions are averaged over 3 × 3
+   (1-2-4 weights): without it a straight slanted edge flickers between
+   face and join and a round bevel streaks (the first goldens showed it).
+3. **Lighting**: `xarast_geom::bevel::shade(style, u, up, light)`: the
+   style's slope at `u` (across the band from its low edge: the outline
+   of an inner bevel, the far edge of an outer one), a Lambertian ratio
+   against the flat plane, brightening × contrast and darkening ×
+   contrast² (the original's `SetBevelLightness(contrast·2.56)` /
+   `SetBevelDarkness(contrast²·0.0256)`, `Kernel/nodebev.cpp:1927-1928`),
+   packed to an index with **128 exactly flat**.
+4. **The `Bevel` family's table** (D4) applies the index: to the
+   content's own (unpremultiplied) colours for an inner bevel; to a band
+   of `colour` composited **beneath** the content for an outer bevel
+   (antialiased at the band's far edge). The table had no integer
+   neutral (128 brightened by one level, 127 darkened); it is now exact
+   at 128 and the family's transparency fades towards 128
+   (`blend_bevel_64/192` goldens moved by that).
+
+- **Facts from the original** (facts only): the bevel node is the
+  controller's **last** child for an inner bevel (drawn over the object)
+  and the **first** for an outer one (`tools/opbevel.cpp:1110-1127`,
+  `:1344`); it carries copies of the first object's fill, transparency,
+  mappings, effect and join (`:1318-1341`); a flat-filled bevel is drawn
+  as the lighting bitmap with a palette translating the fill colour, a
+  non-flat one as its fill under a `TT_BEVEL` bitmap transparency
+  (`Kernel/nodebev.cpp:1495-1590`); `GDraw2_SetDIBitmap` gets the style
+  and `light angle, 90 − tilt`, with styles swapped and the angle turned
+  by 180° for some styles of an inner bevel (`Kernel/beveler.cpp:839-893`).
+  The face generator (`GenBevelFaces`), the lighting map and the two
+  tables are in the closed CDraw.
+- **The light**: the stored angle is the light's **direction of travel**
+  (degrees, document frame): the light sits opposite. Fitted against
+  Groucho2's preview (angles 300–345, lit from the upper left): +180°
+  scored 24.94, +0/+90/+270 25.85–27.35, mirrored readings 25.23–26.97.
+  The tilt is the light's elevation (only 45 and 32 occur).
+- **Cross-sections are Xarast's own** (`xarast_geom::bevel`, D2's
+  empirical determination in a VM is not done): flat = 45° chamfer;
+  round = quarter circle; half round; frame = ridge; mesa 1/2 = chamfer
+  to a plateau over ½ / ⅓; smooth 1 = cosine S, smooth 2 = quintic;
+  point 1/2a/2b = concave/convex ridges; ruffles = cosine waves. The
+  inner-bevel style swap and angle flip of the original are not
+  reproduced (their meaning is inside CDraw). Corpus styles: flat 13,
+  smooth 1 7, point 1 2.
+- **Not reproduced**: mitre/bevel joins on outer corners (the transform
+  always rounds them; the join attribute is not read); an inner bevel
+  lights each object's own colours where the original paints the first
+  object's fill over the band (they differ only for a group of several
+  fills, or a stroke under the band).
+- **Width**: `indent` in device pixels, capped at `MAX_BEVEL_PX` (2048);
+  reach `ceil(width) + 2`, growth that much for an outer bevel, 0 inner.
+- **Against the embedded previews** (re-measured with a scratch
+  registration over the drawing frame at 60 dpi; it differs from the
+  T-0248 scripts, so compare only within this table):
+  | File | Before (cbdc3bd) | Import only | After |
+  |---|---:|---:|---:|
+  | Groucho2 (21 bevels) | 47.03 | 26.05 | **24.94** |
+  | testimp1 (1) | 19.92 | 19.41 | **18.97** |
+  | feathers, SoftShadow (controls, 0) | 5.50, 18.90 | — | 5.50, 18.90 |
+  Most of Groucho2's gain is the frame itself (its objects were stripped
+  with the bevels); the lighting adds the rest.
+- **Cost**: `xarast-cli bench render --whole --doc Groucho2.xar --runs
+  11`, release, load ~9: warm median 7.19 → **7.35 ms** (the 21 bevels
+  hit the effect cache), first frame 73 → 109 ms, peak RSS 62.0 → 77.1
+  MiB; at 400 % one Groucho2 frame is ~1.0 s.
+
 ## Invariants that must not be broken
 
 1. **Never put absolute millipoints into an `f32`.** A 5 m document is
@@ -1937,6 +2019,9 @@ penumbra** → profile → colour × opacity → content over it.
 | 27 | GPU blur (B6): not needed while the GPU only composites CPU tiles; lands with the WGSL pass | XARA-T-0051 |
 | 28 | Inner shadows (C5): not in the `.xar` format; the model has no `Inner` kind yet | XARA-US-0069 |
 | 29 | A nested effect in a silhouette pass composites with its alpha (a feather around a shadow erodes the shadow away); decide what the original's silhouette of a shadow is | XARA-US-0069 |
+| 30 | Bevel cross-sections, lighting curve and the inner-bevel style swap are Xarast's own (`xarast_geom::bevel`): determine them empirically against the original in a VM (phase 13 D's gate) | XARA-US-0069 |
+| 31 | Outer bevel joins: always round; read the join attribute and mitre/bevel the band's outer corners | XARA-US-0069 |
+| 32 | Bevel cost: the first Groucho2 frame went 73 → 109 ms (21 feature transforms); a bevel's lighting could be cached apart from its content's colour | XARA-US-0069 |
 | 24 | ~~`RampMapping::Sin` ignored; `ClipViewMode::Outside` dropped~~. **Done 2026-09-24**: `RampEase` (above) and the walker's outside clip (`app-core.md` decision 34); the renderer still clips only to a path's inside, on purpose | done (XARA-US-0017) |
 | 12 | ~~Reconcile `wgpu` versions~~. **Decided 2026-09-23**: no `vello` in the product until it targets the workspace's `wgpu` (two `wgpu`s cost +4.08 MiB and 46 crates, and cannot share a device); the spike keeps building against `vello::wgpu` behind `spike-gpu` | done (XARA-US-0011) |
 

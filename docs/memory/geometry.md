@@ -565,6 +565,17 @@ Decisions:
    the default smoothing fits in well under a frame and stays within the
    tolerance (`xarast-app/tests/freehand.rs`).
 
+### Bevel cross-sections (XARA-T-0322, 2026-10-15)
+
+`xarast_geom::bevel`: `BevelType` (the original's fifteen styles, record
+order), each style's `height(u)` / `slope(u)` across the band (u = 0 at
+the low edge, heights in units of the band's width, slope bounded to
+±8), `Light::new(angle, tilt)` and `shade()`: a face's brightness against
+the flat plane in −1..1. Pure functions; the renderer finds the faces with
+a distance transform (`render.md`, "Bevels"). **The curves are Xarast's
+own** — the original's are in closed CDraw — and stay unverified until
+phase 13 D's empirical determination runs (`render.md` TODO 30).
+
 ## Invariants that must not be broken
 
 - `EditPath::from_path(p).to_path() == p` for well-formed paths whose
