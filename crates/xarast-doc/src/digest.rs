@@ -608,6 +608,20 @@ impl Canon for LiveNode {
                 h.bool(p.tangential);
                 h.bool(p.reverse);
                 h.add(&p.profile);
+                h.add(&p.attr_profile);
+                h.u8(p.colour_effect.map_or(0xff, |e| e as u8));
+                h.len(p.blenders.len());
+                for b in &p.blenders {
+                    for i in [b.start_index, b.end_index] {
+                        h.bool(i.is_some());
+                        h.u32(i.unwrap_or(0));
+                    }
+                    h.len(b.pairs.len());
+                    for &(s, e) in &b.pairs {
+                        h.u32(s);
+                        h.u32(e);
+                    }
+                }
             }
             LiveKind::Contour(p) => {
                 h.u32(p.steps);

@@ -7,6 +7,7 @@
 //! from `tests/` instead.
 
 mod attrs;
+mod blend;
 mod builder;
 mod foreign;
 mod invariants;

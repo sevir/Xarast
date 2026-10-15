@@ -1104,6 +1104,7 @@ impl<'d, 'r, 'f> Reader<'d, 'r, 'f> {
                 tangential: is_true(g("tangential")),
                 reverse: is_true(g("reverse")),
                 profile: prof("position-profile"),
+                ..BlendParams::default()
             })),
         }
     }

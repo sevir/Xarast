@@ -136,6 +136,11 @@ pub struct GeneratedShape {
     /// The attributes that differ from what the controller inherits, in
     /// the order they apply.
     pub attrs: Arc<[AttrValue]>,
+    /// Whether the interior is painted (a contour's rings always are; a
+    /// blend step is when either of its ends is).
+    pub filled: bool,
+    /// Whether the outline is painted.
+    pub stroked: bool,
 }
 
 /// What a controller derives.
@@ -148,9 +153,12 @@ pub enum LiveOutput {
     /// renderer), and what a pixel effect produces for good.
     Stored,
     /// Shapes derived in document space, in paint order: a contour's
-    /// rings, a blend's steps (never materialised as nodes, F7), a
-    /// moulded copy of the source.
+    /// rings, a moulded copy of the source.
     Shapes(Arc<[GeneratedShape]>),
+    /// One group of shapes per generated node under the controller, in
+    /// document order, each drawn where its node stands: a blend's steps,
+    /// pair by pair (never materialised as nodes, F7).
+    Groups(Arc<[Arc<[GeneratedShape]>]>),
 }
 
 /// Why a controller could not be regenerated.
@@ -190,8 +198,13 @@ pub fn regenerate(doc: &Document, controller: NodeId, dpi: f64) -> Result<LiveOu
             Some(shapes) => LiveOutput::Shapes(Arc::from(shapes)),
             None => LiveOutput::Stored,
         },
-        LiveKind::Blend(_)
-        | LiveKind::Mould(_)
+        LiveKind::Blend(_) => match crate::blend::generate(doc, controller) {
+            Some(groups) => {
+                LiveOutput::Groups(groups.into_iter().map(Arc::from).collect::<Vec<_>>().into())
+            }
+            None => LiveOutput::Stored,
+        },
+        LiveKind::Mould(_)
         | LiveKind::Brush(_)
         | LiveKind::Shadow(_)
         | LiveKind::Bevel(_)

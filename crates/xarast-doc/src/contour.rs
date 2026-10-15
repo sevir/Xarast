@@ -120,6 +120,8 @@ pub fn generate(doc: &Document, controller: NodeId) -> Option<Vec<GeneratedShape
         out.push(GeneratedShape {
             path: Arc::new(path),
             attrs: Arc::from(attrs),
+            filled: true,
+            stroked: true,
         });
     }
     Some(out)
@@ -222,7 +224,7 @@ pub fn silhouette(doc: &Document, node: NodeId, include_line_widths: bool) -> Pa
 }
 
 /// An object's outline in document space.
-fn geometry(doc: &Document, node: NodeId) -> Option<Path> {
+pub(crate) fn geometry(doc: &Document, node: NodeId) -> Option<Path> {
     match doc.tree.kind(node)? {
         NodeKind::Path(p) => Some((*p.data).clone()),
         NodeKind::Shape(s) => {
@@ -346,7 +348,7 @@ fn visible_stroke(doc: &Document, attrs: &ResolvedAttrs) -> Option<StrokeStyle> 
 
 /// Whether a paint shows anything: "no colour" is a flat colour with zero
 /// alpha.
-fn visible(doc: &Document, p: &crate::fill::Paint) -> bool {
+pub(crate) fn visible(doc: &Document, p: &crate::fill::Paint) -> bool {
     match p {
         FillGeometry::Flat { value } => value.resolve(&doc.resources.colours).to_rgba8().a > 0,
         _ => true,
@@ -431,7 +433,7 @@ fn blend_colour_paint(
 /// (the flat one taken as that gradient in one colour). `None` when the
 /// two cannot be blended: different families, or ramps with different
 /// numbers of stops (Xarast's rule; the original pairs stops its own way).
-fn blend_paint<S: Stop>(
+pub(crate) fn blend_paint<S: Stop>(
     a: &FillGeometry<S>,
     b: &FillGeometry<S>,
     t: f64,
@@ -572,7 +574,7 @@ fn lerp_f(a: f64, b: f64, t: f64) -> f64 {
     a + (b - a) * t
 }
 
-fn lerp_mp(a: Mp, b: Mp, t: f64) -> Mp {
+pub(crate) fn lerp_mp(a: Mp, b: Mp, t: f64) -> Mp {
     Mp::from_f64_round(lerp_f(a.to_f64(), b.to_f64(), t))
 }
 

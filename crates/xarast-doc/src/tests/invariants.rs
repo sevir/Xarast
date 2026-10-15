@@ -10,7 +10,7 @@ use crate::tests::{black_fill, fixture};
 use crate::tree::{Attach, NodeFlags};
 use crate::validate::Invariant;
 use crate::{BoundsCache, Document};
-use xarast_geom::{BiasGain, Point, Rect, Vector};
+use xarast_geom::{Point, Rect, Vector};
 
 fn matches_one(errors: &[Invariant], f: impl Fn(&Invariant) -> bool) -> bool {
     errors.iter().any(f)
@@ -260,12 +260,7 @@ fn live(role: LiveRole) -> NodeKind {
         role,
         kind: LiveKind::Blend(Box::new(BlendParams {
             steps: 4,
-            step_distance: None,
-            one_to_one: false,
-            antialias: true,
-            tangential: false,
-            reverse: false,
-            profile: BiasGain::IDENTITY,
+            ..BlendParams::default()
         })),
         regen: RegenState::Clean,
         name: None,

@@ -328,12 +328,7 @@ fn fixture() -> Document {
     // A blend with its sources and its baked steps.
     let blend = LiveKind::Blend(Box::new(xarast_doc::BlendParams {
         steps: 3,
-        step_distance: None,
-        one_to_one: false,
-        antialias: true,
-        tangential: false,
-        reverse: false,
-        profile: BiasGain::IDENTITY,
+        ..xarast_doc::BlendParams::default()
     }));
     b.node(NodeKind::Live(Box::new(LiveNode {
         role: LiveRole::Controller,

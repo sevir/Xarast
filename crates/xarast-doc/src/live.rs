@@ -114,14 +114,29 @@ impl LiveKind {
     }
 }
 
-/// Parameters of a blend.
+/// The most intermediate steps a blender draws; a file asking for more is
+/// clamped, as the original clamps (`Kernel/nodebldr.cpp:243`).
+pub const MAX_BLEND_STEPS: u32 = 999;
+
+/// Parameters of a blend (`research/02 §6.6`; the `.xar` records are
+/// `research/01`'s 105, 106 and 4072–4073).
+///
+/// The model mirrors the original's tree: the controller's source holds
+/// the blended objects with one **generated node between each pair** (the
+/// original's `NodeBlender`), whose steps are drawn there, over the object
+/// before it and under the one after it. Generated node `k` (in document
+/// order under the source) blends the ink object before it into the one
+/// after it with [`blenders`](Self::blenders)`[k]` (defaults when there are
+/// fewer entries). The steps themselves are never nodes
+/// (`crate::blend`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct BlendParams {
-    /// Number of intermediate steps.
+    /// Number of intermediate steps per pair (at most [`MAX_BLEND_STEPS`]).
     pub steps: u32,
     /// Fixed spacing between steps, when the user entered one.
     pub step_distance: Option<Mp>,
-    /// Whether nodes are matched one to one rather than by position.
+    /// Whether nodes are matched one to one (subpaths with the same number
+    /// of segments pair segment by segment) rather than by length.
     pub one_to_one: bool,
     /// Whether the steps are antialiased.
     pub antialias: bool,
@@ -129,8 +144,65 @@ pub struct BlendParams {
     pub tangential: bool,
     /// Whether the blend runs in reverse.
     pub reverse: bool,
-    /// The spacing profile.
+    /// The object profile: where the steps' geometry sits between the two
+    /// ends (the original's object profile; `.xarast`'s position profile).
     pub profile: BiasGain,
+    /// The attribute profile: how the steps' colours and widths run.
+    pub attr_profile: BiasGain,
+    /// How colours interpolate; `None` does not blend them (the original's
+    /// fourth colour type).
+    pub colour_effect: Option<xarast_color::FillEffect>,
+    /// One entry per pair, in document order.
+    pub blenders: Vec<BlenderParams>,
+}
+
+impl Default for BlendParams {
+    /// The original's new blend: five steps, antialiased, fading, flat
+    /// profiles, automatic correspondence.
+    fn default() -> BlendParams {
+        BlendParams {
+            steps: 5,
+            step_distance: None,
+            one_to_one: false,
+            antialias: true,
+            tangential: false,
+            reverse: false,
+            profile: BiasGain::IDENTITY,
+            attr_profile: BiasGain::IDENTITY,
+            colour_effect: Some(xarast_color::FillEffect::Fade),
+            blenders: Vec::new(),
+        }
+    }
+}
+
+impl BlendParams {
+    /// The parameters of pair `k`: its entry, or the defaults.
+    #[must_use]
+    pub fn blender(&self, k: usize) -> BlenderParams {
+        self.blenders.get(k).cloned().unwrap_or_default()
+    }
+
+    /// The step count actually drawn: [`steps`](Self::steps) clamped to
+    /// [`MAX_BLEND_STEPS`].
+    #[must_use]
+    pub fn drawn_steps(&self) -> usize {
+        usize::try_from(self.steps.min(MAX_BLEND_STEPS)).unwrap_or(0)
+    }
+}
+
+/// One pair of a blend: how its two ends correspond.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BlenderParams {
+    /// The point index the start object's outline starts at (an end point
+    /// of its only subpath, counted in the path's points); `None` picks
+    /// one (the original's bottom-left rule).
+    pub start_index: Option<u32>,
+    /// The same for the end object.
+    pub end_index: Option<u32>,
+    /// Explicit subpath correspondence, `(start subpath, end subpath)` in
+    /// paint order; empty pairs them automatically
+    /// (`xarast_geom::blend::pair_up`).
+    pub pairs: Vec<(u32, u32)>,
 }
 
 /// The most rings a contour draws; a file asking for more is clamped

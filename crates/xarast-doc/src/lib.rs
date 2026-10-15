@@ -53,6 +53,7 @@
 pub mod attr;
 pub mod bitmap_fill;
 pub mod bitmap_place;
+pub mod blend;
 pub mod bounds;
 pub mod builder;
 pub mod contour;
@@ -113,9 +114,9 @@ pub use kind::{
     WidthProfile,
 };
 pub use live::{
-    BevelParams, BevelType, BlendParams, BrushParams, ContourParams, EffectParams, LiveKind,
-    LiveNode, LiveParts, LiveRole, MouldKind, MouldParams, RegenState, ShadowKind, ShadowParams,
-    controller_of, in_generated,
+    BevelParams, BevelType, BlendParams, BlenderParams, BrushParams, ContourParams, EffectParams,
+    LiveKind, LiveNode, LiveParts, LiveRole, MouldKind, MouldParams, RegenState, ShadowKind,
+    ShadowParams, controller_of, in_generated,
 };
 pub use palette::{
     ColourUses, CreateColour, DeleteColour, MoveColour, PaletteResolver, RedefineColour,

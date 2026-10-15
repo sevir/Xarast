@@ -12,7 +12,7 @@ use crate::structure::LayerNode;
 use crate::tests::{black_fill, square};
 use crate::text::TextItem;
 use crate::{Document, DumpOptions};
-use xarast_geom::{BiasGain, Point, Vector};
+use xarast_geom::{Point, Vector};
 
 #[test]
 fn the_canonical_tree_is_what_the_research_says_it_is() {
@@ -287,12 +287,7 @@ fn live(role: LiveRole) -> NodeKind {
         role,
         kind: LiveKind::Blend(Box::new(BlendParams {
             steps: 2,
-            step_distance: None,
-            one_to_one: false,
-            antialias: true,
-            tangential: false,
-            reverse: false,
-            profile: BiasGain::IDENTITY,
+            ..BlendParams::default()
         })),
         regen: RegenState::Clean,
         name: None,
