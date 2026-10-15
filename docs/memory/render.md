@@ -1478,7 +1478,9 @@ Phase 13's B1–B4 and the first consumer, feathering. Modules `blur.rs`,
   layers composited plainly: the original cuts feathers and shadows from
   the object's *outline*, not from how transparent it is, so a
   half-transparent feathered object keeps its own transparency in the
-  middle instead of vanishing (`effect_feather_transparent`).
+  middle instead of vanishing (`effect_feather_transparent`). Nested
+  effects count as their outlines (XARA-T-0321, "Nested effects in a
+  silhouette pass").
 - **Feather** (`LayerEffect::Feather { size, profile }`, `size` in
   document units): the original's feather is a **diameter**: it strokes
   the outline `size` wide (white) over the filled silhouette (black) and
@@ -1656,11 +1658,10 @@ penumbra** → profile → colour × opacity → content over it.
 - **Not reproduced**: CDraw's floor bitmap (a progressive blur or
   perspective, if it has one, is unknowable here; ours is the affine map
   plus a uniform blur); the original's half-pixel offset for even
-  diameters; radii above 100 px are clamped (XARA-T-0315). A feather
-  around a shadow sees the shadow's half-transparent silhouette in its
-  own silhouette pass (nested effects composite with their alpha), so the
-  erosion eats most of the shadow (`effect_shadow_feathered`); no corpus
-  file does this.
+  diameters; radii above 100 px are clamped (XARA-T-0315). (A feather
+  around a shadow used to see the shadow's half-transparent result in its
+  silhouette and erode it away; fixed by XARA-T-0321, see "Nested effects
+  in a silhouette pass".)
 - **Against the embedded previews** (T-0248 method: 60 dpi page render,
   registered crop, mean |Δ|, each render registered on its own):
   | File (shadows) | Before | After |
@@ -1791,6 +1792,96 @@ controller's own feather) and needs only the silhouette:
   hit the effect cache), first frame 73 → 109 ms, peak RSS 62.0 → 77.1
   MiB; at 400 % one Groucho2 frame is ~1.0 s.
 
+### Nested effects in a silhouette pass (XARA-T-0321, phase 13, 2026-10-15)
+
+An effect that needs a silhouette renders its content twice; the second
+pass draws every paint opaque. Until now an effect nested in that content
+was composited there with its **colour result's alpha**, so a feather
+around a shadow saw the shadow at its darkness (half transparent) and its
+erosion removed most of it (`effect_shadow_feathered`).
+
+- **Facts from the original** (facts only):
+  - A feather's silhouette is a *path*: the outer contour of its node's
+    outlines (`Kernel/fthrattr.cpp:1407-1443`, `GenerateOuterContour` →
+    `NodeContour::GenerateContourPathForNode`, `Kernel/nodecntr.cpp:1184-1231`),
+    filled black and stroked white (`CreateSilhouetteBitmap`). The
+    conversion is a `PathBecomeA` with `SetDoSilhouette` and
+    **`SetDoShadowSilhouettes`** on (`nodecntr.cpp:1215-1216`; the
+    `fIncludeShadows` parameter is ignored, it is always on).
+  - With shadow silhouettes on, a shadow controller converts its shadowed
+    node to outlines, applies **`ApplyShadowTransform`** to a copy (wall:
+    translate by the offset; glow: contour out by the glow width; floor:
+    the floor matrix) and passes back both, the copy first; a glow omits
+    the object, which its contour encloses (`Kernel/nodecont.cpp:1076-1113`).
+    The transform's own comment: the result does *not* take the penumbra
+    into account. So the shadow counts **opaque, unblurred, its darkness
+    ignored**.
+  - Without shadow silhouettes, the shadow node itself passes back
+    nothing (`Kernel/nodeshad.cpp:1058-1248`, `NodeShadow::DoBecomeA`:
+    only `BECOMEA_REPLACE` builds a path), its siblings their outlines.
+    A bevel's silhouette is such a conversion (`ContourBecomeA`,
+    `Kernel/nodebev.cpp:500`, `:854`; no shadow flag).
+  - A bevel node passes back its own ink path, filled
+    (`Kernel/nodebev.cpp:2499-2528`): the band, outside the object for an
+    outer bevel, inside it for an inner one. A feather is an attribute;
+    a conversion ignores it. A live effect under a silhouette conversion
+    converts its children (`Kernel/nodeliveeffect.cpp:1507`).
+  - A **shadow's** silhouette is different: a *render* of its subtree into
+    a 32-bit offscreen bitmap (`nodeshad.cpp:3773-3778`,
+    `CreateOffscreenRR`; `RenderTreeAtomic`, `:3999-4011`), whose alpha
+    byte the blur reads (`Kernel/bshadow.cpp:245`, `:277`, byte 3 of each
+    pixel). A glow contours that bitmap (`ContourBitmap`, threshold 0xFE,
+    `NEW_GLOW_SILHOUETTE` is defined at `nodeshad.cpp:193`). Nested
+    effects therefore count as drawn, alpha included.
+- **The rule** (`LayerEffect::nested_silhouette`, `NestedSilhouette`):
+  | Outer effect | Sees a nested effect as | Nested shadow |
+  |---|---|---|
+  | feather | its outline (`Outline { shadows: true }`) | content ∪ outline moved by `map` / grown by `spread`, opaque, unblurred |
+  | bevel | its outline (`Outline { shadows: false }`) | its content only |
+  | shadow | its rendered result (`Rendered`, as before) | as drawn |
+  What an effect contributes as an outline (`LayerEffect::outline_at`): a
+  feather or an inner bevel its content's silhouette; an outer bevel its
+  content plus its band (the bevel's own `apply` with an opaque colour, so
+  the band is exactly what it paints); a shadow as in the table. What a
+  shadow shadows is seen with shadows off (`NestedSilhouette::inside`:
+  the original starts a fresh conversion for the shadowed node).
+  Outlines composite source-over (two opaque shapes into one plane), not
+  as a geometric union.
+- **Where it lives**: `backend/cpu.rs` `silhouette_plane` (the
+  silhouette pass of `render_fresh`), `materialise_outlines` and
+  `render_outline`: a nested outline is rendered over the same region,
+  band grid and coverage edge `render_fresh` would use for the nested
+  effect, so invariant 23 holds; never cached (the outermost effect's
+  result is, and its key covers every op). `LayerContent::Silhouette`
+  (`render_subtree_to_layer`) follows the feather's rule.
+- **Goldens**: `effect_shadow_feathered` (2133 px moved: the shadow now
+  survives whole and fades at its own outer edge) and
+  `effect_feather_nested` (1968 px: the inner feather's whole outline is
+  in the outer silhouette) moved; new `effect_shadow_in_bevel` (the bevel
+  lights the square only, the shadow is drawn whole) and
+  `effect_bevel_outer_feathered` (the feather fades the band's edge).
+  Mutation-checked: a bevel seeing nested effects `Rendered`, or with
+  `shadows: true`, fails `effect_shadow_in_bevel`. Unit tests in
+  `effect.rs` pin `outline_at` per kind.
+- **Corpus impact: none.** An instrumented render of all 59 corpus files
+  rendered no nested outline (no file puts a feather or a bevel around
+  another effect; Groucho2's bevels sit *inside* shadows, which keep the
+  rendered rule).
+- **Inner shadows (C5): nothing needed now (decision).** The original's
+  shadow types are none, wall, floor, glow and an unimplemented
+  `SHADOWTYPE_FEATHER` (`Kernel/nodecont.h:111-118`; the feather case is
+  `ERROR3("Unimplemented!")` at `nodeshad.cpp:2271`), so no `.xar` can hold an
+  inner shadow, the model has no `ShadowKind::Inner`, and no tool makes
+  one. It is a Xarast-native extension (`research/06 §6.8.1`,
+  `xarast:type="inner"`). When it lands (with C7's tool or the native
+  format, whichever needs it first) its rules are fixed here: drawn
+  *over* the content, the moved, blurred silhouette's complement
+  intersected with the silhouette ("out", then "in", against the source
+  alpha); reach = displacement + blur radius + slack, **growth 0**; as a
+  nested effect in an outline silhouette it contributes its content only
+  (it draws nothing outside it), so `outline_at` treats it like an inner
+  bevel; under an enclosing shadow it counts as rendered.
+
 ## Invariants that must not be broken
 
 1. **Never put absolute millipoints into an `f32`.** A 5 m document is
@@ -1902,7 +1993,13 @@ controller's own feather) and needs only the silhouette:
     pixels by 1/255 between a repaint and a frame.
 24. **Effects are cut from the silhouette, not from alpha.** A feather or
     a shadow of a transparent object is shaped by its outline; using its
-    alpha makes a half-transparent object feather to nothing.
+    alpha makes a half-transparent object feather to nothing. In a
+    feather's or a bevel's silhouette a **nested effect counts as its
+    outline** (`LayerEffect::outline_at`), never as its colour result: a
+    nested shadow opaque and unblurred (feather) or not at all (bevel); a
+    shadow's own silhouette sees nested effects as rendered ("Nested
+    effects in a silhouette pass"). (The original casts a shadow from its
+    subtree's *rendered alpha*, transparency included: TODO 33.)
 25. **An effect's result depends on its key and nothing else.** Anything
     new an effect's pixels come to depend on (a resource kind, a view
     field, a configuration field, an input outside its push … pop range)
@@ -2017,11 +2114,13 @@ controller's own feather) and needs only the silhouette:
 | 25 | ~~Offscreen effect cache (B9)~~. **Done 2026-09-24**: keyed by op equality + resources + exact view, not a content hash or a quantised scale, with its own 128 MiB ceiling rather than the Phase 4 budget; see "The effect layer cache" | done (XARA-T-0314) |
 | 26 | Blur radius above the 100 px ceiling: render the silhouette at a reduced resolution and scale up, as the original does for feathers (B7) | XARA-T-0315 |
 | 27 | GPU blur (B6): not needed while the GPU only composites CPU tiles; lands with the WGSL pass | XARA-T-0051 |
-| 28 | Inner shadows (C5): not in the `.xar` format; the model has no `Inner` kind yet | XARA-US-0069 |
-| 29 | A nested effect in a silhouette pass composites with its alpha (a feather around a shadow erodes the shadow away); decide what the original's silhouette of a shadow is | XARA-US-0069 |
+| 28 | ~~Inner shadows (C5)~~. **Decided 2026-10-15: nothing now**: no `.xar` shadow type is inner, the model has no `Inner` kind and no tool makes one; the rules it will follow are fixed under "Nested effects in a silhouette pass" | deferred to C7 / the native format (XARA-US-0069) |
+| 29 | ~~A nested effect in a silhouette pass composites with its alpha~~. **Done 2026-10-15**: feathers and bevels see nested effects as outlines, a shadow as rendered; see "Nested effects in a silhouette pass" | done (XARA-T-0321) |
 | 30 | Bevel cross-sections, lighting curve and the inner-bevel style swap are Xarast's own (`xarast_geom::bevel`): determine them empirically against the original in a VM (phase 13 D's gate) | XARA-US-0069 |
 | 31 | Outer bevel joins: always round; read the join attribute and mitre/bevel the band's outer corners | XARA-US-0069 |
 | 32 | Bevel cost: the first Groucho2 frame went 73 → 109 ms (21 feature transforms); a bevel's lighting could be cached apart from its content's colour | XARA-US-0069 |
+| 33 | A shadow's own silhouette ignores transparency (invariant 24), but the original casts the *rendered alpha* of its subtree (`nodeshad.cpp:3999-4011`, `bshadow.cpp:245`): a 50 % transparent object casts a half-dark shadow there. Switching changes every shadow golden and the SoftShadow/Groucho2 numbers; decide against the previews | XARA-US-0069 |
+| 34 | SVG: a feather filter around a shadowed object reads `SourceAlpha` (the shadow as rendered), not the outline rule above; no corpus file has one (`export.md`, "Shadows in SVG") | XARA-US-0069 |
 | 24 | ~~`RampMapping::Sin` ignored; `ClipViewMode::Outside` dropped~~. **Done 2026-09-24**: `RampEase` (above) and the walker's outside clip (`app-core.md` decision 34); the renderer still clips only to a path's inside, on purpose | done (XARA-US-0017) |
 | 12 | ~~Reconcile `wgpu` versions~~. **Decided 2026-09-23**: no `vello` in the product until it targets the workspace's `wgpu` (two `wgpu`s cost +4.08 MiB and 46 crates, and cannot share a device); the spike keeps building against `vello::wgpu` behind `spike-gpu` | done (XARA-US-0011) |
 
