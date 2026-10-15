@@ -1156,6 +1156,26 @@ impl LayerEffect {
         }
     }
 
+    /// Whether the effect's silhouette is its content's **rendered
+    /// alpha** (the colour pass's own, transparency and nested effects
+    /// included) rather than a pass with every paint opaque: a wall or
+    /// floor shadow. Facts from the original (facts only): a shadow
+    /// renders its subtree into a 32-bit offscreen bitmap
+    /// (`Kernel/nodeshad.cpp`, `CreateOffscreenRR`,
+    /// `RenderShadowedNodeOffscreen` with `NEW_GLOW_SILHOUETTE` defined)
+    /// and blurs its alpha byte (`Kernel/bshadow.cpp`, `MakeWallShadow`),
+    /// so a half-transparent object casts a half-dark shadow. A glow
+    /// contours that bitmap thresholded at 0xFE (`ContourBitmap`): anything
+    /// not fully clear counts as solid, which the opaque pass gives, so a
+    /// glow keeps it.
+    #[must_use]
+    pub fn casts_rendered_alpha(&self) -> bool {
+        match self {
+            LayerEffect::Shadow(s) => s.spread.is_nan() || s.spread <= 0.0,
+            LayerEffect::Feather { .. } | LayerEffect::Bevel(_) => false,
+        }
+    }
+
     /// A short name for reports ("a live effect (shadow) has no PDF
     /// equivalent").
     #[must_use]
@@ -1887,5 +1907,22 @@ mod tests {
             f.nested_silhouette().inside(&f),
             NestedSilhouette::Outline { shadows: true }
         );
+    }
+
+    #[test]
+    fn a_wall_or_floor_casts_rendered_alpha_and_a_glow_the_opaque_pass() {
+        let wall = shadow([1.0, 0.0, 0.0, 1.0, 4.0, 4.0], 5.7, 0.0, 2.0);
+        let floor = shadow([1.0, 0.0, -0.5, 0.5, 0.0, 10.0], 10.0, 0.0, 2.0);
+        let glow = shadow([1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 0.0, 3.0, 2.0);
+        let nan = shadow([1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 0.0, f64::NAN, 2.0);
+        assert!(wall.casts_rendered_alpha());
+        assert!(floor.casts_rendered_alpha());
+        assert!(nan.casts_rendered_alpha());
+        assert!(!glow.casts_rendered_alpha());
+        let f = LayerEffect::Feather {
+            size: 1.0,
+            profile: Profile::IDENTITY,
+        };
+        assert!(!f.casts_rendered_alpha());
     }
 }

@@ -1420,7 +1420,7 @@ fn ellipse_path(cx: f64, cy: f64, r: f64) -> PathRef {
 /// in its first object's flat fill over a group (XARA-T-0326).
 fn effect_cases() -> Vec<Case> {
     type Draw = fn(&mut SceneBuilder<'_>);
-    let cases: [(&str, Draw); 24] = [
+    let cases: [(&str, Draw); 25] = [
         ("effect_bevel_flat_inner", |b| {
             b.push_effect(bevel_pt(BevelType::Flat, 8.0, false, 315.0, 0.5));
             b.fill(
@@ -1577,6 +1577,38 @@ fn effect_cases() -> Vec<Case> {
                 FillRule::NonZero,
                 Paint::Solid(rgb(240, 200, 40)),
             );
+            b.pop_effect();
+        }),
+        ("effect_shadow_transparent", |b| {
+            // A wall shadow casts its content's rendered alpha, as the
+            // original does: the opaque square's shadow is at full
+            // darkness, the half-transparent disc's at half of it.
+            b.push_effect(shadow_pt(
+                [1.0, 0.0, 0.0, 1.0, 8.0, 8.0],
+                11.4,
+                0.0,
+                6.0,
+                Rgba8 {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 200,
+                },
+            ));
+            b.fill(
+                SceneNodeId(10),
+                &rect_path(10.0, 14.0, 42.0, 70.0),
+                FillRule::NonZero,
+                Paint::Solid(rgb(200, 60, 40)),
+            );
+            b.push_transparency(Transparency::flat(BlendFamily::Mix, 128));
+            b.fill(
+                SceneNodeId(11),
+                &ellipse_path(68.0, 46.0, 16.0),
+                FillRule::NonZero,
+                Paint::Solid(rgb(40, 90, 200)),
+            );
+            b.pop_transparency();
             b.pop_effect();
         }),
         ("effect_shadow_floor", |b| {

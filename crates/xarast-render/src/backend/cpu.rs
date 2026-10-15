@@ -773,7 +773,10 @@ fn render_fresh(
         left,
     };
     let mut colour = render_region(dl, inner, res, luts, cfg, &nested, target, false, &never)?;
-    let silhouette = if effect.needs_silhouette() {
+    let silhouette = if effect.casts_rendered_alpha() {
+        // A wall or floor shadow casts what was drawn, alpha included.
+        Some(colour.as_chunks::<4>().0.iter().map(|p| p[3]).collect())
+    } else if effect.needs_silhouette() {
         Some(silhouette_plane(
             dl,
             inner,
