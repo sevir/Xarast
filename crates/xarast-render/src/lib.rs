@@ -107,8 +107,8 @@ pub use effect_cache::{DEFAULT_EFFECT_CACHE_BYTES, EffectCache, EffectCacheStats
 pub use layer::{LayerContent, LayerRequest, LayerTarget, render_subtree_to_layer};
 pub use paint::{
     ALL_MAPPINGS, ALL_REPEATS, ALL_SHAPES, BitmapAdjust, Filter, FractalParams, GradMapping,
-    GradRamp, GradShape, ImageId, ImageRef, ImageRegistry, MappingKind, MeshLevels, Paint,
-    PaintError, Repeat,
+    GradRamp, GradShape, ImageId, ImageRef, ImageRegistry, MappingKind, MeshLevels, NoiseParams,
+    Paint, PaintError, ProceduralParams, Repeat,
 };
 pub use path::PathRef;
 pub use pixel_budget::{

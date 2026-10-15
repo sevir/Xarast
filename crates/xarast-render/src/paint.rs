@@ -817,23 +817,54 @@ impl BitmapAdjust {
     }
 }
 
-/// The parameters of a plasma or clouds fill.
+/// The parameters of a clouds fill (`.xar` "fractal", phase 13 H1).
 ///
-/// The generator itself is Phase 13's (`fracfill.cpp` is application code,
-/// not CDraw's); this crate only carries the parameters and expects the
-/// fill to have been materialised into an [`ImageRef`] before rasterisation.
+/// The generator is `xarast_image::procedural` (`fracfill.cpp` is
+/// application code, not CDraw's, `research/03 §2.8.1`); this crate only
+/// carries the parameters and expects the fill to have been materialised
+/// into an [`ImageRef`] before rasterisation. The 16.16 fields are the
+/// `.xar` file's own words, so the struct hashes exactly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FractalParams {
     /// The pseudorandom seed.
-    pub seed: u32,
+    pub seed: i32,
+    /// Graininess, 16.16 (the corpus uses 0.6 to 70).
+    pub graininess: i32,
+    /// Gravity, 16.16: the pull of each midpoint towards the centre.
+    pub gravity: i32,
+    /// Squash, 16.16: 0 none, positive x, negative y.
+    pub squash: i32,
+    /// The resolution the tile's size is chosen at.
+    pub dpi: u32,
     /// Whether the result tiles seamlessly.
     pub tileable: bool,
-    /// Vertical squash, in the original's units.
-    pub squash: u16,
-    /// 0..=32.
-    pub graininess: u8,
-    /// 0..=255: the pull of each midpoint towards the centre.
-    pub gravity: u8,
+    /// The tile's side in pixels, a power of two up to 256.
+    pub dim: u32,
+}
+
+/// The parameters of a plasma fill (`.xar` "noise", phase 13 H1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NoiseParams {
+    /// The pseudorandom seed.
+    pub seed: i32,
+    /// The resolution recorded with the fill (the generator ignores it).
+    pub dpi: u32,
+    /// The tileable flag recorded with the fill (plasma always tiles).
+    pub tileable: bool,
+    /// The tile's side in pixels: always 256.
+    pub dim: u32,
+    /// Graininess, 16.16: the number of noise cells across the tile.
+    pub grain: i32,
+}
+
+/// A generated fill's parameters: the full tuple its tile is cached by
+/// (phase 13 H5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProceduralParams {
+    /// Clouds.
+    Clouds(FractalParams),
+    /// Plasma.
+    Plasma(NoiseParams),
 }
 
 /// What fills a shape.
@@ -870,7 +901,7 @@ pub enum Paint {
     },
     /// Materialised into an [`Paint::Image`] by the Phase 13 generator
     /// before it reaches a backend.
-    Fractal(FractalParams),
+    Fractal(ProceduralParams),
 }
 
 impl Default for Paint {
@@ -1504,13 +1535,15 @@ mod tests {
 
     #[test]
     fn a_fractal_must_be_materialised_first() {
-        let p = Paint::Fractal(FractalParams {
+        let p = Paint::Fractal(ProceduralParams::Clouds(FractalParams {
             seed: 1,
-            tileable: true,
-            squash: 0,
-            graininess: 8,
+            graininess: 8 << 16,
             gravity: 0,
-        });
+            squash: 0,
+            dpi: 96,
+            tileable: true,
+            dim: 256,
+        }));
         assert_eq!(p.validate(), Err(PaintError::UnmaterialisedFractal));
     }
 }
