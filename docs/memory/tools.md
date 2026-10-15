@@ -916,6 +916,155 @@ step, an unknown chain is read-only; the committed render equals a
 fresh walker's and a hand-baked full-resolution master's; a 24 Mpx drag
 draws proxies only (its timing is the perf gate `photo-slider-24mpx`).
 
+## Phase 13: the shadow and bevel tools (XARA-T-0338, C7, D6)
+
+| Piece | Where | State |
+|---|---|---|
+| `LiveEdit` (`Apply`, `Remove`, `SetParams`, `SetJoin`), `EditCommand::Live { edits }` (one step), `effect_of`, `reselect`/`removed_members` | `xarast-app/src/live_edit.rs`, `ops.rs`, `session.rs` | done |
+| `Preview::live` — controllers drawn with previewed parameters (`shadow_of`/`bevel_of` take the override) | `tool.rs`, `walker.rs` | done |
+| `ShadowTool` (Ctrl+F2): drag-out, wall/floor/glow drags, infobar | `shadow_tool.rs` | done |
+| `BevelTool` (Ctrl+F3): eight size handles, light blob + arrow, infobar | `bevel_tool.rs` | done |
+| `ToolId::{Shadow, Bevel}`, `KeyChord::ctrl_f`, palette glyphs (own drawings) | `edit.rs`, `command.rs`, `xarast-ui/src/toolbar.rs` | done |
+
+Tests: `tests/live_tools.rs` (14: registration, keys, cursor/status;
+drag-out wall shadow = one exact "Apply Shadow" step, selection follows
+into the controller; a wall drag leaves digest and history untouched
+every frame, commits one step pixel-identical to its preview, `Esc`
+leaves nothing; floor lean/stretch with the ±69°/1–150 % clamps and its
+typed fields; glow widening and its clamp at 0; every shadow field typed,
+one exact step each, the same value again no step, a gain slider drag
+previews then commits once; apply + remove is the identity by digest
+and pixels; clicks on the object or on the shadow alone select the
+controller (A7), the selector too; bevel size handles in → inner, out →
+outer, preview = commit; light blob position, drag, Ctrl 45° snap; every
+bevel field one exact step; a bevel nests inside a shadow and comes out
+again; a locked layer refuses; the golden `tests/golden/live_tools.png`
+of a shadow and a bevel made by scripted gestures). Unit tests in
+`bevel_tool.rs` (4).
+
+### Facts from the original (paraphrased; `tools/shadtool.cpp`, `shadinfo.cpp`, `opshadow.cpp`, `bevtool.cpp`, `bevinfo.cpp`, `opbevel.cpp`, `Kernel/nodecont.{h,cpp}`, `attrbev.cpp`)
+
+- **Shadow, drag** (`shadtool.cpp:1167-1314`, `1459-1566`): a drag on empty
+  space deselects; on an unselected object (or its shadow) selects it and
+  acts on it alone; on a selected one acts on the selection. A target
+  without a shadow (or Shift held) gets a new **wall** shadow in the same
+  op, then the drag edits it. Wall: offset = start offset + pointer delta,
+  no constraint. Floor: the ratio of shadow height to pointer height and
+  the sideways offset are fixed at the press; height = vector.y / object
+  height in 0.01..1.5, angle from the vertical within ±69°
+  (`nodecont.h:188-189`); a press at or below the base does nothing.
+  Glow: width = start + dx + dy, each sign-flipped by the side of the
+  centre the press was on, ≥ 0. Every same-type shadow in the selection
+  takes the master's value. **No on-canvas handles** (tiny blobs only);
+  the live shadow is the feedback. One undo step per drag.
+- **Shadow keys**: plain 1–4 = none/wall/floor/glow, A = select the
+  shadows (`shadtool.cpp:1041-1098`). Ctrl and Alt unused.
+- **Shadow infobar** (`shadinfo.cpp`): type buttons None/Wall/Floor/Glow
+  (apply when the selection has no consistent shadow, change type
+  otherwise, None removes); blur slider 0–40 px (0..30000 mp, typed values
+  outside refused); transparency 0–100 % (= 100 − darkness); bias/gain
+  profile; X/Y in pixels for wall shadows only (±999 px) with nudge
+  buttons. **No angle, height or glow-width control in the LX bar** (the
+  constants exist, no gadget). Slider drags preview live and are one op.
+- **Shadow defaults** (`nodecont.cpp:183-192`): wall, offset (+3750,
+  −3750), blur 4500, darkness 0.25, floor 45° at 0.5 height, glow width
+  3000 — `ShadowParams::default()` already matched. A new **glow is red**,
+  the rest black (`opshadow.cpp:468-474`). One controller per selected
+  object.
+- **Bevel, drag** (`bevtool.cpp:3373-3650`): only from one of **eight size
+  handles** round the selection's bounds; elsewhere a drag does nothing.
+  Width = (signed width now − at the press) + the original signed indent;
+  signed width = distance to the nearest edge inside the box (inner),
+  negative outside (outer). Finish applies a bevel of that width, Flat,
+  contrast 50, light angle 300, tilt the default 32. Feedback: a red XOR
+  outline of the contoured path, no live bevel. Snaps.
+- **Bevel light** (`bevtool.cpp:2284-2575`): one arrow per group of
+  bevels sharing a light angle, from the group's centre, 40 px, head at
+  the centre; a red blob 55 px out on the side opposite the angle's
+  direction; only the blob is hit; dragging it points the light at the
+  pointer; Constrain snaps down to the constrain angle; live re-render;
+  one op.
+- **Bevel infobar** (`bevinfo.cpp`): type combo "None" + 15 styles in the
+  order Flat, Rounded (SMOOTH_1), Rounded 2, Chiselled (MESA_1),
+  Chiselled 2, Round Frame (ROUND), Round Frame 2 (HALFROUND), Flat Top
+  Frame (FRAME), Point Frame 1–3, Ruffle Frame 1–4 — **not** the record
+  order. A type chosen with no depth applies 3000 mp, outer. One shared
+  slider switched between Size (0..250000 mp, non-linear), Contrast
+  (0–100), Light angle (0–360, shown as 360 − value), Elevation (0–90).
+  Inner/Outer buttons, join buttons Mitre/Round/Bevel. Sliders apply on
+  release (one op).
+- **J3**: during shadow drags the original sets a quick-render flag that
+  only stops new caching; shadows render at full quality while dragging
+  (the controller's check is commented out, `nodecont.cpp:3897-3901`).
+  Bevels have no draft mode either.
+
+### Decisions (ours)
+
+82. **One command, one step.** `EditCommand::Live { edits }` runs a list
+    of `LiveEdit`s as one undo step labelled by the first: "Apply Shadow",
+    "Remove Shadow", "Shadow Type", "Shadow Position", "Floor Shadow",
+    "Glow Width", "Shadow Blur", "Shadow Transparency", "Shadow Profile";
+    "Apply Bevel", "Remove Bevel", "Bevel Type", "Bevel Side", "Bevel
+    Size", "Bevel Contrast", "Bevel Light Angle", "Bevel Light Elevation",
+    "Bevel Join" (ours, not the original's strings). A list that changes
+    nothing returns `NOTHING_TO_DO`, which `run_tool` turns into no step;
+    the tools also skip equal values.
+83. **Regeneration is not a step, by construction**: shadows and bevels are
+    pixel effects (`document-model.md` 48, 49), so `SetParams` is one
+    `set_kind` on the controller *and* its generated and source nodes
+    (kept equal, as the readers build them). Undo is the inverse
+    `set_kind`; the canonical digest proves it.
+84. **Apply wraps in place; remove is ungroup.** The controller takes the
+    object's place with no attributes, so inheritance is unchanged; remove
+    moves the source's objects out before the controller with
+    `structure::materialise` (localise) and deletes it. Apply then remove
+    is the identity by digest. Wrapping twice is skipped (`effect_of`).
+85. **A bevel lives inside a shadow.** Applying a bevel to a shadow
+    controller wraps the shadow's source contents; applying a shadow to a
+    bevel wraps the bevel. `effect_of(doc, n, Bevel)` finds a bevel that
+    is a shadow's only object, so the bevel tool edits it through the
+    selected shadow.
+86. **The selection follows** (`live_edit::reselect`): after a `Live`
+    command `run_tool` replaces each wrapped object by its controller and
+    each removed controller by its objects. A7 needed nothing: the pick
+    index already reports the layer child (the controller) as
+    `top_group`. The shadow tool adds a hit on the **shadow's own area**
+    (`shadow_under`: the source box through `silhouette_map`, a glow
+    grown by its width).
+87. **Previews.** A drag on an existing effect writes `Preview::live`; the
+    walker reads the override in `shadow_of`/`bevel_of`, and
+    `scene_damage` sees the changed `PushEffect` op by equality, so only
+    the effect's area repaints. A **new** shadow or bevel is not in the
+    document during its drag: its preview is an overlay (the objects'
+    boxes moved by the offset; the box inset or outset by the width,
+    dashed — the original's XOR outline). The shadow bias/gain sliders
+    preview the same way and commit once (decision 81;
+    `settle_infobar_drag` clears `live` too).
+88. **Shadow tool, ours**: Shift does not stack a second shadow; keys
+    1–4/A are not bound (1 and 3 are zoom keys here); the infobar adds
+    angle and height (floor) and width (glow), so every parameter is
+    typed (J2); X/Y and blur are lengths in the user's unit, not pixels;
+    out-of-range values are clamped to the original's limits rather than
+    refused. The **colour** is not editable yet (no colour item in the
+    infobar; the colour bar does not target shadows) — follow-up.
+89. **Bevel tool, ours**: the size box is the union of the selected
+    objects' *source* boxes (a bevel's own growth excluded); an existing
+    bevel previews live plus the dashed box, a new one the dashed box only;
+    Ctrl rounds the light to 45° (the original floors to its constrain
+    angle preference); the light angle field shows the stored value
+    (direction of travel, anticlockwise), not 360 − value; elevation is a
+    typed 0–90° field; the size field is linear. Tool-made bevels take the
+    original's drag defaults (`bevel_tool::new_bevel`: Flat, 50 %, 300°,
+    32°); a type chosen for a bare object 3000 mp outer
+    (`chosen_bevel`). `BevelParams::default()` (inner, 0.75 pt, 45°/45°)
+    is left alone. Join edits the controller's own `JoinType` attribute
+    (`LiveEdit::SetJoin`), which strokes its objects too.
+90. **J3**: drags already run at Draft through the scheduler (Final 120 ms
+    after input stops), but the effect pass ignores the quality: a shadow
+    or bevel preview is computed at full resolution every frame, as in the
+    original. A reduced-resolution Draft effect is a render-crate change
+    (follow-up, with XARA-T-0315).
+
 ## Provisional values (observe in the VM before trusting)
 
 - Segment grab = 4 + 3 device px; freehand chunk 96 samples; freehand
@@ -984,6 +1133,11 @@ draws proxies only (its timing is the perf gate `photo-slider-24mpx`).
     equals the preview, and `Esc`, undo, redo or a tool switch leave
     nothing; a run of arrow nudges is one undo step; an outline handle's
     edits never touch the interior fill (`tests/fill_tool.rs`).
+18. A shadow or bevel drag emits nothing before release (digest and
+    history unchanged every frame), commits one `EditCommand::Live` step
+    whose render equals the preview, and `Esc` leaves nothing; applying
+    then removing an effect is the identity by digest
+    (`tests/live_tools.rs`).
 
 ## Dead ends (do not retry)
 
@@ -1048,3 +1202,8 @@ draws proxies only (its timing is the perf gate `photo-slider-24mpx`).
       two path objects.
 - [ ] The menu bar has no entries for the path operations yet (keys and
       infobar buttons only).
+- [ ] Shadow and bevel tools (XARA-T-0338 follow-ups): the shadow colour
+      from the infobar or the colour bar; the original's Shift-drag second
+      shadow and keys 1–4/A; the bevel size drag's contoured-path outline
+      (we draw the box) and snapping; Draft-quality effects during drags
+      (J3, render crate); arrow-key nudges of a wall shadow's offset.

@@ -125,6 +125,26 @@ Full note: [`tools.md`](tools.md). What the interface side owns:
 - The colour panel has a "Fill" button of its own: query palette buttons
   by role *and* position in tests.
 
+### Shadow and bevel tools (phase 13, XARA-T-0338)
+
+- **Palette**: Shadow (Ctrl+F2) and Bevel (Ctrl+F3), after a separator
+  below Text; glyphs are ours (a square over a soft stepped square; a
+  square with a lit and a shaded rim). Keys come from the command table
+  (`KeyChord::ctrl_f`), so the shell binds them with no change; both tools
+  are in `AppCommand::ALL`. (F5/F6 are not in `AppCommand::ALL`, so the
+  shell does not bind them — a gap older than this task.)
+- **Infobars** use the existing items only, so `toolbar.rs` needed no new
+  widget: shadow = type `Choice` (None/Wall/Floor/Glow), `Measure` X/Y
+  (wall), `Angle` + `Scalar` % (floor), `Measure` width (glow), `Measure`
+  blur, `Scalar` % transparency, `Real` bias/gain sliders (previewed,
+  one step on release); bevel = type `Choice` (None + 15 styles), side
+  `Choice`, `Measure` size, `Scalar` % contrast, `Angle` light, `Scalar` °
+  elevation, join `Choice`. Seventeen new `InfobarField`s with labels and
+  screen-reader descriptions. Rules: `tools.md` decisions 82–90.
+- **Overlay**: the bevel tool reuses `HandleShape::Bounds` (size handles),
+  `OverlayShape::Arrow` and `HandleShape::FillCentreSelected` (the light);
+  the shadow tool draws only dashed boxes while dragging out a new shadow.
+
 ### Fill and transparency tools (phase 8, XARA-US-0039)
 
 - **Palette**: Fill (F5) and Transparency (F6) are now available and
