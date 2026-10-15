@@ -2,14 +2,15 @@
 id: XARA-T-0320
 type: task
 title: C10 (shadows) — Bake shadows into SVG with the feather's FilterChain
-status: in_progress
+status: done
 priority: medium
 parent: XARA-US-0069
 author: mcp
 labels: [phase-13, live-effects, format, export]
 created: 2026-09-24T21:04:11Z
-updated: 2026-10-15T12:14:12Z
+updated: 2026-10-15T12:46:21Z
 started: 2026-10-15T12:14:12Z
+closed: 2026-10-15T12:46:21Z
 ---
 
 ## Description
