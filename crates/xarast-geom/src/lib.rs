@@ -40,6 +40,7 @@
 #![doc(html_no_source)]
 
 pub mod bevel;
+pub mod blend;
 pub mod boolean;
 pub mod contour;
 pub mod fit;
