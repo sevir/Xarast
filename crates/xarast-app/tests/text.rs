@@ -222,3 +222,56 @@ fn a_contour_of_text_follows_the_glyphs() {
     assert!(!text.contains_rect(rings));
     assert!(xarast_doc::contour::ring_extent(&d, c).is_empty());
 }
+
+/// A blend whose start is a text story blends its glyph outlines
+/// (XARA-T-0335), laid out with the walker's fonts, as the original
+/// blends what a story's path conversion passes back.
+#[test]
+fn a_blend_from_text_blends_the_glyphs() {
+    use xarast_doc::{BlendParams, LiveKind, LiveNode, LiveRole, RegenState};
+    let kind = LiveKind::Blend(Box::new(BlendParams {
+        steps: 4,
+        ..BlendParams::default()
+    }));
+    let live = |role| {
+        NodeKind::Live(Box::new(LiveNode {
+            role,
+            kind: kind.clone(),
+            regen: RegenState::Clean,
+            name: None,
+        }))
+    };
+    let mut b = skeleton(BuildLimits::default()).unwrap();
+    let c = b.node(live(LiveRole::Controller)).unwrap();
+    b.push_scope().unwrap();
+    b.node(live(LiveRole::Source)).unwrap();
+    b.push_scope().unwrap();
+    story(&mut b, TextLayout::AtPoint, None);
+    b.node(live(LiveRole::Generated)).unwrap();
+    let mut square = xarast_geom::Path::builder();
+    square.rect(xarast_geom::Rect::new(
+        xarast_geom::Point::raw(300_000, 190_000),
+        xarast_geom::Point::raw(320_000, 210_000),
+    ));
+    b.node(NodeKind::Path(Box::new(xarast_doc::PathNode::new(
+        square.build(),
+    ))))
+    .unwrap();
+    b.pop_scope();
+    b.pop_scope();
+    let d = b.finish().unwrap().0;
+    d.validate().assert_clean();
+    let c = c.node_id();
+    // Without an outliner the text end draws nothing: no steps.
+    let bare = xarast_doc::blend::generate(&d, c).unwrap();
+    assert!(bare.iter().all(Vec::is_empty), "{bare:?}");
+    let (w, _) = walk(&d);
+    let text = w.text_ink();
+    let steps = w.live_ink();
+    assert!(!text.is_empty() && !steps.is_empty(), "{text:?} {steps:?}");
+    // The steps run from the glyphs to the square: past the text's right
+    // edge, short of the square's.
+    assert!(steps.hi.x > text.hi.x, "{steps:?} {text:?}");
+    assert!(steps.hi.x < Mp::new(320_000), "{steps:?}");
+    assert!(steps.lo.x < Mp::new(200_000), "{steps:?}");
+}

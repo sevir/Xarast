@@ -2184,9 +2184,18 @@ impl<'d, 'b> Emitter<'d, 'b> {
         self.body.push('>');
         self.newline();
         self.depth += 1;
-        let steps = xarast_doc::blend::generate(self.doc, controller)
-            .and_then(|mut g| (k < g.len()).then(|| g.swap_remove(k)))
-            .unwrap_or_default();
+        // Text in an end blends from its outlines when the placer makes
+        // them (XARA-T-0335), as the walker draws it.
+        let placer = self.placer.clone();
+        let steps = xarast_doc::blend::generate_full(
+            self.doc,
+            controller,
+            None,
+            None,
+            &mut |doc, story| placer.as_ref().and_then(|p| p.0.outlines(doc, story)),
+        )
+        .and_then(|mut g| (k < g.len()).then(|| g.swap_remove(k)))
+        .unwrap_or_default();
         for step in &steps {
             if step.path.is_empty() {
                 continue;

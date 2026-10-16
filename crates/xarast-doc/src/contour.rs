@@ -457,13 +457,11 @@ fn nested_output(
             let k = crate::blend::blenders(tree, parent)
                 .iter()
                 .position(|&(g, _, _)| g == node);
+            // Its ends' text laid out with the same outliner.
             let steps = match (tree.links(parent).parent, k) {
-                (Some(bc), Some(k)) => match crate::regen::regenerate(doc, bc, 0.0) {
-                    Ok(crate::regen::LiveOutput::Groups(g)) => {
-                        g.get(k).map(|s| s.to_vec()).unwrap_or_default()
-                    }
-                    _ => Vec::new(),
-                },
+                (Some(bc), Some(k)) => crate::blend::generate_full(doc, bc, None, None, text)
+                    .and_then(|mut g| (k < g.len()).then(|| g.swap_remove(k)))
+                    .unwrap_or_default(),
                 _ => Vec::new(),
             };
             (steps, None)

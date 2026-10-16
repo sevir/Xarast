@@ -1454,12 +1454,12 @@ impl SceneWalker {
         doc: &Document,
         controller: NodeId,
     ) -> Option<(xarast_doc::RegenKey, Arc<xarast_doc::LiveOutput>)> {
-        // A contour of text contours its glyphs (XARA-T-0332): laid out
-        // with this walker's fonts, which only a source holding a story
-        // needs.
-        let contour = matches!(doc.tree.kind(controller), Some(NodeKind::Live(l))
-            if matches!(l.kind, xarast_doc::LiveKind::Contour(_)));
-        let fonts = (contour && holds_text(doc, controller)).then(|| self.story_fonts(doc));
+        // A contour of text contours its glyphs (XARA-T-0332), a blend
+        // of text blends them (XARA-T-0335): laid out with this walker's
+        // fonts, which only a source holding a story needs.
+        let reads_text = matches!(doc.tree.kind(controller), Some(NodeKind::Live(l))
+            if matches!(l.kind, xarast_doc::LiveKind::Contour(_) | xarast_doc::LiveKind::Blend(_)));
+        let fonts = (reads_text && holds_text(doc, controller)).then(|| self.story_fonts(doc));
         let over = xarast_doc::RegenOverride {
             kind: self
                 .live_preview
@@ -1481,18 +1481,33 @@ impl SceneWalker {
             over,
             &mut |d: &Document, c: NodeId, dpi: f64| match &fonts {
                 Some(fonts) => {
-                    let params = match over.kind {
-                        Some(xarast_doc::LiveKind::Contour(p)) => Some(&**p),
-                        _ => None,
+                    let mut text = |doc: &Document, story: NodeId| {
+                        crate::text::story_outlines(fonts, doc, story).map(|(runs, _)| runs)
                     };
-                    let shapes =
-                        xarast_doc::contour::generate_full(d, c, params, &mut |doc, story| {
-                            crate::text::story_outlines(fonts, doc, story).map(|(runs, _)| runs)
-                        });
-                    Ok(match shapes {
-                        Some(s) => xarast_doc::LiveOutput::Shapes(Arc::from(s)),
-                        None => xarast_doc::LiveOutput::Stored,
-                    })
+                    let blend = matches!(d.tree.kind(c), Some(NodeKind::Live(l))
+                        if matches!(l.kind, xarast_doc::LiveKind::Blend(_)));
+                    let out = if blend {
+                        let params = match over.kind {
+                            Some(xarast_doc::LiveKind::Blend(p)) => Some(&**p),
+                            _ => None,
+                        };
+                        let moved = over.moved_inside(&d.tree, c);
+                        xarast_doc::blend::generate_full(d, c, params, moved, &mut text).map(
+                            |groups| {
+                                xarast_doc::LiveOutput::Groups(
+                                    groups.into_iter().map(Arc::from).collect::<Vec<_>>().into(),
+                                )
+                            },
+                        )
+                    } else {
+                        let params = match over.kind {
+                            Some(xarast_doc::LiveKind::Contour(p)) => Some(&**p),
+                            _ => None,
+                        };
+                        xarast_doc::contour::generate_full(d, c, params, &mut text)
+                            .map(|s| xarast_doc::LiveOutput::Shapes(Arc::from(s)))
+                    };
+                    Ok(out.unwrap_or(xarast_doc::LiveOutput::Stored))
                 }
                 None => xarast_doc::regen::regenerate_with(d, c, dpi, over),
             },
@@ -1622,6 +1637,13 @@ impl SceneWalker {
             for a in step.attrs.iter() {
                 attrs.push(Arc::new(a.clone()));
             }
+            // What a blend of text draws is in no box of the document's.
+            let reach = step.path.bounds().inflated(attrs.stroke_extent());
+            self.live_ink = if self.live_ink.is_empty() {
+                reach
+            } else {
+                self.live_ink.union(reach)
+            };
             // As a contour's rings: the step index above the node's tag.
             let index = (i as u64 + 1) & 0x3fff_ffff;
             let id = SceneNodeId(tag | (index << 32));
@@ -2708,11 +2730,12 @@ fn point64(p: Point) -> xarast_render::Point64 {
 /// bounds" and "empty bounds" are the same value and guessing wrong loses
 /// pixels.
 fn is_culled(doc: &Document, node: NodeId, clip: Rect, attrs: &AttrStack) -> bool {
-    // A contour of text reaches past bounds that hold no text: its rings
-    // are only known once laid out (XARA-T-0332).
+    // A contour or a blend of text reaches past bounds that hold no text:
+    // its rings or steps are only known once laid out (XARA-T-0332,
+    // XARA-T-0335).
     if matches!(doc.tree.kind(node), Some(NodeKind::Live(l))
         if l.role == xarast_doc::LiveRole::Controller
-            && matches!(l.kind, xarast_doc::LiveKind::Contour(_)))
+            && matches!(l.kind, xarast_doc::LiveKind::Contour(_) | xarast_doc::LiveKind::Blend(_)))
         && holds_text(doc, node)
     {
         return false;

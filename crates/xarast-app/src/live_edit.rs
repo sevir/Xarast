@@ -873,7 +873,8 @@ pub(crate) fn become_shapes(
             }
         }
         LiveKind::Blend(_) => {
-            let groups = xarast_doc::blend::generate(doc, c).unwrap_or_default();
+            let groups =
+                xarast_doc::blend::generate_full(doc, c, None, None, text).unwrap_or_default();
             let blenders = xarast_doc::blend::blenders(&doc.tree, parts.source);
             for child in doc.tree.children(parts.source) {
                 if let Some(k) = blenders.iter().position(|(g, _, _)| *g == child) {

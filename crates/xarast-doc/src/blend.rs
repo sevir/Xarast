@@ -37,11 +37,12 @@ use xarast_geom::blend::{Correspondence, Outline, correspond, pair_up};
 use xarast_geom::{BiasGain, Path};
 
 use crate::attr::{ALL_ATTR_SLOTS, AttrSlot, AttrValue, ResolvedAttrs, resolve_uncached};
-use crate::contour::{Ink, blend_paint, geometry, inks, lerp_mp, visible};
+use crate::contour::{Ink, blend_paint, drawn_inks, geometry, lerp_mp, visible};
 use crate::document::Document;
 use crate::fill::{FillGeometry, Paint};
 use crate::kind::NodeKind;
 use crate::live::{BlendParams, LiveKind, LiveRole, parts};
+use crate::mould::TextOutlines;
 use crate::regen::{GeneratedShape, Moved, is_moved};
 use crate::tree::{NodeId, Tree};
 
@@ -100,13 +101,34 @@ pub fn generate(doc: &Document, controller: NodeId) -> Option<Vec<Vec<GeneratedS
 /// [`generate`] as a preview draws it: `params` in place of the
 /// controller's own, and the `moved` objects inside it where the preview
 /// draws them (an end being dragged), outlines and geometry-linked
-/// attributes (fills) through the matrix.
+/// attributes (fills) through the matrix. Text in an end is left out:
+/// [`generate_full`] takes the outliner that lays it out.
 #[must_use]
 pub fn generate_with(
     doc: &Document,
     controller: NodeId,
     params: Option<&BlendParams>,
     moved: Option<Moved<'_>>,
+) -> Option<Vec<Vec<GeneratedShape>>> {
+    generate_full(doc, controller, params, moved, &mut |_, _| None)
+}
+
+/// [`generate_with`], laying the ends' text out with `text`
+/// (XARA-T-0335): an end blends **what it draws** (document model
+/// decision 54), as the original blends what an end's path conversion
+/// passes back (`BlendRef::Initialise` converts each end with
+/// `BECOMEA_PASSBACK`, `Kernel/nodebldr.cpp:4111-4135`): a nested blend
+/// passes back its objects and its blenders' steps in paint order
+/// (`Kernel/nodeblnd.cpp:672-690`, `Kernel/nodebldr.cpp:2795-2815`), a
+/// contour its rings and objects, a mould its moulded copy, a text story
+/// its glyph outlines.
+#[must_use]
+pub fn generate_full(
+    doc: &Document,
+    controller: NodeId,
+    params: Option<&BlendParams>,
+    moved: Option<Moved<'_>>,
+    text: &mut TextOutlines<'_>,
 ) -> Option<Vec<Vec<GeneratedShape>>> {
     let tree = &doc.tree;
     let Some(NodeKind::Live(l)) = tree.kind(controller) else {
@@ -128,7 +150,7 @@ pub fn generate_with(
             out.push(Vec::new());
             continue;
         };
-        out.push(pair_steps(doc, params, k, start, end, moved));
+        out.push(pair_steps(doc, params, k, start, end, moved, text));
     }
     Some(out)
 }
@@ -155,14 +177,15 @@ pub fn blenders(tree: &Tree, source: NodeId) -> Vec<(NodeId, Option<NodeId>, Opt
     out
 }
 
-/// One end: every object under `node` (itself included), its subpaths
-/// aligned. `start_point` applies when the end is a single subpath, as
-/// the original records one only then.
+/// One end: everything drawn under `node` (itself included), its
+/// subpaths aligned. `start_point` applies when the end is a single
+/// subpath, as the original records one only then.
 fn end_of(
     doc: &Document,
     node: NodeId,
     start_point: Option<u32>,
     moved: Option<(NodeId, Moved<'_>)>,
+    text: &mut TextOutlines<'_>,
 ) -> End {
     let tree = &doc.tree;
     let mut end = End {
@@ -171,47 +194,64 @@ fn end_of(
         stroked: Vec::new(),
         pieces: Vec::new(),
     };
-    // A mould in the end, at its top or anywhere below, is its moulded
-    // copy, as drawn (XARA-T-0334, XARA-T-0337); a moved preview does not
-    // move it.
-    let moulded: Vec<(Path, Vec<AttrValue>, bool, bool)> = inks(doc, node)
+    // What a preview moves: an object it moves blends from where it is
+    // drawn; what nested live objects draw moves when the whole end does.
+    let whole = moved.filter(|&(c, m)| is_moved(tree, c, node, &m));
+    let shift = |path: Path, attrs: &mut [AttrValue], m: Moved<'_>| {
+        for a in attrs.iter_mut() {
+            if a.linked_to_geometry() {
+                a.transform(m.matrix);
+            }
+        }
+        path.transformed(m.matrix)
+    };
+    let objects: Vec<(Path, Vec<AttrValue>, bool, bool)> = drawn_inks(doc, node, text)
         .into_iter()
         .filter_map(|ink| {
-            let n = match ink {
+            let (path, mut attrs, f, s) = match ink {
+                // A mould anywhere in the end is its moulded copy, as
+                // drawn (XARA-T-0334, XARA-T-0337).
                 Ink::Moulded(g) => {
                     let mut a = g.attrs.to_vec();
                     canonical(doc, &mut a, g.filled, g.stroked);
-                    return Some(((*g.path).clone(), a, g.filled, g.stroked));
+                    ((*g.path).clone(), a, g.filled, g.stroked)
                 }
-                Ink::Node(n) => n,
-                // `inks` reads no nested output and no text (decision 54).
-                Ink::Drawn { .. } => return None,
-            };
-            {
-                let path = geometry(doc, n)?;
-                let (f, s) = match tree.kind(n) {
-                    Some(NodeKind::Path(p)) => (p.filled, p.stroked),
-                    _ => (true, true),
-                };
-                let resolved = resolve_uncached(tree, n, &doc.defaults);
-                let mut attrs = shown_attrs(doc, &resolved, f, s);
-                // An object a preview moves blends from where it is drawn.
-                let path = match moved {
-                    Some((c, m)) if is_moved(tree, c, n, &m) => {
-                        for a in &mut attrs {
-                            if a.linked_to_geometry() {
-                                a.transform(m.matrix);
-                            }
+                // Nested rings and steps, text's glyphs: filled and
+                // stroked as their attributes say.
+                Ink::Drawn { path, attrs } => (
+                    (*path).clone(),
+                    shown_attrs(doc, &attrs, true, true),
+                    true,
+                    true,
+                ),
+                Ink::Node(n) => {
+                    let path = geometry(doc, n)?;
+                    let (f, s) = match tree.kind(n) {
+                        Some(NodeKind::Path(p)) => (p.filled, p.stroked),
+                        _ => (true, true),
+                    };
+                    let resolved = resolve_uncached(tree, n, &doc.defaults);
+                    let mut attrs = shown_attrs(doc, &resolved, f, s);
+                    let path = match moved {
+                        Some((c, m)) if whole.is_none() && is_moved(tree, c, n, &m) => {
+                            shift(path, &mut attrs, m)
                         }
-                        path.transformed(m.matrix)
-                    }
-                    _ => path,
-                };
-                Some((path, attrs, f, s))
-            }
+                        _ => path,
+                    };
+                    return Some(match whole {
+                        Some((_, m)) => (shift(path, &mut attrs, m), attrs, f, s),
+                        None => (path, attrs, f, s),
+                    });
+                }
+            };
+            let path = match whole {
+                Some((_, m)) => shift(path, &mut attrs, m),
+                None => path,
+            };
+            Some((path, attrs, f, s))
         })
         .collect();
-    for (path, attrs, f, s) in moulded {
+    for (path, attrs, f, s) in objects {
         let object = end.attrs.len();
         end.attrs.push(attrs);
         end.filled.push(f);
@@ -244,10 +284,11 @@ fn pair_steps(
     start: NodeId,
     end: NodeId,
     moved: Option<(NodeId, Moved<'_>)>,
+    text: &mut TextOutlines<'_>,
 ) -> Vec<GeneratedShape> {
     let blender = params.blender(k);
-    let a = end_of(doc, start, blender.start_index, moved);
-    let b = end_of(doc, end, blender.end_index, moved);
+    let a = end_of(doc, start, blender.start_index, moved, text);
+    let b = end_of(doc, end, blender.end_index, moved, text);
     let (na, nb) = (a.pieces.len(), b.pieces.len());
     // Explicit pairs when every index names a subpath; else the stepper.
     let explicit: Vec<(usize, usize)> = blender

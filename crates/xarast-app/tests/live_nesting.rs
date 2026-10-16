@@ -481,6 +481,55 @@ fn a_blend_end_with_a_mould_inside_blends_the_moulded_copy() {
     }
 }
 
+/// A blend end holding a contour blends its rings too, and an end that is
+/// a blend blends its steps too (XARA-T-0335): the original's path
+/// conversion of a contour or a blend passes back what it draws, and a
+/// blend converts each end that way.
+#[test]
+fn a_blend_end_blends_what_nested_contours_and_blends_draw() {
+    // Contour end: the rings stand 8 pt around the object, so the first
+    // step reaches further than one blended from the bare object.
+    let first_step = |contoured: bool| {
+        let (mut s, objs) = fixture(&[((100_000, 100_000), RED), ((400_000, 100_000), BLUE)]);
+        let mut end = objs[0];
+        if contoured {
+            end = make(&mut s, Kind::Contour, end, objs[1]);
+            end = group(&mut s, end);
+        }
+        let bl = make(&mut s, Kind::Blend, end, objs[1]);
+        let steps = xarast_doc::blend::generate(&s.doc, bl).expect("a blend");
+        steps[0].clone()
+    };
+    let (bare, ringed) = (first_step(false), first_step(true));
+    assert_eq!(bare.len(), 3, "one shape per step");
+    assert!(ringed.len() > bare.len(), "{} shapes", ringed.len());
+    let reach = |g: &[xarast_doc::GeneratedShape]| {
+        g.iter()
+            .map(|x| x.path.bounds())
+            .reduce(|a, b| a.union(b))
+            .unwrap()
+    };
+    assert!(reach(&ringed).height() > reach(&bare).height());
+
+    // Blend end: (red → blue, 3 steps) blended to a third object. The
+    // inner blend draws 5 objects (2 ends and 3 steps), each paired with
+    // the lone far end: 5 shapes in each of the 3 outer steps.
+    let (mut s, objs) = fixture(&[
+        ((100_000, 100_000), RED),
+        ((300_000, 100_000), BLUE),
+        ((550_000, 300_000), BLUE),
+    ]);
+    let inner = make(&mut s, Kind::Blend, objs[0], objs[1]);
+    let g = group(&mut s, inner);
+    let other = top(&s, objs[2]);
+    let outer = make(&mut s, Kind::Blend, g, other);
+    let steps = xarast_doc::blend::generate(&s.doc, outer).expect("a blend");
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].len(), 3 * 5);
+    let p = page(&s);
+    assert!(p.walk.is_complete(), "{:?}", p.walk);
+}
+
 /// A contour around a mould (directly or in a group) contours the moulded
 /// copy, which the original's path conversion of a mould passes back.
 #[test]
