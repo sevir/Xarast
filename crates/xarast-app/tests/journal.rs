@@ -365,7 +365,14 @@ fn a_crash_after_n_operations_recovers_the_live_digest() {
     assert!(lines.contains("\"op\":\"undo\""));
     assert!(lines.contains("\"op\":\"redo\""));
     assert!(lines.contains("\"merged\":true"), "the nudge run merges");
-    assert!(lines.contains("\"op\":\"tables\""), "the placed bitmap");
+    assert!(
+        lines.contains("insert_bitmap"),
+        "the placed bitmap is an action"
+    );
+    assert!(
+        !lines.contains("\"op\":\"tables\""),
+        "no whole table is journalled for a placement"
+    );
     assert!(lines.contains("replace_bitmap"), "the replace is an action");
     crash(app, &store);
 
