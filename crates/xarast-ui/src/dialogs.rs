@@ -10,10 +10,12 @@
 //! the same way from [`ExportDialogView`].
 
 use xarast_app::export_dialog::{
-    BackgroundChoice, DPI_RANGE, ExportDialogOp, ExportDialogView, ExportPhase, SizingEdit, Stage,
+    BackgroundChoice, BlendFidelity, DPI_RANGE, ExportDialogOp, ExportDialogView, ExportPhase,
+    JpegOptions, PDF_RASTERISE_DPI, PdfOptions, PngColour, PngCompression, PngDepth, PngOptions,
+    Rgba8, SizingEdit, Stage, Subsampling, SvgOptions, SvgResources, TextOutput,
 };
 use xarast_app::{ChoiceRole, Prompt};
-use xarast_geom::Mp;
+use xarast_geom::{Mp, Point, Rect};
 
 use crate::model::{CommandSink, UiCommand};
 use crate::theme::ThemeTokens;
@@ -99,7 +101,12 @@ pub fn export(
             view.phase,
             ExportPhase::Choosing | ExportPhase::Running { .. }
         );
-        ui.add_enabled_ui(!busy, |ui| export_fields(ui, view, unit, tokens, &mut ops));
+        egui::ScrollArea::vertical()
+            .max_height(520.0)
+            .auto_shrink([true, true])
+            .show(ui, |ui| {
+                ui.add_enabled_ui(!busy, |ui| export_fields(ui, view, unit, tokens, &mut ops));
+            });
         ui.add_space(8.0);
         export_phase(ui, view, tokens, &mut ops);
     });
@@ -125,7 +132,7 @@ fn combo<T: Copy + PartialEq>(
     current: T,
     choices: &[(T, &str)],
     ops: &mut Vec<ExportDialogOp>,
-    make: fn(T) -> ExportDialogOp,
+    make: impl Fn(T) -> ExportDialogOp,
 ) {
     ui.label(name);
     let shown = choices.iter().find(|c| c.0 == current).map_or("", |c| c.1);
@@ -140,6 +147,229 @@ fn combo<T: Copy + PartialEq>(
         });
     labelled(ui, &r.response, &format!("Export {}", name.to_lowercase()));
     ui.end_row();
+}
+
+/// A labelled checkbox in the value column.
+fn check(
+    ui: &mut egui::Ui,
+    text: &str,
+    value: bool,
+    ops: &mut Vec<ExportDialogOp>,
+    make: impl Fn(bool) -> ExportDialogOp,
+) {
+    ui.label("");
+    let mut on = value;
+    if ui.checkbox(&mut on, text).changed() {
+        ops.push(make(on));
+    }
+    ui.end_row();
+}
+
+/// A length field shown in `unit`.
+fn length(
+    ui: &mut egui::Ui,
+    name: &str,
+    value: Mp,
+    unit: Unit,
+    ops: &mut Vec<ExportDialogOp>,
+    make: impl Fn(Mp) -> ExportDialogOp,
+) {
+    ui.label(name);
+    let shown = unit.from_mp(value);
+    let mut x = shown;
+    let r = ui.add(
+        egui::DragValue::new(&mut x)
+            .max_decimals(unit.decimals())
+            .suffix(format!(" {}", unit.suffix())),
+    );
+    labelled(
+        ui,
+        &r,
+        &format!("{name} in {}", unit.label().to_lowercase()),
+    );
+    if r.changed() && (x - shown).abs() > f64::EPSILON {
+        ops.push(make(unit.to_mp(x)));
+    }
+    ui.end_row();
+}
+
+/// The rectangle fields of the "Rectangle" area.
+fn rectangle(ui: &mut egui::Ui, r: Rect, unit: Unit, ops: &mut Vec<ExportDialogOp>) {
+    let (lo, hi) = (r.lo, r.hi);
+    let with = move |x0: Mp, y0: Mp, x1: Mp, y1: Mp| {
+        ExportDialogOp::SetRectangle(Rect::new(Point::new(x0, y0), Point::new(x1, y1)))
+    };
+    length(ui, "Left", lo.x, unit, ops, |v| with(v, lo.y, hi.x, hi.y));
+    length(ui, "Bottom", lo.y, unit, ops, |v| with(lo.x, v, hi.x, hi.y));
+    length(ui, "Right", hi.x, unit, ops, |v| with(lo.x, lo.y, v, hi.y));
+    length(ui, "Top", hi.y, unit, ops, |v| with(lo.x, lo.y, hi.x, v));
+}
+
+fn png_fields(ui: &mut egui::Ui, p: PngOptions, ops: &mut Vec<ExportDialogOp>) {
+    let set = |o: PngOptions| ExportDialogOp::SetPng(o);
+    combo(
+        ui,
+        "Depth",
+        p.bit_depth,
+        &[(PngDepth::Eight, "8 bits"), (PngDepth::Sixteen, "16 bits")],
+        ops,
+        |d| set(PngOptions { bit_depth: d, ..p }),
+    );
+    // Every palette size shows as the one entry.
+    let shown = match p.colour {
+        PngColour::Palette { .. } => PngColour::Palette { max_colours: 256 },
+        c => c,
+    };
+    combo(
+        ui,
+        "Colour type",
+        shown,
+        &[
+            (PngColour::Rgba, "RGBA"),
+            (PngColour::Rgb, "RGB"),
+            (PngColour::Grey, "Grey"),
+            (PngColour::GreyAlpha, "Grey with alpha"),
+            (PngColour::Palette { max_colours: 256 }, "Indexed"),
+        ],
+        ops,
+        |c| set(PngOptions { colour: c, ..p }),
+    );
+    if let PngColour::Palette { max_colours } = p.colour {
+        ui.label("Palette colours");
+        let mut n = max_colours;
+        let r = ui.add(egui::DragValue::new(&mut n).range(1..=256));
+        labelled(ui, &r, "Most palette colours");
+        if r.changed() && n != max_colours {
+            ops.push(set(PngOptions {
+                colour: PngColour::Palette { max_colours: n },
+                ..p
+            }));
+        }
+        ui.end_row();
+    }
+    combo(
+        ui,
+        "Compression",
+        p.compression,
+        &[
+            (PngCompression::Fast, "Fast"),
+            (PngCompression::Balanced, "Balanced"),
+            (PngCompression::Best, "Best"),
+        ],
+        ops,
+        |c| {
+            set(PngOptions {
+                compression: c,
+                ..p
+            })
+        },
+    );
+    check(ui, "Interlaced (Adam7)", p.interlace, ops, |on| {
+        set(PngOptions { interlace: on, ..p })
+    });
+    check(ui, "Write the resolution", p.write_dpi, ops, |on| {
+        set(PngOptions { write_dpi: on, ..p })
+    });
+}
+
+fn jpeg_fields(ui: &mut egui::Ui, j: JpegOptions, ops: &mut Vec<ExportDialogOp>) {
+    let set = |o: JpegOptions| ExportDialogOp::SetJpeg(o);
+    combo(
+        ui,
+        "Chroma subsampling",
+        j.subsampling,
+        &[
+            (Subsampling::S444, "4:4:4 (none)"),
+            (Subsampling::S422, "4:2:2"),
+            (Subsampling::S420, "4:2:0"),
+        ],
+        ops,
+        |s| {
+            set(JpegOptions {
+                subsampling: s,
+                ..j
+            })
+        },
+    );
+    check(ui, "Progressive", j.progressive, ops, |on| {
+        set(JpegOptions {
+            progressive: on,
+            ..j
+        })
+    });
+    check(ui, "Write the resolution", j.write_dpi, ops, |on| {
+        set(JpegOptions { write_dpi: on, ..j })
+    });
+}
+
+const TEXT_CHOICES: [(TextOutput, &str); 2] = [
+    (TextOutput::Text, "Text with embedded fonts"),
+    (TextOutput::Outlines, "Outlines"),
+];
+
+fn pdf_fields(ui: &mut egui::Ui, p: PdfOptions, ops: &mut Vec<ExportDialogOp>) {
+    let set = |o: PdfOptions| ExportDialogOp::SetPdf(o);
+    ui.label("Objects PDF cannot express");
+    let mut d = p.rasterise_dpi;
+    let r = ui.add(
+        egui::DragValue::new(&mut d)
+            .range(PDF_RASTERISE_DPI.0..=PDF_RASTERISE_DPI.1)
+            .suffix(" dpi"),
+    );
+    labelled(ui, &r, "Resolution of rasterised objects in dots per inch");
+    if r.changed() && d != p.rasterise_dpi {
+        ops.push(set(PdfOptions {
+            rasterise_dpi: d,
+            ..p
+        }));
+    }
+    ui.end_row();
+    combo(
+        ui,
+        "Transparency",
+        p.blend_fidelity,
+        &[
+            (BlendFidelity::Exact, "Exact (rasterise)"),
+            (BlendFidelity::PreferNative, "Native modes"),
+        ],
+        ops,
+        |b| {
+            set(PdfOptions {
+                blend_fidelity: b,
+                ..p
+            })
+        },
+    );
+    combo(ui, "Text", p.text, &TEXT_CHOICES, ops, |t| {
+        set(PdfOptions { text: t, ..p })
+    });
+    check(ui, "Compress streams", p.compress, ops, |on| {
+        set(PdfOptions { compress: on, ..p })
+    });
+}
+
+fn svg_fields(ui: &mut egui::Ui, s: SvgOptions, ops: &mut Vec<ExportDialogOp>) {
+    let set = |o: SvgOptions| ExportDialogOp::SetSvg(o);
+    combo(
+        ui,
+        "Images",
+        s.resources,
+        &[
+            (SvgResources::Inline, "Inside the file"),
+            (SvgResources::Sidecar, "In a folder beside it"),
+        ],
+        ops,
+        |r| set(SvgOptions { resources: r, ..s }),
+    );
+    combo(ui, "Text", s.text, &TEXT_CHOICES, ops, |t| {
+        set(SvgOptions { text: t, ..s })
+    });
+    check(ui, "Minify", s.minify, ops, |on| {
+        set(SvgOptions { minify: on, ..s })
+    });
+    check(ui, "Indent for reading", s.pretty, ops, |on| {
+        set(SvgOptions { pretty: on, ..s })
+    });
 }
 
 fn export_fields(
@@ -163,6 +393,10 @@ fn export_fields(
             );
             let areas: Vec<_> = v.areas.iter().map(|a| (*a, a.label())).collect();
             combo(ui, "Area", v.area, &areas, ops, ExportDialogOp::SetArea);
+            if let Some(r) = v.rectangle {
+                rectangle(ui, r, unit, ops);
+            }
+            length(ui, "Bleed", v.bleed, unit, ops, ExportDialogOp::SetBleed);
             if let Some((w, h)) = v.pixels {
                 let fields: [SizeField<u32>; 2] = [
                     ("Width", w, SizingEdit::PixelWidth),
@@ -233,8 +467,12 @@ fn export_fields(
                 }
             }
             if let Some(bg) = v.background {
-                let choices = [BackgroundChoice::Transparent, BackgroundChoice::Paper]
-                    .map(|b| (b, b.label()));
+                let choices = [
+                    BackgroundChoice::Transparent,
+                    BackgroundChoice::Paper,
+                    BackgroundChoice::Colour,
+                ]
+                .map(|b| (b, b.label()));
                 combo(
                     ui,
                     "Background",
@@ -243,6 +481,21 @@ fn export_fields(
                     ops,
                     ExportDialogOp::SetBackground,
                 );
+            }
+            if let Some(c) = v.background_colour {
+                ui.label("Background colour");
+                let mut rgba = [c.r, c.g, c.b, c.a];
+                let r = ui.color_edit_button_srgba_unmultiplied(&mut rgba);
+                labelled(ui, &r, "Export background colour");
+                if r.changed() && rgba != [c.r, c.g, c.b, c.a] {
+                    ops.push(ExportDialogOp::SetBackgroundColour(Rgba8 {
+                        r: rgba[0],
+                        g: rgba[1],
+                        b: rgba[2],
+                        a: rgba[3],
+                    }));
+                }
+                ui.end_row();
             }
             if let Some(q) = v.quality {
                 ui.label("Quality");
@@ -253,6 +506,18 @@ fn export_fields(
                     ops.push(ExportDialogOp::SetQuality(x));
                 }
                 ui.end_row();
+            }
+            if let Some(p) = v.png {
+                png_fields(ui, p, ops);
+            }
+            if let Some(j) = v.jpeg {
+                jpeg_fields(ui, j, ops);
+            }
+            if let Some(p) = v.pdf {
+                pdf_fields(ui, p, ops);
+            }
+            if let Some(s) = v.svg {
+                svg_fields(ui, s, ops);
             }
         });
     if let Some(note) = &v.flatten_note {

@@ -11,10 +11,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use xarast_app::export_dialog::{
-    AreaChoice, BackgroundChoice, ExportDialogOp, ExportPhase, FormatId, SizingEdit,
+    AreaChoice, BackgroundChoice, BlendFidelity, ExportDialogOp, ExportPhase, FormatId,
+    JpegOptions, PdfOptions, PngColour, PngDepth, PngOptions, Rgba8, SizingEdit, Subsampling,
+    SvgOptions, TextOutput,
 };
 use xarast_app::{AppState, DocumentId, Intent, Session};
 use xarast_doc::synth::{SynthSpec, synthetic_document};
+use xarast_geom::{Mp, Point, Rect};
 
 const FONTS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../xarast-text/tests/fonts");
 
@@ -69,7 +72,10 @@ fn app_export(input: &Path, out: &Path, ops: &[ExportDialogOp]) {
 /// The same export described both ways: command-line flags and the
 /// dialog's operations.
 fn cases() -> Vec<(&'static str, Vec<&'static str>, Vec<ExportDialogOp>)> {
-    use ExportDialogOp::{SetArea, SetBackground, SetFormat, SetQuality, Sizing};
+    use ExportDialogOp::{
+        SetArea, SetBackground, SetBackgroundColour, SetBleed, SetFormat, SetJpeg, SetPdf, SetPng,
+        SetQuality, SetRectangle, SetSvg, Sizing,
+    };
     vec![
         ("png", vec![], vec![]),
         (
@@ -94,6 +100,106 @@ fn cases() -> Vec<(&'static str, Vec<&'static str>, Vec<ExportDialogOp>)> {
         ("webp", vec![], vec![SetFormat(FormatId::WebP)]),
         ("pdf", vec![], vec![SetFormat(FormatId::Pdf)]),
         ("svg", vec![], vec![SetFormat(FormatId::Svg)]),
+        // The options the dialog gained (XARA-T-0350).
+        (
+            "png",
+            vec![
+                "--bleed",
+                "6",
+                "--background",
+                "ff8800",
+                "--depth",
+                "16",
+                "--colour",
+                "grey",
+                "--interlace",
+                "--no-dpi",
+            ],
+            vec![
+                SetBleed(Mp::from_pt(6.0)),
+                SetBackgroundColour(Rgba8 {
+                    r: 0xff,
+                    g: 0x88,
+                    b: 0,
+                    a: 255,
+                }),
+                SetPng(PngOptions {
+                    bit_depth: PngDepth::Sixteen,
+                    colour: PngColour::Grey,
+                    interlace: true,
+                    write_dpi: false,
+                    ..PngOptions::default()
+                }),
+            ],
+        ),
+        (
+            "png",
+            vec!["--area", "10,20,210,170", "--background", "11223380"],
+            vec![
+                SetArea(AreaChoice::Rectangle),
+                SetRectangle(Rect::new(
+                    Point::new(Mp::from_pt(10.0), Mp::from_pt(20.0)),
+                    Point::new(Mp::from_pt(210.0), Mp::from_pt(170.0)),
+                )),
+                SetBackgroundColour(Rgba8 {
+                    r: 0x11,
+                    g: 0x22,
+                    b: 0x33,
+                    a: 0x80,
+                }),
+            ],
+        ),
+        (
+            "jpg",
+            vec!["--progressive", "--subsampling", "444", "--bleed", "3"],
+            vec![
+                SetFormat(FormatId::Jpeg),
+                SetBleed(Mp::from_pt(3.0)),
+                SetJpeg(JpegOptions {
+                    progressive: true,
+                    subsampling: Subsampling::S444,
+                    ..JpegOptions::default()
+                }),
+            ],
+        ),
+        (
+            "pdf",
+            vec![
+                "--raster-dpi",
+                "150",
+                "--blend",
+                "native",
+                "--no-compress",
+                "--text",
+                "outlines",
+                "--bleed",
+                "9",
+            ],
+            vec![
+                SetFormat(FormatId::Pdf),
+                SetBleed(Mp::from_pt(9.0)),
+                SetPdf(PdfOptions {
+                    rasterise_dpi: 150,
+                    blend_fidelity: BlendFidelity::PreferNative,
+                    compress: false,
+                    text: TextOutput::Outlines,
+                    ..PdfOptions::default()
+                }),
+            ],
+        ),
+        (
+            "svg",
+            vec!["--minify", "--text", "outlines", "--area", "page"],
+            vec![
+                SetFormat(FormatId::Svg),
+                SetArea(AreaChoice::Page),
+                SetSvg(SvgOptions {
+                    minify: true,
+                    text: TextOutput::Outlines,
+                    ..SvgOptions::default()
+                }),
+            ],
+        ),
     ]
 }
 

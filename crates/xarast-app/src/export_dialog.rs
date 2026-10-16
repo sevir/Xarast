@@ -16,12 +16,17 @@
 
 use std::path::{Path, PathBuf};
 
-use xarast_geom::{Mp, Rect};
+pub use xarast_color::Rgba8;
+use xarast_geom::{Mp, Point, Rect};
 pub use xarast_io::model::DPI_RANGE;
 use xarast_io::{
     Background, ExportArea, ExportReport, ExportRequest, ExportSizing, FormatOptions, Registry,
 };
-pub use xarast_io::{Capabilities, FormatId, SizingEdit, Stage};
+pub use xarast_io::{
+    BlendFidelity, Capabilities, FormatId, JpegOptions, PDF_RASTERISE_DPI, PdfOptions, PngColour,
+    PngCompression, PngDepth, PngOptions, SizingEdit, Stage, Subsampling, SvgOptions, SvgResources,
+    TextOutput,
+};
 use xarast_render::RenderQuality;
 
 use crate::session::{DocumentId, Session};
@@ -37,15 +42,18 @@ pub enum AreaChoice {
     Spread,
     /// The bounds of the selected objects.
     Selection,
+    /// A rectangle typed in ([`ExportDialogOp::SetRectangle`]).
+    Rectangle,
 }
 
 impl AreaChoice {
     /// Every choice, in the order the dialog lists them.
-    pub const ALL: [AreaChoice; 4] = [
+    pub const ALL: [AreaChoice; 5] = [
         AreaChoice::Drawing,
         AreaChoice::Page,
         AreaChoice::Spread,
         AreaChoice::Selection,
+        AreaChoice::Rectangle,
     ];
 
     /// The label the dialog shows.
@@ -56,6 +64,7 @@ impl AreaChoice {
             AreaChoice::Page => "Page",
             AreaChoice::Spread => "Spread",
             AreaChoice::Selection => "Selection",
+            AreaChoice::Rectangle => "Rectangle",
         }
     }
 
@@ -63,6 +72,8 @@ impl AreaChoice {
     #[must_use]
     pub const fn area(self) -> ExportArea {
         match self {
+            // The rectangle itself is the dialog's: `request` fills it in.
+            AreaChoice::Rectangle => ExportArea::Rect(Rect::EMPTY),
             AreaChoice::Drawing => ExportArea::Drawing,
             AreaChoice::Page => ExportArea::Page(None),
             AreaChoice::Spread => ExportArea::Spread,
@@ -78,6 +89,8 @@ pub enum BackgroundChoice {
     Transparent,
     /// The document's paper colour.
     Paper,
+    /// A colour chosen in the dialog ([`ExportDialogOp::SetBackgroundColour`]).
+    Colour,
 }
 
 impl BackgroundChoice {
@@ -87,13 +100,15 @@ impl BackgroundChoice {
         match self {
             BackgroundChoice::Transparent => "Transparent",
             BackgroundChoice::Paper => "Paper colour",
+            BackgroundChoice::Colour => "Colour",
         }
     }
 
-    const fn background(self) -> Background {
+    const fn background(self, colour: Rgba8) -> Background {
         match self {
             BackgroundChoice::Transparent => Background::Transparent,
             BackgroundChoice::Paper => Background::Paper,
+            BackgroundChoice::Colour => Background::Colour(colour),
         }
     }
 }
@@ -111,6 +126,20 @@ pub enum ExportDialogOp {
     LockAspect(bool),
     /// Choose the background (formats with alpha).
     SetBackground(BackgroundChoice),
+    /// The colour of the [`BackgroundChoice::Colour`] background.
+    SetBackgroundColour(Rgba8),
+    /// The rectangle of [`AreaChoice::Rectangle`] (document units, y up).
+    SetRectangle(Rect),
+    /// Grow the area by this much on every side (zero or more).
+    SetBleed(Mp),
+    /// The PNG options, whole (PNG only).
+    SetPng(PngOptions),
+    /// The JPEG options, whole (JPEG only).
+    SetJpeg(JpegOptions),
+    /// The PDF options, whole (PDF only).
+    SetPdf(PdfOptions),
+    /// The SVG options, whole (SVG only).
+    SetSvg(SvgOptions),
     /// Set the quality, 1 to 100 (lossy formats).
     SetQuality(u8),
     /// Ask where to write the file, then export.
@@ -176,6 +205,20 @@ pub struct ExportDialogView {
     pub physical: Option<(Mp, Mp)>,
     /// The background: `alpha` only.
     pub background: Option<BackgroundChoice>,
+    /// The colour of a [`BackgroundChoice::Colour`] background.
+    pub background_colour: Option<Rgba8>,
+    /// The rectangle, while [`AreaChoice::Rectangle`] is chosen.
+    pub rectangle: Option<Rect>,
+    /// The margin added around the area.
+    pub bleed: Mp,
+    /// PNG options: the PNG format only.
+    pub png: Option<PngOptions>,
+    /// JPEG options besides the quality: the JPEG format only.
+    pub jpeg: Option<JpegOptions>,
+    /// PDF options: the PDF format only.
+    pub pdf: Option<PdfOptions>,
+    /// SVG options: the SVG format only.
+    pub svg: Option<SvgOptions>,
     /// What happens to transparency: formats without alpha only.
     pub flatten_note: Option<String>,
     /// Quality, 1 to 100: `lossy` only.
@@ -202,6 +245,9 @@ pub struct ExportDialog {
     sizing: ExportSizing,
     sizing_error: Option<String>,
     background: BackgroundChoice,
+    background_colour: Rgba8,
+    rect: Rect,
+    bleed: Mp,
     /// The file name offered, without its extension.
     stem: String,
     directory: Option<PathBuf>,
@@ -218,10 +264,14 @@ impl ExportDialog {
         let formats: Vec<(FormatId, Capabilities)> =
             registry.all().map(|e| (e.id(), e.capabilities())).collect();
         let options = registry.all().map(|e| e.default_options()).collect();
-        let areas = AreaChoice::ALL
+        let mut areas: Vec<(AreaChoice, Rect)> = AreaChoice::ALL
             .into_iter()
+            .filter(|a| *a != AreaChoice::Rectangle)
             .filter_map(|a| session.resolve_area(&a.area()).ok().map(|r| (a, r)))
             .collect();
+        // The typed rectangle starts as the drawing (or the page).
+        let rect = areas.first().map_or(Rect::EMPTY, |a| a.1);
+        areas.push((AreaChoice::Rectangle, rect));
         let stem = match &session.path {
             Some(p) => p.file_stem().map_or_else(
                 || "Untitled".to_owned(),
@@ -248,10 +298,16 @@ impl ExportDialog {
             sizing: ExportSizing::default(),
             sizing_error: None,
             background: BackgroundChoice::Transparent,
+            background_colour: Rgba8::WHITE,
+            rect,
+            bleed: Mp::ZERO,
             stem,
             directory,
             phase: ExportPhase::Editing,
         };
+        if let Some(h) = session.doc.meta.export_hints.as_deref() {
+            d.restore(h, registry);
+        }
         d.resize_to_area();
         d
     }
@@ -287,8 +343,12 @@ impl ExportDialog {
         self.options.iter_mut().find(|o| o.format() == f)
     }
 
+    /// The area as exported: the chosen one grown by the bleed.
     fn area_rect(&self) -> Option<Rect> {
-        self.areas.iter().find(|a| a.0 == self.area).map(|a| a.1)
+        let raw = self.areas.iter().find(|a| a.0 == self.area).map(|a| a.1)?;
+        let mut req = ExportRequest::new(self.options(), PathBuf::new());
+        req.bleed = self.bleed;
+        req.bled(raw).ok()
     }
 
     /// The area at its own size again, keeping the resolution.
@@ -337,6 +397,62 @@ impl ExportDialog {
             }
             ExportDialogOp::LockAspect(on) => self.sizing.lock_aspect = on,
             ExportDialogOp::SetBackground(b) => self.background = b,
+            ExportDialogOp::SetBackgroundColour(c) => {
+                self.background_colour = c;
+                self.background = BackgroundChoice::Colour;
+            }
+            ExportDialogOp::SetRectangle(r) => {
+                self.rect = r;
+                if let Some(a) = self.areas.iter_mut().find(|a| a.0 == AreaChoice::Rectangle) {
+                    a.1 = r;
+                }
+                if self.area == AreaChoice::Rectangle {
+                    self.resize_to_area();
+                }
+            }
+            ExportDialogOp::SetBleed(b) => {
+                self.bleed = Mp::new(b.raw().max(0));
+                self.resize_to_area();
+            }
+            ExportDialogOp::SetPng(o) => {
+                let colour = match o.colour {
+                    PngColour::Palette { max_colours } => PngColour::Palette {
+                        max_colours: max_colours.clamp(1, 256),
+                    },
+                    c => c,
+                };
+                if let Some(FormatOptions::Png(p)) = self.options_mut() {
+                    // Not offered: the oxipng pass (a build feature).
+                    *p = PngOptions {
+                        colour,
+                        optimise: p.optimise,
+                        ..o
+                    };
+                }
+            }
+            ExportDialogOp::SetJpeg(o) => {
+                if let Some(FormatOptions::Jpeg(j)) = self.options_mut() {
+                    *j = JpegOptions {
+                        quality: o.quality.clamp(1, 100),
+                        ..o
+                    };
+                }
+            }
+            ExportDialogOp::SetPdf(o) => {
+                if let Some(FormatOptions::Pdf(p)) = self.options_mut() {
+                    *p = PdfOptions {
+                        rasterise_dpi: o
+                            .rasterise_dpi
+                            .clamp(PDF_RASTERISE_DPI.0, PDF_RASTERISE_DPI.1),
+                        ..o
+                    };
+                }
+            }
+            ExportDialogOp::SetSvg(o) => {
+                if let Some(FormatOptions::Svg(v)) = self.options_mut() {
+                    *v = o;
+                }
+            }
             ExportDialogOp::SetQuality(q) => {
                 if let Some(FormatOptions::Jpeg(j)) = self.options_mut() {
                     j.quality = q.clamp(1, 100);
@@ -391,6 +507,26 @@ impl ExportDialog {
             dpi: caps.has_dpi.then_some(self.sizing.dpi),
             physical: caps.has_dpi.then_some(self.sizing.physical),
             background: caps.alpha.then_some(self.background),
+            background_colour: (caps.alpha && self.background == BackgroundChoice::Colour)
+                .then_some(self.background_colour),
+            rectangle: (self.area == AreaChoice::Rectangle).then_some(self.rect),
+            bleed: self.bleed,
+            png: match self.options() {
+                FormatOptions::Png(p) => Some(p),
+                _ => None,
+            },
+            jpeg: match self.options() {
+                FormatOptions::Jpeg(j) => Some(j),
+                _ => None,
+            },
+            pdf: match self.options() {
+                FormatOptions::Pdf(p) => Some(p),
+                _ => None,
+            },
+            svg: match self.options() {
+                FormatOptions::Svg(v) => Some(v),
+                _ => None,
+            },
             flatten_note: (!caps.alpha).then(|| {
                 format!(
                     "{} has no transparency: transparent areas are flattened onto the \
@@ -429,16 +565,137 @@ impl ExportDialog {
     pub fn request(&self, destination: &Path) -> ExportRequest {
         let caps = self.capabilities();
         let mut req = ExportRequest::new(self.options(), with_extension(destination, self.format));
-        req.area = self.area.area();
+        req.area = match self.area {
+            AreaChoice::Rectangle => ExportArea::Rect(self.rect),
+            a => a.area(),
+        };
+        req.bleed = self.bleed;
         req.sizing = self.sizing;
         req.quality = RenderQuality::Final;
         req.background = if caps.alpha {
-            self.background.background()
+            self.background.background(self.background_colour)
         } else {
             // Flattened onto the paper by the exporter, which says so.
             Background::Transparent
         };
         req
+    }
+
+    /// The options to remember with the document (T11.1.5): everything the
+    /// dialog edits, as JSON. Deterministic (object keys sorted).
+    #[must_use]
+    pub fn hints(&self) -> String {
+        use serde_json::{Value, json};
+        let r = self.rect;
+        let background = match self.background {
+            BackgroundChoice::Transparent => "transparent",
+            BackgroundChoice::Paper => "paper",
+            BackgroundChoice::Colour => "colour",
+        };
+        let c = self.background_colour;
+        let options: Vec<Value> = self
+            .options
+            .iter()
+            .filter_map(|o| serde_json::to_value(o).ok())
+            .collect();
+        json!({
+            "version": 1,
+            "format": self.format,
+            "area": match self.area {
+                AreaChoice::Drawing => "drawing",
+                AreaChoice::Page => "page",
+                AreaChoice::Spread => "spread",
+                AreaChoice::Selection => "selection",
+                AreaChoice::Rectangle => "rectangle",
+            },
+            "rectangle": [r.lo.x.raw(), r.lo.y.raw(), r.hi.x.raw(), r.hi.y.raw()],
+            "bleed": self.bleed.raw(),
+            "dpi": self.sizing.dpi,
+            "lock_aspect": self.sizing.lock_aspect,
+            "background": background,
+            "colour": [c.r, c.g, c.b, c.a],
+            "options": options,
+        })
+        .to_string()
+    }
+
+    /// Takes remembered options back (the inverse of [`ExportDialog::hints`]).
+    /// Anything missing, unreadable or no longer valid keeps its default:
+    /// a hint written by another build never stops the dialog opening.
+    fn restore(&mut self, hints: &str, registry: &Registry) {
+        use serde_json::Value;
+        let Ok(v) = serde_json::from_str::<Value>(hints) else {
+            return;
+        };
+        if let Some(Value::Array(list)) = v.get("options") {
+            for o in list {
+                if let Ok(o) = serde_json::from_value::<FormatOptions>(o.clone())
+                    && let Some(slot) = self.options.iter_mut().find(|x| x.format() == o.format())
+                {
+                    *slot = o;
+                }
+            }
+        }
+        if let Some(f) = v
+            .get("format")
+            .and_then(|f| serde_json::from_value::<FormatId>(f.clone()).ok())
+            && registry.get(f).is_some()
+        {
+            self.format = f;
+        }
+        let area = match v.get("area").and_then(Value::as_str) {
+            Some("page") => Some(AreaChoice::Page),
+            Some("spread") => Some(AreaChoice::Spread),
+            Some("rectangle") => Some(AreaChoice::Rectangle),
+            Some("drawing") => Some(AreaChoice::Drawing),
+            // A selection does not outlive the session.
+            _ => None,
+        };
+        let int = |x: &Value| x.as_i64().and_then(|n| i32::try_from(n).ok());
+        if let Some(Value::Array(r)) = v.get("rectangle")
+            && let [x0, y0, x1, y1] = r.iter().filter_map(int).collect::<Vec<_>>()[..]
+        {
+            let rect = Rect::new(
+                Point::new(Mp::new(x0), Mp::new(y0)),
+                Point::new(Mp::new(x1), Mp::new(y1)),
+            );
+            if !rect.is_empty() {
+                self.rect = rect;
+                if let Some(a) = self.areas.iter_mut().find(|a| a.0 == AreaChoice::Rectangle) {
+                    a.1 = rect;
+                }
+            }
+        }
+        if let Some(a) = area
+            && self.areas.iter().any(|x| x.0 == a)
+        {
+            self.area = a;
+        }
+        if let Some(b) = v.get("bleed").and_then(int) {
+            self.bleed = Mp::new(b.max(0));
+        }
+        if let Some(d) = v.get("dpi").and_then(Value::as_f64)
+            && DPI_RANGE.0 <= d
+            && d <= DPI_RANGE.1
+        {
+            self.sizing = ExportSizing::at_dpi(d);
+        }
+        if let Some(l) = v.get("lock_aspect").and_then(Value::as_bool) {
+            self.sizing.lock_aspect = l;
+        }
+        self.background = match v.get("background").and_then(Value::as_str) {
+            Some("paper") => BackgroundChoice::Paper,
+            Some("colour") => BackgroundChoice::Colour,
+            _ => BackgroundChoice::Transparent,
+        };
+        if let Some(Value::Array(c)) = v.get("colour")
+            && let [r, g, b, a] = c
+                .iter()
+                .filter_map(|x| x.as_u64().and_then(|n| u8::try_from(n).ok()))
+                .collect::<Vec<_>>()[..]
+        {
+            self.background_colour = Rgba8 { r, g, b, a };
+        }
     }
 
     /// Records a finished export.
@@ -513,6 +770,7 @@ fn bytes(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use xarast_io::ExportArea;
 
     fn dialog() -> ExportDialog {
         let s = Session::new_empty(DocumentId(1));
@@ -535,6 +793,12 @@ mod tests {
             assert_eq!(v.background.is_some(), c.alpha, "{:?}", e.id());
             assert_eq!(v.flatten_note.is_some(), !c.alpha, "{:?}", e.id());
             assert_eq!(v.quality.is_some(), c.lossy, "{:?}", e.id());
+            // Per-format options: only the chosen format's.
+            let id = e.id();
+            assert_eq!(v.png.is_some(), id == FormatId::Png, "{id:?}");
+            assert_eq!(v.jpeg.is_some(), id == FormatId::Jpeg, "{id:?}");
+            assert_eq!(v.pdf.is_some(), id == FormatId::Pdf, "{id:?}");
+            assert_eq!(v.svg.is_some(), id == FormatId::Svg, "{id:?}");
         }
         d.apply(ExportDialogOp::SetFormat(FormatId::Jpeg));
         let v = d.view();
@@ -623,5 +887,146 @@ mod tests {
             d.request(Path::new("x.png")).destination,
             PathBuf::from("x.png.jpg")
         );
+    }
+
+    #[test]
+    fn bleed_and_a_rectangle_change_the_area_and_the_size() {
+        let mut d = dialog();
+        let page = d.view().pixels.unwrap();
+        d.apply(ExportDialogOp::SetBleed(Mp::from_pt(72.0)));
+        let bled = d.view().pixels.unwrap();
+        // One inch each side at 96 dpi.
+        assert_eq!(bled.0, page.0 + 192, "{page:?} {bled:?}");
+        assert_eq!(d.request(Path::new("x")).bleed, Mp::from_pt(72.0));
+        // A negative bleed is no bleed.
+        d.apply(ExportDialogOp::SetBleed(Mp::from_pt(-5.0)));
+        assert_eq!(d.view().bleed, Mp::ZERO);
+        // A rectangle of 100 x 50 pt.
+        d.apply(ExportDialogOp::SetArea(AreaChoice::Rectangle));
+        let r = Rect::new(
+            Point::new(Mp::from_pt(10.0), Mp::from_pt(10.0)),
+            Point::new(Mp::from_pt(110.0), Mp::from_pt(60.0)),
+        );
+        d.apply(ExportDialogOp::SetRectangle(r));
+        assert_eq!(d.view().rectangle, Some(r));
+        assert_eq!(d.view().pixels, Some((133, 67)));
+        assert_eq!(d.request(Path::new("x")).area, ExportArea::Rect(r));
+        // An empty rectangle cannot be exported.
+        d.apply(ExportDialogOp::SetRectangle(Rect::EMPTY));
+        assert!(!d.view().can_export);
+        d.apply(ExportDialogOp::SetArea(AreaChoice::Page));
+        assert_eq!(d.view().rectangle, None);
+    }
+
+    #[test]
+    fn format_options_are_taken_whole_and_kept_per_format() {
+        let mut d = dialog();
+        // PNG options do nothing while another format is chosen.
+        d.apply(ExportDialogOp::SetFormat(FormatId::Jpeg));
+        d.apply(ExportDialogOp::SetPng(PngOptions {
+            interlace: true,
+            ..PngOptions::default()
+        }));
+        d.apply(ExportDialogOp::SetFormat(FormatId::Png));
+        assert_eq!(d.view().png, Some(PngOptions::default()));
+        d.apply(ExportDialogOp::SetPng(PngOptions {
+            interlace: true,
+            colour: PngColour::Palette { max_colours: 900 },
+            ..PngOptions::default()
+        }));
+        let p = d.view().png.unwrap();
+        assert!(p.interlace);
+        assert_eq!(p.colour, PngColour::Palette { max_colours: 256 });
+        d.apply(ExportDialogOp::SetFormat(FormatId::Pdf));
+        d.apply(ExportDialogOp::SetPdf(PdfOptions {
+            rasterise_dpi: 5,
+            ..PdfOptions::default()
+        }));
+        assert_eq!(d.view().pdf.unwrap().rasterise_dpi, PDF_RASTERISE_DPI.0);
+        d.apply(ExportDialogOp::SetFormat(FormatId::Png));
+        assert!(d.view().png.unwrap().interlace, "switching back keeps them");
+        match d.request(Path::new("x.png")).options {
+            FormatOptions::Png(p) => assert!(p.interlace),
+            o => panic!("{o:?}"),
+        }
+    }
+
+    #[test]
+    fn a_background_colour_reaches_the_request_only_where_alpha_exists() {
+        let mut d = dialog();
+        let c = Rgba8 {
+            r: 1,
+            g: 2,
+            b: 3,
+            a: 200,
+        };
+        d.apply(ExportDialogOp::SetBackgroundColour(c));
+        let v = d.view();
+        assert_eq!(v.background, Some(BackgroundChoice::Colour));
+        assert_eq!(v.background_colour, Some(c));
+        assert_eq!(d.request(Path::new("x")).background, Background::Colour(c));
+        d.apply(ExportDialogOp::SetBackground(BackgroundChoice::Paper));
+        assert_eq!(d.view().background_colour, None);
+        d.apply(ExportDialogOp::SetBackground(BackgroundChoice::Colour));
+        d.apply(ExportDialogOp::SetFormat(FormatId::Jpeg));
+        let v = d.view();
+        assert_eq!((v.background, v.background_colour), (None, None));
+        assert_eq!(
+            d.request(Path::new("x")).background,
+            Background::Transparent
+        );
+    }
+
+    #[test]
+    fn remembered_options_come_back_with_the_document() {
+        let mut d = dialog();
+        d.apply(ExportDialogOp::SetFormat(FormatId::Jpeg));
+        d.apply(ExportDialogOp::SetQuality(61));
+        d.apply(ExportDialogOp::SetBleed(Mp::from_pt(3.0)));
+        d.apply(ExportDialogOp::SetArea(AreaChoice::Page));
+        d.apply(ExportDialogOp::Sizing(SizingEdit::Dpi(200.0)));
+        d.apply(ExportDialogOp::LockAspect(false));
+        d.apply(ExportDialogOp::SetFormat(FormatId::Png));
+        d.apply(ExportDialogOp::SetBackgroundColour(Rgba8 {
+            r: 9,
+            g: 8,
+            b: 7,
+            a: 255,
+        }));
+        d.apply(ExportDialogOp::SetPng(PngOptions {
+            interlace: true,
+            ..PngOptions::default()
+        }));
+        d.apply(ExportDialogOp::SetFormat(FormatId::Svg));
+        let hints = d.hints();
+        // Deterministic.
+        assert_eq!(hints, d.hints());
+
+        let mut s = Session::new_empty(DocumentId(1));
+        s.doc.meta.export_hints = Some(hints);
+        let mut again = ExportDialog::open(&s, &Registry::with_builtin());
+        assert_eq!(again.view(), d.view());
+        // Switching format shows the other formats' remembered options.
+        again.apply(ExportDialogOp::SetFormat(FormatId::Jpeg));
+        assert_eq!(again.view().quality, Some(61));
+        again.apply(ExportDialogOp::SetFormat(FormatId::Png));
+        assert!(again.view().png.unwrap().interlace);
+    }
+
+    #[test]
+    fn hints_that_are_garbage_or_from_another_build_are_ignored() {
+        let fresh = dialog().view();
+        for h in [
+            "",
+            "not json",
+            "[]",
+            r#"{"format":"tga","area":"nowhere","dpi":-4,"bleed":"x","options":[{"format":"png","bit_depth":"nine"}]}"#,
+            r#"{"area":"selection","rectangle":[1,2,3],"dpi":1e99}"#,
+        ] {
+            let mut s = Session::new_empty(DocumentId(1));
+            s.doc.meta.export_hints = Some(h.to_owned());
+            let d = ExportDialog::open(&s, &Registry::with_builtin());
+            assert_eq!(d.view(), fresh, "{h}");
+        }
     }
 }

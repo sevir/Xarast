@@ -216,3 +216,103 @@ fn escape_cancels() {
     h.run();
     assert_eq!(ops(&out), [ExportDialogOp::Cancel]);
 }
+
+#[test]
+fn per_format_options_appear_only_for_their_format() {
+    // Bleed and the area are the format-independent additions.
+    let cases: [(FormatId, &[&str]); 5] = [
+        (
+            FormatId::Png,
+            &[
+                "Export depth",
+                "Export colour type",
+                "Export compression",
+                "Interlaced (Adam7)",
+                "Write the resolution",
+            ],
+        ),
+        (
+            FormatId::Jpeg,
+            &[
+                "Export chroma subsampling",
+                "Progressive",
+                "Write the resolution",
+            ],
+        ),
+        (FormatId::WebP, &[]),
+        (
+            FormatId::Pdf,
+            &[
+                "Resolution of rasterised objects in dots per inch",
+                "Export transparency",
+                "Export text",
+                "Compress streams",
+            ],
+        ),
+        (
+            FormatId::Svg,
+            &[
+                "Export images",
+                "Export text",
+                "Minify",
+                "Indent for reading",
+            ],
+        ),
+    ];
+    let every: [&str; 12] = [
+        "Export depth",
+        "Export colour type",
+        "Export compression",
+        "Export chroma subsampling",
+        "Export transparency",
+        "Export images",
+        "Interlaced (Adam7)",
+        "Progressive",
+        "Compress streams",
+        "Minify",
+        "Indent for reading",
+        "Resolution of rasterised objects in dots per inch",
+    ];
+    for (format, wanted) in cases {
+        let v = view_for(format);
+        let out = RefCell::new(Vec::new());
+        let h = harness(&v, &out);
+        h.get_by_label("Bleed in millimetres");
+        for label in every {
+            assert_eq!(
+                h.query_by_label(label).is_some(),
+                wanted.contains(&label),
+                "{format:?}: {label}"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_option_edit_sends_the_whole_options() {
+    let v = view_for(FormatId::Png);
+    let out = RefCell::new(Vec::new());
+    let mut h = harness(&v, &out);
+    h.get_by_label("Interlaced (Adam7)").click();
+    h.run();
+    let mut want = v.png.unwrap();
+    want.interlace = true;
+    assert_eq!(ops(&out), [ExportDialogOp::SetPng(want)]);
+}
+
+#[test]
+fn the_rectangle_fields_follow_the_rectangle_area() {
+    let mut v = view_for(FormatId::Png);
+    let out = RefCell::new(Vec::new());
+    assert!(
+        harness(&v, &out)
+            .query_by_label("Left in millimetres")
+            .is_none()
+    );
+    v.rectangle = Some(xarast_geom::Rect::raw(0, 0, 72_000, 36_000));
+    v.area = xarast_app::export_dialog::AreaChoice::Rectangle;
+    let h = harness(&v, &out);
+    for l in ["Left", "Bottom", "Right", "Top"] {
+        h.get_by_label(&format!("{l} in millimetres"));
+    }
+}

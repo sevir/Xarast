@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use xarast_app::export::{ExportProgress, ExportWorker};
-use xarast_app::export_dialog::{BackgroundChoice, ExportDialogOp, ExportPhase, SizingEdit};
+use xarast_app::export_dialog::{AreaChoice, BackgroundChoice, ExportDialogOp, ExportPhase, SizingEdit};
 use xarast_app::{AppState, DocumentId, Intent, PlatformRequest, Session};
 use xarast_doc::synth::{SynthSpec, synthetic_document};
 use xarast_io::{ExportError, ExportRequest, FormatId, FormatOptions, NoProgress, Registry, Stage};
@@ -308,5 +308,49 @@ fn closing_the_dialog_mid_export_leaves_no_file() {
         app.export_dialog_view().unwrap().phase,
         ExportPhase::Editing
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// T11.1.5: a finished export leaves its options on the document; the
+/// next save writes them, and the dialog of the reopened file starts
+/// from them. A failed or cancelled export remembers nothing.
+#[test]
+fn the_options_of_an_export_travel_with_the_saved_document() {
+    let dir = scratch("hints");
+    let mut app = AppState::new();
+    app.adopt(synthetic_document(SynthSpec {
+        nodes: 300,
+        ..SynthSpec::default()
+    }));
+    assert_eq!(app.active().unwrap().doc.meta.export_hints, None);
+    let modified = app.active().unwrap().is_modified();
+    let op = |app: &mut AppState, op| app.apply(Intent::ExportDialog(op)).unwrap();
+    app.apply(Intent::ShowExportDialog).unwrap();
+    op(&mut app, ExportDialogOp::SetArea(AreaChoice::Page));
+    op(&mut app, ExportDialogOp::SetBleed(xarast_geom::Mp::from_pt(6.0)));
+    op(&mut app, ExportDialogOp::Sizing(SizingEdit::Dpi(120.0)));
+    // Choosing nothing remembers nothing.
+    op(&mut app, ExportDialogOp::Export);
+    app.apply(Intent::ExportFileDialogClosed).unwrap();
+    assert_eq!(app.active().unwrap().doc.meta.export_hints, None);
+
+    op(&mut app, ExportDialogOp::Export);
+    app.apply(Intent::ExportTo(dir.join("a.png"))).unwrap();
+    app.wait_exports();
+    let hints = app.active().unwrap().doc.meta.export_hints.clone();
+    assert!(hints.is_some());
+    // Exporting is not an edit: no undo step, nothing to save.
+    assert_eq!(app.active().unwrap().is_modified(), modified);
+
+    let own = dir.join("drawing.xarast");
+    app.active_mut().unwrap().save_as(&own).expect("saves");
+    let mut again = AppState::new();
+    again.open(&own).expect("opens");
+    assert_eq!(again.active().unwrap().doc.meta.export_hints, hints);
+    again.apply(Intent::ShowExportDialog).unwrap();
+    let v = again.export_dialog_view().unwrap();
+    assert_eq!(v.area, AreaChoice::Page);
+    assert_eq!(v.bleed, xarast_geom::Mp::from_pt(6.0));
+    assert_eq!(v.dpi, Some(120.0));
     let _ = std::fs::remove_dir_all(&dir);
 }

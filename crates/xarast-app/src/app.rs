@@ -892,6 +892,19 @@ impl AppState {
             Err(xarast_io::ExportError::Cancelled) => "Export cancelled".to_owned(),
             Err(e) => format!("Could not export {name}: {e}"),
         });
+        // The options of an export that worked are remembered with the
+        // document (T11.1.5): in memory now, in `meta.xml` at the next
+        // save. They are not an edit: no undo step, no unsaved mark.
+        if o.result.is_ok()
+            && let Some(d) = &self.export
+        {
+            let hints = d.hints();
+            if let Some(s) = self.docs.get_mut(d.doc)
+                && s.doc.meta.export_hints.as_deref() != Some(hints.as_str())
+            {
+                s.doc.meta.export_hints = Some(hints);
+            }
+        }
         if let Some(d) = &mut self.export {
             d.finish(o.destination, o.result);
         }
