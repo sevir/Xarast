@@ -2,13 +2,14 @@
 id: XARA-T-0316
 type: task
 title: A4 wiring — flush RegenQueue before paint and draw LiveOutput::Shapes
-status: backlog
+status: done
 priority: medium
 parent: XARA-US-0068
 author: mcp
 labels: [phase-13, live-effects, app]
 created: 2026-09-24T18:06:47Z
-updated: 2026-09-24T18:06:47Z
+updated: 2026-10-16T00:08:30Z
+closed: 2026-10-16T00:08:30Z
 ---
 
 ## Description

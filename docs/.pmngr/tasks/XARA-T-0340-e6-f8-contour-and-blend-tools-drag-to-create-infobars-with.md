@@ -2,14 +2,15 @@
 id: XARA-T-0340
 type: task
 title: "E6, F8 — Contour and Blend tools: drag to create, infobars with numeric fields, edit ends live, remove, undo"
-status: in_progress
+status: done
 priority: high
 parent: XARA-US-0070
 author: mcp
 labels: [phase-13, live-effects, tools, ui, app]
 created: 2026-10-15T23:20:43Z
-updated: 2026-10-15T23:20:43Z
+updated: 2026-10-16T00:08:22Z
 started: 2026-10-15T23:20:43Z
+closed: 2026-10-16T00:08:22Z
 ---
 
 ## Description
