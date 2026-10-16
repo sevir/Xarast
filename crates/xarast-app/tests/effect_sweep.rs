@@ -51,8 +51,11 @@ impl Command for SetAttr {
     }
 }
 
-/// A session holding flat-filled rectangles `(centre, half size, colour)`.
-fn fixture(shapes: &[((i32, i32), (f64, f64), ColourValue)]) -> (Session, Vec<NodeId>) {
+/// A rectangle to draw: centre, half size, colour.
+type Rect3 = ((i32, i32), (f64, f64), ColourValue);
+
+/// A session holding flat-filled rectangles.
+fn fixture(shapes: &[Rect3]) -> (Session, Vec<NodeId>) {
     let mut s = Session::new_empty(DocumentId(1));
     let spread = s.doc.active_spread();
     let layer = s.doc.active_layer(spread).unwrap();
