@@ -765,6 +765,39 @@ table). If the new content equals another bitmap's, both keep their ids
 and `bitmap_key` of the later one falls back to hashing (the gallery does
 this already). Journalled as `Act::ReplaceBitmap`.
 
+## Undoable bitmap insertion (XARA-T-0283, 2026-10-16)
+
+`Action::InsertBitmap { id, res }` / `Action::RemoveBitmap { id }` /
+`Tx::insert_bitmap(res) -> BitmapId`; `PlaceBitmap::insert` and the app's
+`PasteFragment::import` add their resources **inside the transaction**.
+Undo removes the entry, redo puts it back under the same key, so the
+canonical digest is restored exactly (no tombstone, no digest rule about
+unreferenced resources). Decisions:
+
+- **The bitmap table is no longer a `SlotMap`.** A slot map cannot
+  re-insert at a key. `BitmapTable` is an insertion-ordered `Vec` plus an
+  index; a `BitmapId` is still a slotmap key *type* but its value is
+  derived from the content hash (low 32 bits as index, version 1, probing
+  upward when taken, never `u32::MAX`). `DocumentResources::plan_bitmap`
+  gives the key and whether the content exists; a key is a pure function
+  of the table, so a journal replay allocates the key the live document
+  did, and a rolled-back transaction leaves nothing behind.
+- Same content already there: `Tx::insert_bitmap` returns its key and
+  records nothing, so undo never removes a resource that predates the step.
+- `Action::InsertBitmap::inverse` = `RemoveBitmap`; the inverse of
+  `RemoveBitmap` carries the resource (an `Arc`-shared payload), so a redo
+  does not depend on a sweep leaving it. Neither action is charged to the
+  history budget (`size_hint` 0), as before: the table held the resource.
+- `add_bitmap_at`/`take_bitmap` do not bump `tables_rev`; the non-
+  transactional `DocumentResources::insert_bitmap` (importers, builder,
+  tests) and sweeps still do. `collect_unused` and history eviction are
+  unchanged; an unreferenced insertion is swept like any other.
+- `bitmaps()` order is insertion order (the gallery relies on it); LIFO
+  undo/redo restores it.
+- Journal: `Act::InsertBitmap { id, res }` / `Act::RemoveBitmap`
+  (`BitmapResource` serialises through `journal::blob`: 4 KiB or more is
+  a blob). `Tables.bitmaps` is now a `Vec<(BitmapId, BitmapResource)>`.
+
 ## The operation journal's model half (XARA-T-0217, F6.6, 2026-10-16)
 
 Module `journal` (`mod.rs`, `base.rs`, `blob.rs`, `ndjson.rs`); the I/O
@@ -806,15 +839,17 @@ and the application side are `app-core.md` "Operation journal".
   `clear_history` are journalled **only through the bus methods** — a
   caller using `history_mut()` directly bypasses the journal (only tests
   do now; `colour_editor` was moved to the bus methods).
-- **Resource tables outside transactions** (`insert_bitmap` before a
-  place, `import_bitmaps` before a paste, the gallery's
-  `remove_unused_bitmap`, dashes, arrows, fonts) bump
+- **Resource tables outside transactions** (the non-transactional
+  `insert_bitmap` of importers and tests, the gallery's
+  `remove_unused_bitmap`, sweeps, dashes, arrows, fonts) bump
   `DocumentResources::tables_rev`; the recorder emits `Op::Tables` (the
   whole bitmap/dash/arrow/font tables, keys and all) before the next
   journalled operation or on `sync_journal`. Whole tables, because
-  slotmap keys cannot be chosen on insert and a deserialised slotmap's
-  free list is in a different order than the live one's: replaying an
-  insert could hand out a different `BitmapId`. The colour table needs
+  dash/arrow slotmap keys cannot be chosen on insert and a deserialised
+  slotmap's free list is in a different order than the live one's:
+  replaying an insert could hand out a different key. Bitmaps placed or
+  pasted are not in this class since XARA-T-0283: they are
+  `Act::InsertBitmap`. The colour table needs
   nothing: it only changes through `Action::SetPalette`, which carries
   the whole table.
 - **The base** (`journal::base`): a `.xarast` round trip is equivalent,

@@ -352,8 +352,11 @@ Decisions in `tools.md` 64–69; what matters on this side:
   `BitmapInfo` of a placed image is filled in (size, 32 bpp, dpi), unlike
   the `.xar` importer's; `place::bitmap_pixels` falls back to a header
   probe of the bytes when it is empty.
-- The resource is added outside the undo history and deduplicated by
-  content; `collect_unused` keeps it while a redo step holds its object.
+- The resource is added **inside the placement's transaction**
+  (`PlaceBitmap::insert`, `Action::InsertBitmap`, XARA-T-0283) and
+  deduplicated by content: undo removes it and restores the canonical
+  digest exactly, redo puts it back under the same key. A pasted
+  fragment's bitmaps behave the same (`PasteFragment::import`).
 - The object gets the original's default bitmap attributes — no line
   colour, no fill colour, zero line width
   (`xarast_doc::default_bitmap_attrs`).

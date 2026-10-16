@@ -79,6 +79,7 @@ fn scene(bus: &mut CommandBus) -> Scene {
             &PlaceBitmap {
                 layer: f.layer,
                 bitmap: node,
+                insert: None,
                 label: "Place Bitmap",
             },
         )

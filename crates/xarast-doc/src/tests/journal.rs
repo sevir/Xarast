@@ -124,6 +124,9 @@ enum JOp {
     /// Replace the first bitmap the document holds (a big payload when
     /// the seed is a multiple of three).
     ReplaceBitmap(u8),
+    /// Place a new image on the first layer, its resource added inside the
+    /// transaction (a big payload when the seed is a multiple of three).
+    PlaceNew(u8),
 }
 
 fn jop_strategy() -> impl Strategy<Value = JOp> {
@@ -141,6 +144,7 @@ fn jop_strategy() -> impl Strategy<Value = JOp> {
         1 => any::<u8>().prop_map(JOp::AddBitmap),
         1 => Just(JOp::DropBitmaps),
         1 => any::<u8>().prop_map(JOp::ReplaceBitmap),
+        2 => any::<u8>().prop_map(JOp::PlaceNew),
     ]
 }
 
@@ -160,6 +164,21 @@ fn bitmap(seed: u8, big: bool) -> BitmapResource {
         original: None,
         procedural: None,
         transparent_index: None,
+    }
+}
+
+/// A placement that adds its image in its own transaction.
+pub(super) fn place_new(layer: NodeId, seed: u8) -> crate::PlaceBitmap {
+    crate::PlaceBitmap {
+        layer,
+        bitmap: crate::bitmap_place::bitmap_node_centred(
+            crate::resources::BitmapId::default(),
+            xarast_geom::Point::raw(0, 0),
+            xarast_geom::Mp::new(1000),
+            xarast_geom::Mp::new(1000),
+        ),
+        insert: Some(bitmap(seed, seed % 3 == 0)),
+        label: "Place Bitmap",
     }
 }
 
@@ -214,6 +233,15 @@ fn apply(live: &mut Live, op: &JOp) {
                         with: bitmap(*s, s % 3 == 0),
                     },
                 );
+            }
+        }
+        JOp::PlaceNew(s) => {
+            let layer = doc.tree.preorder(doc.tree.root()).find(|n| {
+                matches!(doc.tree.kind(*n),
+                        Some(crate::kind::NodeKind::Layer(l)) if !l.guide && !l.locked)
+            });
+            if let Some(layer) = layer {
+                let _ = bus.dispatch(doc, &place_new(layer, *s));
             }
         }
         JOp::DropBitmaps => {
@@ -330,6 +358,46 @@ fn a_replace_is_journalled_and_replays_with_its_undo() {
     assert!(live.bus.redo(&mut live.doc).is_some());
     assert!(bus.redo(&mut doc).is_some());
     assert_eq!(doc.canonical_digest(), live.doc.canonical_digest());
+}
+
+/// A placement's image is journalled as an action (a big payload as a
+/// blob), not as a whole table, and replays with undo and redo.
+#[test]
+fn an_inserted_bitmap_is_journalled_as_an_action_and_replays_with_its_undo() {
+    let mut live = Live::new(edit_fixture().doc);
+    for op in [
+        JOp::PlaceNew(3),
+        JOp::PlaceNew(1),
+        JOp::Undo,
+        JOp::PlaceNew(4),
+    ] {
+        apply(&mut live, &op);
+    }
+    assert!(
+        !live.lines.iter().any(|l| l.contains("\"op\":\"tables\"")),
+        "{:#?}",
+        live.lines
+    );
+    let inserts: Vec<&String> = live
+        .lines
+        .iter()
+        .filter(|l| l.contains("insert_bitmap"))
+        .collect();
+    assert_eq!(inserts.len(), 3, "{:#?}", live.lines);
+    assert!(inserts[0].contains("\"sha256\""), "a big payload is a blob");
+    assert!(!inserts[1].contains("\"sha256\""));
+    let (mut doc, mut bus) = live.recover();
+    assert_eq!(doc.canonical_digest(), live.doc.canonical_digest());
+    for _ in 0..2 {
+        assert!(live.bus.undo(&mut live.doc).is_some());
+        assert!(bus.undo(&mut doc).is_some());
+        assert_eq!(doc.canonical_digest(), live.doc.canonical_digest());
+    }
+    assert!(live.bus.redo(&mut live.doc).is_some());
+    assert!(bus.redo(&mut doc).is_some());
+    assert_eq!(doc.canonical_digest(), live.doc.canonical_digest());
+    // The redone image is still the one the object names.
+    assert!(crate::validate::validate_document(&doc).is_clean());
 }
 
 #[test]

@@ -77,7 +77,7 @@ use crate::tree::{Attach, NodeFlags, NodeId, Tag, Tree};
 /// with their keys, whenever they change.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Tables {
-    pub(crate) bitmaps: SlotMap<BitmapId, BitmapResource>,
+    pub(crate) bitmaps: Vec<(BitmapId, BitmapResource)>,
     pub(crate) dashes: SlotMap<DashId, xarast_geom::DashPattern>,
     pub(crate) arrows: SlotMap<ArrowId, ArrowSpec>,
     pub(crate) fonts: Vec<EmbeddedFont>,
@@ -235,6 +235,18 @@ pub enum Act {
         /// The new pixels.
         new: Option<Arc<BitmapData>>,
     },
+    /// [`Action::InsertBitmap`].
+    InsertBitmap {
+        /// The key.
+        id: crate::resources::BitmapId,
+        /// The resource (its blobs above 4 KiB go to a side file).
+        res: Arc<crate::resources::BitmapResource>,
+    },
+    /// [`Action::RemoveBitmap`].
+    RemoveBitmap {
+        /// The key.
+        id: crate::resources::BitmapId,
+    },
     /// [`Action::ReplaceBitmap`].
     ReplaceBitmap {
         /// The bitmap.
@@ -309,6 +321,11 @@ pub(crate) fn act_of(tree: &Tree, a: &Action) -> Option<Act> {
             id: *id,
             new: new.clone(),
         },
+        Action::InsertBitmap { id, res } => Act::InsertBitmap {
+            id: *id,
+            res: Arc::clone(res),
+        },
+        Action::RemoveBitmap { id } => Act::RemoveBitmap { id: *id },
         Action::ReplaceBitmap { id, new } => Act::ReplaceBitmap {
             id: *id,
             new: Arc::clone(new),
@@ -396,6 +413,11 @@ fn action_of(doc: &Document, a: &Act) -> Result<Action, ReplayError> {
             id: *id,
             new: new.clone(),
         },
+        Act::InsertBitmap { id, res } => Action::InsertBitmap {
+            id: *id,
+            res: Arc::clone(res),
+        },
+        Act::RemoveBitmap { id } => Action::RemoveBitmap { id: *id },
         Act::ReplaceBitmap { id, new } => Action::ReplaceBitmap {
             id: *id,
             new: Arc::clone(new),

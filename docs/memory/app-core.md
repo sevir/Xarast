@@ -679,6 +679,15 @@ refer to).
   later one in the journal. `tests/save.rs`
   `autosave_waits_for_idle_and_interval` was changed for this: only the
   *second* snapshot waits for idle and interval.
+- **Placed and pasted bitmaps** (XARA-T-0283) are no longer a `tables`
+  entry: `place_image_at` hands the resource to `PlaceBitmap::insert` and
+  `paste_fragment` hands `bitmaps_to_import` to `PasteFragment::import`,
+  both journalled as `insert_bitmap` actions (blob for 4 KiB or more). The
+  gallery's import (inline or the background job >1 MiB) and the paste of
+  a clipboard picture end in `place_image_at`; the Replace path
+  (`finish_replace`, XARA-T-0350) was already `Action::ReplaceBitmap`.
+  Only sweeps, the gallery's Delete, dashes, arrows and fonts still
+  journal whole `tables`.
 - **Recording.** `Session::after_mutation` → `flush_journal` (sync the
   resource tables, take the bus's entries, number them, send them).
   `JournalHandle` numbers on the interface thread so an autosave knows
@@ -1009,8 +1018,8 @@ placer (XARA-T-0259, 2026-09-24, ext4, load ≈ 3): ProbeX16 UI thread
   content's is added unless another bitmap already has it) and does not
   bump `tables_rev`.
 - **Journal.** `journal::Act::ReplaceBitmap { id, new }` (id is the
-  slotmap key — the table is identical in base and replay, `Op::Tables`
-  precedes any insertion). `BitmapResource` already serialises through
+  bitmap key, content-derived since XARA-T-0283; the table is identical
+  in base and replay). `BitmapResource` already serialises through
   `journal::blob`, so pixels and original of 4 KiB or more are blobs and
   the line carries only the SHA-256 (`tests/journal.rs`
   `a_replace_is_journalled_and_replays_with_its_undo`, plus

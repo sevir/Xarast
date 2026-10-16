@@ -63,15 +63,20 @@ pub fn bitmap_node_centred(image: BitmapId, centre: Point, width: Mp, height: Mp
 }
 
 /// Places a bitmap object as the last object of a layer, carrying
-/// [`default_bitmap_attrs`] — a drop or a paste of an image. One undo step;
-/// the image resource itself is added to the document before, outside the
-/// history, as a pasted fragment's bitmaps are.
+/// [`default_bitmap_attrs`] — a drop or a paste of an image. One undo step.
+/// A new image's resource is added inside the same transaction
+/// ([`PlaceBitmap::insert`]), so undo removes it again and the canonical
+/// digest comes back exactly; redo puts it back under the same key.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlaceBitmap {
     /// The layer it goes onto.
     pub layer: NodeId,
-    /// The object.
+    /// The object. Its `image` is overwritten with the inserted resource's
+    /// key when `insert` is set.
     pub bitmap: BitmapNode,
+    /// A resource to add first, in this transaction. Deduplicated by
+    /// content: an image the document holds already is reused.
+    pub insert: Option<crate::resources::BitmapResource>,
     /// What the Edit menu calls the step ("Import Bitmap", "Paste").
     pub label: &'static str,
 }
@@ -86,12 +91,16 @@ impl Command for PlaceBitmap {
             Some(NodeKind::Layer(l)) if !l.locked && !l.guide => {}
             _ => return Err(EditError::NotPermitted(self.layer)),
         }
-        if tx.doc().resources.bitmap(self.bitmap.image).is_none() {
+        let mut bitmap = self.bitmap.clone();
+        if let Some(res) = &self.insert {
+            bitmap.image = tx.insert_bitmap(res.clone())?;
+        }
+        if tx.doc().resources.bitmap(bitmap.image).is_none() {
             return Err(EditError::MissingResource(
-                crate::resources::ResourceRef::Bitmap(self.bitmap.image),
+                crate::resources::ResourceRef::Bitmap(bitmap.image),
             ));
         }
-        let node = tx.create(NodeKind::Bitmap(Box::new(self.bitmap.clone())))?;
+        let node = tx.create(NodeKind::Bitmap(Box::new(bitmap)))?;
         tx.attach(node, self.layer, Attach::LastChild)?;
         for a in default_bitmap_attrs() {
             let attr = tx.create(NodeKind::Attr(Box::new(AttrNode::new(a))))?;

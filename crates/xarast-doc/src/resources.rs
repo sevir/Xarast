@@ -205,12 +205,103 @@ impl BitmapResource {
     }
 }
 
+/// The bitmap table: resources in insertion order under keys that are
+/// derived from their content, not handed out by a slot allocator.
+///
+/// The key is what makes insertion undoable exactly: a slot map cannot put
+/// a resource back under the key it had, so undo of a placement could only
+/// hide it, and the digest would have to know about tombstones. Here undo
+/// removes the entry, redo puts it back under the same key, and a key is a
+/// pure function of the table's state, so a journal replay allocates the
+/// same ones as the live document did.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct BitmapTable {
+    pub(crate) items: Vec<(BitmapId, BitmapResource)>,
+    index: HashMap<BitmapId, usize>,
+}
+
+impl BitmapTable {
+    pub(crate) fn from_items(items: Vec<(BitmapId, BitmapResource)>) -> BitmapTable {
+        let mut t = BitmapTable {
+            items,
+            index: HashMap::new(),
+        };
+        t.reindex();
+        t
+    }
+
+    fn reindex(&mut self) {
+        self.index = self
+            .items
+            .iter()
+            .enumerate()
+            .map(|(i, (id, _))| (*id, i))
+            .collect();
+    }
+
+    /// A key not in use, derived from the content hash and then probing.
+    fn free_id(&self, hash: &[u8; 32]) -> BitmapId {
+        let mut idx = u32::from_le_bytes([hash[0], hash[1], hash[2], hash[3]]);
+        loop {
+            // Version 1 (occupied, as a slot map spells it); the index
+            // `u32::MAX` is the null key.
+            if idx != u32::MAX {
+                let id = BitmapId::from(slotmap::KeyData::from_ffi((1u64 << 32) | u64::from(idx)));
+                if !self.index.contains_key(&id) {
+                    return id;
+                }
+            }
+            idx = idx.wrapping_add(1);
+        }
+    }
+
+    fn push(&mut self, id: BitmapId, res: BitmapResource) {
+        self.index.insert(id, self.items.len());
+        self.items.push((id, res));
+    }
+
+    fn take(&mut self, id: BitmapId) -> Option<BitmapResource> {
+        let i = self.index.remove(&id)?;
+        let (_, res) = self.items.remove(i);
+        if i < self.items.len() {
+            self.reindex();
+        }
+        Some(res)
+    }
+
+    fn contains(&self, id: BitmapId) -> bool {
+        self.index.contains_key(&id)
+    }
+
+    fn get(&self, id: BitmapId) -> Option<&BitmapResource> {
+        self.index.get(&id).map(|i| &self.items[*i].1)
+    }
+
+    fn get_mut(&mut self, id: BitmapId) -> Option<&mut BitmapResource> {
+        let i = *self.index.get(&id)?;
+        Some(&mut self.items[i].1)
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (BitmapId, &BitmapResource)> + '_ {
+        self.items.iter().map(|(id, r)| (*id, r))
+    }
+
+    fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    fn retain(&mut self, mut keep: impl FnMut(BitmapId) -> bool) {
+        self.items.retain(|(id, _)| keep(*id));
+        self.reindex();
+    }
+}
+
 /// Every resource the document owns.
 #[derive(Clone, Debug, Default)]
 pub struct DocumentResources {
     /// Named and indexed colours.
     pub colours: xarast_color::ColourTable,
-    bitmaps: SlotMap<BitmapId, BitmapResource>,
+    bitmaps: BitmapTable,
     dashes: SlotMap<DashId, xarast_geom::DashPattern>,
     arrows: SlotMap<ArrowId, ArrowSpec>,
     bitmap_by_hash: HashMap<[u8; 32], BitmapId>,
@@ -238,10 +329,46 @@ impl DocumentResources {
         if let Some(id) = self.bitmap_by_hash.get(&hash) {
             return *id;
         }
-        let id = self.bitmaps.insert(res);
+        let id = self.bitmaps.free_id(&hash);
+        self.bitmaps.push(id, res);
         self.bitmap_by_hash.insert(hash, id);
         self.tables_rev += 1;
         id
+    }
+
+    /// The key a bitmap with this content would be inserted under, and the
+    /// bitmap already holding the content, if any. Pure: a transaction
+    /// uses it to name the key in the action it records.
+    pub(crate) fn plan_bitmap(&self, res: &BitmapResource) -> (BitmapId, bool) {
+        let hash = res.content_hash();
+        match self.bitmap_by_hash.get(&hash) {
+            Some(id) => (*id, true),
+            None => (self.bitmaps.free_id(&hash), false),
+        }
+    }
+
+    /// Adds a bitmap under a key chosen by [`Self::plan_bitmap`]
+    /// ([`crate::Action::InsertBitmap`]). `None` when the key is taken.
+    /// Not counted in [`DocumentResources::tables_rev`]: the journal
+    /// records the action.
+    pub(crate) fn add_bitmap_at(&mut self, id: BitmapId, res: BitmapResource) -> Option<()> {
+        if self.bitmaps.contains(id) {
+            return None;
+        }
+        self.bitmap_by_hash.entry(res.content_hash()).or_insert(id);
+        self.bitmaps.push(id, res);
+        Some(())
+    }
+
+    /// Takes a bitmap out ([`crate::Action::RemoveBitmap`]), returning it.
+    /// Not counted in [`DocumentResources::tables_rev`].
+    pub(crate) fn take_bitmap(&mut self, id: BitmapId) -> Option<BitmapResource> {
+        let res = self.bitmaps.take(id)?;
+        let hash = res.content_hash();
+        if self.bitmap_by_hash.get(&hash) == Some(&id) {
+            self.bitmap_by_hash.remove(&hash);
+        }
+        Some(res)
     }
 
     /// Changes whenever the bitmap, dash, arrow or font table changes
@@ -256,7 +383,7 @@ impl DocumentResources {
     /// payload is behind an `Arc`).
     pub(crate) fn tables(&self) -> crate::journal::Tables {
         crate::journal::Tables {
-            bitmaps: self.bitmaps.clone(),
+            bitmaps: self.bitmaps.items.clone(),
             dashes: self.dashes.clone(),
             arrows: self.arrows.clone(),
             fonts: self.fonts.clone(),
@@ -269,9 +396,9 @@ impl DocumentResources {
         self.bitmap_by_hash = t
             .bitmaps
             .iter()
-            .map(|(id, r)| (r.content_hash(), id))
+            .map(|(id, r)| (r.content_hash(), *id))
             .collect();
-        self.bitmaps = t.bitmaps;
+        self.bitmaps = BitmapTable::from_items(t.bitmaps);
         self.dashes = t.dashes;
         self.arrows = t.arrows;
         self.fonts = t.fonts;
@@ -393,7 +520,7 @@ impl DocumentResources {
     pub fn contains(&self, r: ResourceRef) -> bool {
         match r {
             ResourceRef::Colour(id) => self.colours.get(id).is_some(),
-            ResourceRef::Bitmap(id) => self.bitmaps.contains_key(id),
+            ResourceRef::Bitmap(id) => self.bitmaps.contains(id),
             ResourceRef::Dash(id) => self.dashes.contains_key(id),
             ResourceRef::Arrow(id) => self.arrows.contains_key(id),
         }
@@ -418,9 +545,9 @@ impl DocumentResources {
 
     fn retain_bitmaps(&mut self, keep: &std::collections::HashSet<BitmapId>) -> usize {
         let before = self.bitmaps.len();
-        self.bitmaps.retain(|id, _| keep.contains(&id));
+        self.bitmaps.retain(|id| keep.contains(&id));
         self.bitmap_by_hash
-            .retain(|_, id| self.bitmaps.contains_key(*id));
+            .retain(|_, id| self.bitmaps.contains(*id));
         let gone = before - self.bitmaps.len();
         if gone > 0 {
             self.tables_rev += 1;

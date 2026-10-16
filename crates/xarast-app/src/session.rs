@@ -2011,12 +2011,12 @@ impl Session {
                 view.centre() - b.centre()
             }
         };
-        let bitmaps = crate::structure::import_bitmaps(&mut self.doc, &fragment);
+        let import = crate::structure::bitmaps_to_import(&fragment);
         let cmd = crate::structure::PasteFragment {
             fragment,
             layer,
             offset,
-            bitmaps,
+            import,
             created: std::cell::RefCell::new(Vec::new()),
         };
         self.dispatch(&cmd)?;
@@ -2073,8 +2073,15 @@ impl Session {
             return Ok(self.cancel_gesture());
         }
         let size = img.natural_size();
-        let image = self.doc.resources.insert_bitmap(img.resource);
-        self.place_bitmap(image, size, centre, label)
+        // The resource joins the document inside the placement's own
+        // transaction (`PlaceBitmap::insert`), so undo takes it out again.
+        self.place_bitmap(
+            xarast_doc::BitmapId::default(),
+            Some(img.resource),
+            size,
+            centre,
+            label,
+        )
     }
 
     fn placement_layer(&self) -> Option<xarast_doc::NodeId> {
@@ -2130,12 +2137,13 @@ impl Session {
             xarast_doc::bitmap_fill::natural_length(pixels.0, dpi.0),
             xarast_doc::bitmap_fill::natural_length(pixels.1, dpi.1),
         );
-        self.place_bitmap(image, size, centre, label)
+        self.place_bitmap(image, None, size, centre, label)
     }
 
     fn place_bitmap(
         &mut self,
         image: xarast_doc::BitmapId,
+        insert: Option<xarast_doc::BitmapResource>,
         (w, h): (xarast_geom::Mp, xarast_geom::Mp),
         centre: Option<crate::geometry::DocPoint>,
         label: &'static str,
@@ -2148,6 +2156,7 @@ impl Session {
         let cmd = xarast_doc::PlaceBitmap {
             layer,
             bitmap: xarast_doc::bitmap_place::bitmap_node_centred(image, centre, w, h),
+            insert,
             label,
         };
         self.dispatch(&cmd)?;

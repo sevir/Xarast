@@ -849,16 +849,15 @@ pub fn fragment_bounds(frag: &Document) -> DocRect {
     crate::viewport::nodes_rect(frag, fragment_objects(frag))
 }
 
-/// Adds the bitmaps a fragment's objects use to `into`'s resources
-/// (deduplicated by content), returning the id map. Resources are not
-/// undoable state: an unreferenced bitmap is swept by
-/// [`xarast_doc::collect_unused`].
-pub fn import_bitmaps(into: &mut Document, frag: &Document) -> HashMap<BitmapId, BitmapId> {
-    let mut map = HashMap::new();
-    for (id, res) in frag.resources.bitmaps() {
-        map.insert(id, into.resources.insert_bitmap(res.clone()));
-    }
-    map
+/// The bitmaps a fragment carries, for [`PasteFragment::import`]: the
+/// paste adds them to the target inside its own transaction
+/// (deduplicated by content), so undoing the paste removes them again.
+#[must_use]
+pub fn bitmaps_to_import(frag: &Document) -> Vec<(BitmapId, xarast_doc::BitmapResource)> {
+    frag.resources
+        .bitmaps()
+        .map(|(id, res)| (id, res.clone()))
+        .collect()
 }
 
 /// Pastes a fragment as the last objects of a layer, moved by `offset`.
@@ -870,14 +869,20 @@ pub struct PasteFragment {
     pub layer: NodeId,
     /// How far to move the pasted objects.
     pub offset: Vector,
-    /// Fragment bitmap → target bitmap, from [`import_bitmaps`].
-    pub bitmaps: HashMap<BitmapId, BitmapId>,
+    /// The fragment's bitmaps, from [`bitmaps_to_import`]; the paste adds
+    /// them to the target and maps the fragment's keys to the target's.
+    pub import: Vec<(BitmapId, xarast_doc::BitmapResource)>,
     /// What the paste created, in order.
     pub created: RefCell<Vec<NodeId>>,
 }
 
 impl PasteFragment {
-    fn remap_attr(&self, target: &xarast_color::ColourTable, v: &mut AttrValue) {
+    fn remap_attr(
+        &self,
+        target: &xarast_color::ColourTable,
+        bitmaps: &HashMap<BitmapId, BitmapId>,
+        v: &mut AttrValue,
+    ) {
         let table = &self.fragment.resources.colours;
         let same = |id: xarast_color::ColourId| {
             target.get(id).is_some() && target.get(id) == table.get(id)
@@ -891,7 +896,7 @@ impl PasteFragment {
         };
         let map_bitmap = |b: Option<&mut BitmapId>| {
             if let Some(b) = b
-                && let Some(to) = self.bitmaps.get(b)
+                && let Some(to) = bitmaps.get(b)
             {
                 *b = *to;
             }
@@ -906,11 +911,16 @@ impl PasteFragment {
         }
     }
 
-    fn remap_kind(&self, target: &xarast_color::ColourTable, k: &mut NodeKind) {
+    fn remap_kind(
+        &self,
+        target: &xarast_color::ColourTable,
+        bitmaps: &HashMap<BitmapId, BitmapId>,
+        k: &mut NodeKind,
+    ) {
         match k {
-            NodeKind::Attr(a) => self.remap_attr(target, &mut a.value),
+            NodeKind::Attr(a) => self.remap_attr(target, bitmaps, &mut a.value),
             NodeKind::Bitmap(b) => {
-                if let Some(to) = self.bitmaps.get(&b.image) {
+                if let Some(to) = bitmaps.get(&b.image) {
                     b.image = *to;
                 }
             }
@@ -935,14 +945,22 @@ impl xarast_doc::Command for PasteFragment {
         // The remaps need the target's palette while the transaction
         // writes; they read nothing else of it.
         let target_colours = tx.doc().resources.colours.clone();
+        // The bitmaps join the document in this transaction, so undo takes
+        // them out again.
+        let mut bitmaps = HashMap::with_capacity(self.import.len());
+        for (from, res) in &self.import {
+            bitmaps.insert(*from, tx.insert_bitmap(res.clone())?);
+        }
         let mut created = Vec::with_capacity(objs.len());
         for n in &objs {
             let captured = capture(frag, *n);
             let copy = instantiate(tx, &captured, self.layer, Attach::LastChild, &|k| {
-                self.remap_kind(&target_colours, k);
+                self.remap_kind(&target_colours, &bitmaps, k);
             })?;
             let w = was.get(n).ok_or(EditError::WrongKind(*n))?;
-            materialise(tx, copy, w, &now, &|v| self.remap_attr(&target_colours, v))?;
+            materialise(tx, copy, w, &now, &|v| {
+                self.remap_attr(&target_colours, &bitmaps, v)
+            })?;
             if self.offset != Vector::ZERO {
                 tx.transform(copy, Matrix::translate(self.offset))?;
             }

@@ -818,8 +818,10 @@ repaints nothing).
     decoded once under `DecodeLimits::default()`; PNG, JPEG and GIF keep
     their bytes, anything else is stored as a lossless PNG with its
     resolution in `pHYs`; a clipboard picture has none and is 96 dpi. The
-    resource goes in **outside the history**, deduplicated by content, as a
-    pasted fragment's bitmaps do (decision 41); then `PlaceBitmap` (one
+    resource goes in **inside the same transaction** (XARA-T-0283:
+    `PlaceBitmap::insert`, deduplicated by content, as a pasted fragment's
+    bitmaps do through `PasteFragment::import`), so undo is digest-exact;
+    `PlaceBitmap` (one
     step, "Import Bitmap" or "Paste") puts a `BitmapNode` of the natural
     size on the active layer, centred on the drop point or in the view, and
     the session selects it. The object carries the original's default

@@ -38,6 +38,9 @@ pub enum EditError {
     /// The resource does not exist.
     #[error("resource {0:?} does not exist")]
     MissingResource(ResourceRef),
+    /// A resource key is already taken by another resource.
+    #[error("resource {0:?} already exists")]
+    ResourceKeyTaken(ResourceRef),
     /// A build or history limit was hit.
     #[error("limit exceeded: {0}")]
     LimitExceeded(&'static str),
@@ -122,6 +125,21 @@ pub enum Action {
         node: NodeId,
         /// The new baggage.
         new: Option<Arc<ForeignBaggage>>,
+    },
+    /// Add a bitmap resource under a key chosen up front (placing or
+    /// pasting an image). Its inverse removes it, and the inverse of that
+    /// puts it back under the same key, so undo and redo are exact and the
+    /// canonical digest is restored with them.
+    InsertBitmap {
+        /// The key, from [`DocumentResources::plan_bitmap`].
+        id: BitmapId,
+        /// The resource.
+        res: Arc<BitmapResource>,
+    },
+    /// Take a bitmap resource out; the inverse of [`Action::InsertBitmap`].
+    RemoveBitmap {
+        /// The key.
+        id: BitmapId,
     },
     /// Put a whole bitmap resource in the place of another under the same
     /// key (the bitmap gallery's Replace). Every object, fill and
@@ -219,6 +237,16 @@ impl Action {
                     .ok_or(EditError::MissingResource(*id))?;
                 doc.tree.touch_resources();
                 doc.tree.note_everything_changed();
+            }
+            Action::InsertBitmap { id, res } => {
+                doc.resources
+                    .add_bitmap_at(*id, (**res).clone())
+                    .ok_or(EditError::ResourceKeyTaken(ResourceRef::Bitmap(*id)))?;
+            }
+            Action::RemoveBitmap { id } => {
+                doc.resources
+                    .take_bitmap(*id)
+                    .ok_or(EditError::MissingResource(ResourceRef::Bitmap(*id)))?;
             }
             Action::ReplaceBitmap { id, new } => {
                 doc.resources
@@ -346,6 +374,15 @@ impl Action {
                 };
                 Action::SetResource { id: *id, new: old }
             }
+            Action::InsertBitmap { id, .. } => Action::RemoveBitmap { id: *id },
+            Action::RemoveBitmap { id } => match doc.resources.bitmap(*id) {
+                Some(r) => Action::InsertBitmap {
+                    id: *id,
+                    res: Arc::new(r.clone()),
+                },
+                // Nothing to put back: the removal itself fails.
+                None => Action::RemoveBitmap { id: *id },
+            },
             Action::ReplaceBitmap { id, new } => Action::ReplaceBitmap {
                 id: *id,
                 new: doc
@@ -381,6 +418,10 @@ impl Action {
             Action::SetResource { new, .. } => new
                 .as_ref()
                 .map_or(0, |p| p.pixels.len() + p.palette.len() * 4),
+            // Not charged: the table holds the resource while the step is
+            // applied, exactly as it did when insertion was outside the
+            // history.
+            Action::InsertBitmap { .. } | Action::RemoveBitmap { .. } => 0,
             Action::ReplaceBitmap { new, .. } => {
                 new.pixels.pixels.len()
                     + new.pixels.palette.len() * 4
@@ -403,6 +444,8 @@ impl Action {
             | Action::Transform { .. }
             | Action::SetAttr { .. }
             | Action::SetResource { .. }
+            | Action::InsertBitmap { .. }
+            | Action::RemoveBitmap { .. }
             | Action::ReplaceBitmap { .. }
             | Action::SetForeign { .. }
             | Action::SetPalette { .. } => false,
@@ -886,6 +929,27 @@ impl<'d> Tx<'d> {
         })
     }
 
+    /// Adds a bitmap to the document's resources as part of this
+    /// transaction ([`Action::InsertBitmap`]) and returns its key. A bitmap
+    /// with the same content already there is reused and nothing is
+    /// recorded. Undo removes the resource and redo puts it back under the
+    /// same key.
+    ///
+    /// # Errors
+    ///
+    /// Only when the key is taken, which cannot happen to a caller that
+    /// holds the document exclusively.
+    pub fn insert_bitmap(&mut self, res: BitmapResource) -> Result<BitmapId, EditError> {
+        let (id, exists) = self.doc.resources.plan_bitmap(&res);
+        if !exists {
+            self.act(Action::InsertBitmap {
+                id,
+                res: Arc::new(res),
+            })?;
+        }
+        Ok(id)
+    }
+
     /// Puts `new` in the place of bitmap `id` ([`Action::ReplaceBitmap`]).
     ///
     /// # Errors
@@ -959,6 +1023,8 @@ impl<'d> Tx<'d> {
             | Action::Transform { .. }
             | Action::SetAttr { .. }
             | Action::SetResource { .. }
+            | Action::InsertBitmap { .. }
+            | Action::RemoveBitmap { .. }
             | Action::ReplaceBitmap { .. }
             | Action::SetForeign { .. }
             | Action::SetPalette { .. } => {}

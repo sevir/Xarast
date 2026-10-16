@@ -11,6 +11,7 @@ mod blend;
 mod builder;
 mod contour;
 mod foreign;
+mod insert_bitmap;
 mod invariants;
 mod journal;
 mod mould;

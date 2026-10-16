@@ -59,13 +59,9 @@ fn is_none(c: &Colour) -> bool {
 fn a_pasted_picture_is_placed_at_natural_size_in_the_view_as_one_step() {
     let mut app = app();
     let pic = rgba(96, 48, [0, 0, 255, 255]);
-    // The resource table is outside the history (`tools.md` decision 41):
-    // the picture is registered first, so the digest compares everything
-    // undo restores. The paste finds it by content and adds nothing.
-    let res = xarast_app::place::image_from_rgba(96, 48, &pic)
-        .unwrap()
-        .resource;
-    app.active_mut().unwrap().doc.resources.insert_bitmap(res);
+    // The picture's resource joins the document inside the paste's own
+    // transaction (XARA-T-0283), so the digest before the paste is the one
+    // undo restores, with nothing pre-registered.
     let digest = s(&app).doc.canonical_digest();
     app.apply(Intent::PasteImage {
         width: 96,
@@ -118,10 +114,14 @@ fn a_pasted_picture_is_placed_at_natural_size_in_the_view_as_one_step() {
         s(&app).doc.tree.kind(n),
         Some(NodeKind::Bitmap(_))
     ));
-    // Undone, the picture stays while the redo step holds its object.
+    // Undone, the redo step still finds the picture and a sweep leaves it.
     app.apply(Intent::Undo).unwrap();
+    assert_eq!(s(&app).doc.canonical_digest(), digest);
+    assert_eq!(s(&app).doc.resources.counts().0, 0);
+    app.apply(Intent::Redo).unwrap();
     let sm = app.active_mut().unwrap();
     assert_eq!(xarast_doc::collect_unused(&mut sm.doc), 0);
+    assert!(matches!(sm.doc.tree.kind(n), Some(NodeKind::Bitmap(_))));
 }
 
 #[test]
@@ -205,4 +205,33 @@ fn the_same_picture_twice_shares_one_resource() {
     let s = s(&app);
     assert_eq!(s.bus.history().len(), 2);
     assert_eq!(s.doc.resources.bitmaps().count(), 1);
+}
+
+#[test]
+fn pasting_a_fragment_with_a_bitmap_is_digest_exact_on_undo() {
+    let mut app = app();
+    app.apply(Intent::PasteImage {
+        width: 8,
+        height: 8,
+        rgba: rgba(8, 8, [255, 0, 0, 255]),
+    })
+    .unwrap();
+    app.apply(Intent::Copy).unwrap();
+    // Undo the placement: the document no longer holds the picture, the
+    // clipboard fragment does.
+    app.apply(Intent::Undo).unwrap();
+    let bare = s(&app).doc.canonical_digest();
+    assert_eq!(s(&app).doc.resources.counts().0, 0);
+    app.apply(Intent::Paste { in_place: true }).unwrap();
+    let pasted = s(&app).doc.canonical_digest();
+    assert_eq!(s(&app).doc.resources.counts().0, 1);
+    app.apply(Intent::Undo).unwrap();
+    assert_eq!(s(&app).doc.canonical_digest(), bare);
+    assert_eq!(s(&app).doc.resources.counts().0, 0);
+    app.apply(Intent::Redo).unwrap();
+    assert_eq!(s(&app).doc.canonical_digest(), pasted);
+    let sm = app.active_mut().unwrap();
+    sm.rebuild_scene(None).unwrap();
+    assert_eq!(sm.walk_stats().images_failed, 0);
+    assert_eq!(xarast_doc::collect_unused(&mut sm.doc), 0);
 }
