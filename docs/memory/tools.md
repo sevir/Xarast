@@ -1741,8 +1741,11 @@ cycling (T6.11). Tests: `crates/xarast-app/tests/selector_extras.rs`
       canvas (placement) — decision 70. Open: Ctrl-drop as the page
       background, and a dropped *file* on an object (the file drop still
       always places).
-- [ ] Guide properties dialog; Delete all guides has no menu item yet;
-      snapping of the shape editor's nodes (W6) and of guide drags.
+- [x] Snapping of the path tools, guide drags, the guideline properties
+      dialog and View › Delete all guides (XARA-T-0189, decision 115).
+      Open: object snapping for guide drags (grid only), snapping while
+      Constrain holds is on (as in the original) but never the neighbour
+      handle of a smooth node.
 - [ ] Clone (Ctrl+K), duplicate-offset preference, Paste attributes.
 - [x] Phantom-node preview and the radius mode (XARA-T-0169, decision 114).
 - [ ] Observe in the VM: the radius under a non-uniform scale (K8), what
@@ -1758,7 +1761,7 @@ cycling (T6.11). Tests: `crates/xarast-app/tests/selector_extras.rs`
 - [x] Double click on a path → shape editor.
 - [x] Path-point nudges (T6.11) and Tab/Shift+Tab/Home/End point
       cycling — XARA-T-0186, decisions 108, 109, 113. Open: scrolling to
-      the cycled point, mid-drag snapping of nodes (W8).
+      the cycled point.
 - [ ] Freehand: Alt straight segments, joining to a selected path's end,
       refitting the last stroke when the smoothing changes (retro fit),
       pressure. Pen: re-editing the start point's handle.
@@ -1808,3 +1811,37 @@ per drag and handle even outside a bus gesture. The current fill tool passes
 `drag: None` and relies on its gesture; both are tested.
 Undo labels are the doc commands' own (`Set Fill`, `Move Fill Handle`, ...)
 and the palette's (`Create/Edit/Rename/Link/Delete Colour`).
+
+115. **Snapping of the path tools (XARA-T-0189).** All of it goes through
+    `ToolCtx::snap_point`; nothing new in `snap.rs`.
+    * Shape editor: a node drag snaps the *pressed node* (`NodeDrag::Points`
+      keeps its `anchor`), i.e. the displacement is corrected so that node
+      lands on the line and the rest of the selection follows rigidly; a
+      handle drag snaps the handle; a segment reshape snaps the pointer.
+      The snap runs **after** Constrain, as in the original, so with both
+      on the 45 degree line can be bent by a nearby grid line.
+    * Pen: the start point, each click, the drag-start anchor and the
+      dragged handle snap; the hover preview uses the snapped point. Not
+      snapped: a click on the first node of the path being continued (it
+      closes) or on an open end of a selected path (it picks it up), so
+      those keep matching the raw pointer (`PenTool::snapped`).
+    * Freehand: only the start of the stroke snaps (the original's pencil
+      does not constrain the rest of the stroke).
+    * `NumPad .` mid-drag needs nothing tool-side: `Intent::ToggleSnap`
+      re-delivers the pointer as a modifiers change and the machine
+      follows it with a `DragUpdate`, which snaps.
+    * Guide drags are decided in the UI (`xarast_ui::guides::snap_to_grid`,
+      fed by `DocumentView::snap_to_grid`): the position along the guide's
+      axis goes to the nearest minor grid line within 8 logical points. The
+      Esc restore is *not* snapped. Object snapping of guides is open.
+    * Original (facts only): `DocView::SnapCurrent` is applied to the
+      pointer of the path edit drag (after constrain, skipped while an end
+      snaps to another path end), of the pen's handle and anchor, and of a
+      guideline drag (`OpGuideline::DragPointerMove`/`DragFinished`).
+      The guideline properties dialog has exactly two controls: a
+      Position field (in the page-relative "user ordinate", in the
+      document unit) and a read-only Horizontal/Vertical label, OK/Cancel;
+      there is no layer field. It also serves "new guideline" before the
+      guide exists. `OpDeleteAllGuidelines` is a single undoable op.
+    * Tests: `tests/path_snapping.rs` (6), `xarast-ui` canvas (2),
+      guides (1), dialogs (4), `tests/menus.rs` (1).

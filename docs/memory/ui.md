@@ -1642,3 +1642,20 @@ isolated GNOME session on a private bus:
   leftwards on screen through the bytes backwards; Shift+arrows
   highlight; the caret stops blinking after 10 s; the IME caret area is
   not yet fed from the text caret (T9.4.7).
+
+## Guides: snapping, properties, Delete all (XARA-T-0189)
+
+- A guide dragged out of a ruler or along the canvas snaps to the grid in
+  the *UI* (`guides::snap_to_grid`), because the canvas computes the
+  position; `DocumentView::snap_to_grid` (the shell fills it from
+  `EditState::snap.grid`) says whether it applies. The cancel restore of
+  XARA-T-0305 deliberately skips it.
+- Double-clicking a guide (`CanvasWidget::take_guide_properties`) opens the
+  non-modal "Guideline Properties" window (`dialogs::GuideProperties`,
+  owned by `Workspace`): a position field read with `parse_measure` in the
+  document unit and the orientation as a label; OK sends `MoveGuide`
+  (one undo step), Esc/Cancel nothing, and it closes if the guide vanishes.
+  The position is the document coordinate: the original shows a
+  page-relative ordinate, ours matches what the rulers show.
+- View › Delete all guides (`AppCommand::DeleteAllGuides`, no shortcut) is
+  greyed out without guides and runs `GuideOp::DeleteAll` (one undo step).
