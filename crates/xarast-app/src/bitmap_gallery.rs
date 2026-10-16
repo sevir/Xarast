@@ -407,7 +407,10 @@ pub(crate) fn run(session: &mut Session, op: BitmapGalleryOp) -> Result<Changed,
         }
         BitmapGalleryOp::Delete(id) => Ok(
             match xarast_doc::remove_unused_bitmap(&mut session.doc, id) {
-                Ok(()) => Changed::UI,
+                Ok(()) => {
+                    session.flush_journal();
+                    Changed::UI
+                }
                 Err(_) => Changed::empty(),
             },
         ),

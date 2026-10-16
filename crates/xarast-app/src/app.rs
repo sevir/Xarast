@@ -219,6 +219,9 @@ struct Track {
     since: Option<Instant>,
     /// The serial the entry on disk holds, if one does.
     saved: Option<u64>,
+    /// The operation journal could not be started for this document (an
+    /// I/O error): snapshots only, without retrying every frame.
+    journal_off: bool,
 }
 
 /// Everything the UI is a projection of.
@@ -1488,6 +1491,9 @@ impl AppState {
                     s.lock = Some(lock);
                 }
                 let clean = !s.is_modified();
+                if clean {
+                    s.stop_journal();
+                }
                 self.remember_recent(&out.path);
                 if clean && let Some(t) = self.tracks.get_mut(&out.doc) {
                     if let Some(store) = &self.autosave {
@@ -1545,6 +1551,11 @@ impl AppState {
                     return Changed::UI;
                 }
                 t.saved = Some(out.serial);
+                if let Some((seq, keys)) = &out.journal_base
+                    && let Some(j) = self.docs.get(out.doc).and_then(|s| s.journal.as_ref())
+                {
+                    j.rotate(*seq, keys.clone());
+                }
                 Changed::empty()
             }
             Err(e) => {
@@ -1554,6 +1565,20 @@ impl AppState {
                     document: Some(out.doc),
                 });
                 Changed::UI
+            }
+        }
+    }
+
+    /// Hands every document's recorded operations to its journal and
+    /// blocks until they are on disk. The writers do this by themselves
+    /// within [`crate::journal::FSYNC_WINDOW`]; this is for a caller that
+    /// must know (a test, a shutdown).
+    pub fn sync_journals(&mut self) {
+        let ids: Vec<DocumentId> = self.docs.iter().map(|s| s.id).collect();
+        for id in ids {
+            self.journal_health(id);
+            if let Some(j) = self.docs.get(id).and_then(|s| s.journal.as_ref()) {
+                j.writer().sync();
             }
         }
     }
@@ -1585,6 +1610,7 @@ impl AppState {
         let mut next: Option<Instant> = None;
         let ids: Vec<DocumentId> = self.docs.iter().map(|s| s.id).collect();
         for id in ids {
+            self.journal_health(id);
             let Some(s) = self.docs.get(id) else { continue };
             let serial = s.state_serial();
             let modified = s.is_modified();
@@ -1595,6 +1621,7 @@ impl AppState {
                 changed_at: now,
                 since: None,
                 saved: None,
+                journal_off: false,
             });
             if track.seen != serial {
                 track.seen = serial;
@@ -1602,22 +1629,37 @@ impl AppState {
             }
             if !modified {
                 // Undone back to the saved state: nothing to recover.
-                if track.saved.take().is_some() {
-                    store.remove(&track.id);
+                let journalled = s.journal_running();
+                if track.saved.take().is_some() || journalled {
+                    let tid = track.id.clone();
+                    if let Some(s) = self.docs.get_mut(id) {
+                        s.stop_journal();
+                    }
+                    store.remove(&tid);
                 }
-                track.since = None;
+                if let Some(track) = self.tracks.get_mut(&id) {
+                    track.since = None;
+                }
                 continue;
             }
-            if track.saved == Some(serial) {
+            // The journal needs a base: none yet (the first change since
+            // the document was clean), or it hit something it cannot hold.
+            // That is an autosave now, not at the next interval.
+            let needs_base = !track.journal_off && s.journal_needs_base();
+            if track.saved == Some(serial) && !needs_base {
                 continue;
             }
             let since = *track.since.get_or_insert(now);
-            let due = (track.changed_at + policy.idle).max(since + policy.interval);
+            let due = if needs_base {
+                now
+            } else {
+                (track.changed_at + policy.idle).max(since + policy.interval)
+            };
             let running = self
                 .in_flight
                 .iter()
                 .any(|f| f.doc == id && f.kind == SaveKind::Autosave);
-            if now < due || gesture || running {
+            if now < due || (gesture && !needs_base) || running {
                 if !running {
                     next = Some(next.map_or(due, |n: Instant| n.min(due)));
                 }
@@ -1635,18 +1677,81 @@ impl AppState {
                 });
                 continue;
             }
-            if let Ok(job) = s.save_job(SaveKind::Autosave, &path) {
-                self.saver.start(job);
-                self.in_flight.push(InFlight {
-                    doc: id,
-                    kind: SaveKind::Autosave,
-                    path,
-                    lock: None,
-                    then: None,
-                });
-            }
+            let tid = track.id.clone();
+            let Some(job) = self.autosave_job(id, &tid, &path) else {
+                continue;
+            };
+            self.saver.start(job);
+            self.in_flight.push(InFlight {
+                doc: id,
+                kind: SaveKind::Autosave,
+                path,
+                lock: None,
+                then: None,
+            });
         }
         next
+    }
+
+    /// An autosave job for document `id` into entry `entry_id`, with its
+    /// journal's new base: the journal is started first if it is not
+    /// running, and restarted at this snapshot.
+    fn autosave_job(
+        &mut self,
+        id: DocumentId,
+        entry_id: &str,
+        path: &Path,
+    ) -> Option<crate::save::SaveJob> {
+        let store = self.autosave.clone()?;
+        let off = self.tracks.get(&id).is_some_and(|t| t.journal_off);
+        let s = self.docs.get_mut(id)?;
+        let mut failed = None;
+        if !off && s.journal.is_none() {
+            match crate::journal::JournalHandle::create(&store.entry(entry_id), entry_id) {
+                Ok(h) => s.journal = Some(h),
+                Err(e) => failed = Some(e.to_string()),
+            }
+        }
+        let base = s.restart_journal();
+        let job = s.save_job(SaveKind::Autosave, path).ok()?;
+        if let Some(e) = failed {
+            if let Some(t) = self.tracks.get_mut(&id) {
+                t.journal_off = true;
+            }
+            self.diagnostics.push(DiagnosticEntry {
+                severity: Severity::Info,
+                message: format!("The operation journal is off for this document: {e}"),
+                document: Some(id),
+            });
+        }
+        Some(match base {
+            Some(b) => job.with_journal_base(b),
+            None => job,
+        })
+    }
+
+    /// Hands a document's recorded operations to its journal and, when the
+    /// journal could not write one, makes the next tick take a new base.
+    fn journal_health(&mut self, id: DocumentId) {
+        let Some(s) = self.docs.get_mut(id) else {
+            return;
+        };
+        s.flush_journal();
+        let Some(err) = s.journal.as_ref().and_then(|j| {
+            j.writer()
+                .broken()
+                .then(|| j.writer().take_error())
+                .flatten()
+        }) else {
+            return;
+        };
+        s.bus.journal_barrier(&err);
+        s.flush_journal();
+        self.diagnostics.push(DiagnosticEntry {
+            severity: Severity::Info,
+            message: format!("The operation journal missed an entry ({err}); autosaving now"),
+            document: Some(id),
+        });
     }
 
     /// Writes an autosave of every modified document now, on this thread,
@@ -1658,7 +1763,14 @@ impl AppState {
         let _ = self.poll_saves();
         let mut written = 0;
         if let Some(store) = self.autosave.clone() {
-            for s in self.docs.iter() {
+            let ids: Vec<DocumentId> = self.docs.iter().map(|s| s.id).collect();
+            for sid in ids {
+                let Some(s) = self.docs.get_mut(sid) else {
+                    continue;
+                };
+                // Whatever was recorded goes to the journal first; closing
+                // the session below waits for it to be on disk.
+                s.flush_journal();
                 if !s.is_modified() {
                     continue;
                 }
@@ -1672,6 +1784,7 @@ impl AppState {
                         changed_at: Instant::now(),
                         since: None,
                         saved: None,
+                        journal_off: false,
                     })
                     .clone();
                 if id.saved == Some(serial) {
@@ -1679,13 +1792,23 @@ impl AppState {
                     continue;
                 }
                 let path = store.snapshot_path(&id.id);
+                // The journal restarts at this snapshot, whose base is
+                // written with it.
+                let base = s.restart_journal();
                 // No text placer: laying stories out may wait for the font
                 // service, and only Xarast ever reads a recovery snapshot
                 // (placement is for browsers; the reader ignores it).
-                if let Ok(job) = s.save_job(SaveKind::Autosave, &path)
-                    && job.without_text_placer().run().result.is_ok()
-                    && store.record(&id.id, s.path.as_deref()).is_ok()
-                {
+                let Ok(mut job) = s.save_job(SaveKind::Autosave, &path) else {
+                    continue;
+                };
+                if let Some(b) = base {
+                    job = job.with_journal_base(b);
+                }
+                let out = job.without_text_placer().run();
+                if out.result.is_ok() && store.record(&id.id, s.path.as_deref()).is_ok() {
+                    if let (Some((seq, keys)), Some(j)) = (out.journal_base, &s.journal) {
+                        j.rotate(seq, keys);
+                    }
                     written += 1;
                 }
             }
@@ -1766,19 +1889,51 @@ impl AppState {
         let list = std::mem::take(&mut self.recoverable);
         let mut changed = Changed::empty();
         for r in list {
-            let bytes = match std::fs::read(&r.snapshot) {
-                Ok(b) => b,
-                Err(e) => {
-                    self.notice = Some(format!("Could not recover {}: {e}", r.display_name()));
-                    continue;
-                }
-            };
             let id = self.docs.next_id();
-            let mut s = match Session::open_bytes(id, &r.snapshot, &bytes) {
-                Ok(s) => s,
-                Err(e) => {
-                    self.notice = Some(format!("Could not recover {}: {e}", r.display_name()));
-                    continue;
+            // The journal's base and its entries first: they reach the last
+            // operation. The snapshot package is what is left when they
+            // cannot be read.
+            let journalled = self
+                .autosave
+                .as_ref()
+                .and_then(|store| crate::journal::recover(&store.entry(&r.id)));
+            let mut s = if let Some(rec) = journalled {
+                let entry = self.autosave.as_ref().map(|st| st.entry(&r.id));
+                let mut s = Session::adopt(id, rec.doc, None);
+                s.bus = rec.bus;
+                if let Some(entry) = entry
+                    && let Ok(h) =
+                        crate::journal::JournalHandle::resume(&entry, &rec.stream, rec.through)
+                {
+                    s.resume_journal(h);
+                }
+                if let Some(why) = rec.stopped {
+                    self.diagnostics.push(DiagnosticEntry {
+                        severity: Severity::Info,
+                        message: format!(
+                            "Recovered {} with {} operations after its last autosave; \
+                             the journal stopped there: {why}",
+                            r.display_name(),
+                            rec.replayed
+                        ),
+                        document: Some(id),
+                    });
+                }
+                s
+            } else {
+                let bytes = match std::fs::read(&r.snapshot) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        self.notice = Some(format!("Could not recover {}: {e}", r.display_name()));
+                        continue;
+                    }
+                };
+                match Session::open_bytes(id, &r.snapshot, &bytes) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        self.notice = Some(format!("Could not recover {}: {e}", r.display_name()));
+                        continue;
+                    }
                 }
             };
             s.path.clone_from(&r.origin);
@@ -1809,6 +1964,7 @@ impl AppState {
                     changed_at: Instant::now(),
                     since: None,
                     saved: Some(serial),
+                    journal_off: false,
                 },
             );
             self.docs.insert(s);

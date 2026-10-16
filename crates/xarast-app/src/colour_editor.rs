@@ -785,7 +785,8 @@ fn start_drag(session: &mut Session, ed: &mut ColourEditorModel) {
     let current_before = session.edit.current.clone();
     // The drag's first command would drop a redo branch that Esc must
     // bring back: set it aside until the drag ends.
-    session.bus.history_mut().hold_redo(&mut session.doc);
+    session.bus.hold_redo(&mut session.doc);
+    session.flush_journal();
     let gesture = session.begin_gesture();
     ed.drag = Some(LiveDrag {
         gesture,
@@ -811,12 +812,12 @@ fn commit(session: &mut Session, ed: &mut ColourEditorModel) -> Changed {
 /// where the drag found it (nothing applied, or all of it undone),
 /// forgotten otherwise, as the drag's commit would have done.
 fn end_hold(session: &mut Session, serial_before: u64) {
-    let history = session.bus.history_mut();
-    if history.state_serial() == serial_before {
-        history.restore_held_redo(&mut session.doc);
+    if session.bus.history().state_serial() == serial_before {
+        session.bus.restore_held_redo(&mut session.doc);
     } else {
-        history.release_held_redo(&mut session.doc);
+        session.bus.release_held_redo(&mut session.doc);
     }
+    session.flush_journal();
 }
 
 fn cancel(session: &mut Session, ed: &mut ColourEditorModel) -> Changed {
@@ -837,7 +838,8 @@ fn cancel(session: &mut Session, ed: &mut ColourEditorModel) -> Changed {
             undone += 1;
         }
         if undone > 0 {
-            session.bus.history_mut().discard_redo(&mut session.doc);
+            session.bus.discard_redo(&mut session.doc);
+            session.flush_journal();
             changed |= Changed::DOCUMENT;
         }
     }

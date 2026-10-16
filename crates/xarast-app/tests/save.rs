@@ -456,7 +456,20 @@ fn autosave_waits_for_idle_and_interval() {
     let t0 = Instant::now();
     assert_eq!(app.tick(t0), None, "a clean document owes nothing");
     edit(&mut app, false);
-    let due = app.tick(t0).expect("a modified document is due later");
+    // The first change starts the operation journal, whose base is an
+    // autosave taken at once; later changes go to the journal, and the
+    // next snapshot waits for idle and interval.
+    assert_eq!(app.tick(t0), None, "the journal's base: started");
+    assert!(app.is_saving());
+    app.wait_for_saves();
+    let e = entries(&store);
+    assert_eq!(e.len(), 1);
+    for f in ["snapshot.xarast", "base.json.gz", "journal.ndjson"] {
+        assert!(e[0].join(f).is_file(), "{f}");
+    }
+    edit(&mut app, true);
+    let t1 = t0 + Duration::from_secs(1);
+    let due = app.tick(t1).expect("a modified document is due later");
     assert_eq!(due, t0 + Duration::from_secs(60));
     assert!(!app.is_saving());
     assert_eq!(app.tick(due), None, "due: started");
@@ -466,6 +479,7 @@ fn autosave_waits_for_idle_and_interval() {
     // Nothing new: nothing owed.
     assert_eq!(app.tick(due + Duration::from_secs(120)), None);
     // Undo back to clean: the entry is useless and goes.
+    app.apply(Intent::Undo).unwrap();
     app.apply(Intent::Undo).unwrap();
     assert_eq!(app.tick(due + Duration::from_secs(121)), None);
     assert!(entries(&store).is_empty());

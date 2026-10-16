@@ -17,9 +17,11 @@
 //! newer than its document is offered for recovery. One that is older than
 //! the document on disk was superseded by a save and is deleted.
 //!
-//! **No journal.** The operation journal of `research/06 §10.3` needs a
-//! serialisable form of every command, which the document model does not
-//! have; snapshots alone bound the loss to one autosave interval.
+//! **The journal** ([`crate::journal`]) lives in the same directory
+//! (`base.json.gz`, `journal.ndjson`, `blobs/`) and brings a recovery from
+//! the last snapshot to the last operation; the snapshot package is the
+//! fallback when it cannot be read. An entry's time is the latest write of
+//! any of them.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -68,7 +70,8 @@ pub struct Recoverable {
     pub origin: Option<PathBuf>,
     /// The snapshot package.
     pub snapshot: PathBuf,
-    /// When it was written.
+    /// When it was last written to (the snapshot, the journal's base or
+    /// the journal).
     pub saved: SystemTime,
 }
 
@@ -198,7 +201,9 @@ impl AutosaveStore {
                 continue;
             }
             let snapshot = entry.join(SNAPSHOT);
-            let Ok(saved) = std::fs::metadata(&snapshot).and_then(|m| m.modified()) else {
+            let recoverable = snapshot.is_file() || entry.join(crate::journal::BASE).is_file();
+            let saved = crate::journal::latest_write(&entry);
+            let (true, Some(saved)) = (recoverable, saved) else {
                 // Nothing to recover: a crash before the first snapshot.
                 self.remove(&id);
                 continue;

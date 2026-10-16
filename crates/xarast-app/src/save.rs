@@ -65,6 +65,22 @@ pub struct SaveJob {
     /// The session's decoded bitmaps, so that the thumbnail does not
     /// decode them again.
     images: Option<crate::decoded::DecodedImages>,
+    /// The operation journal's base to write first, for an autosave.
+    journal: Option<JournalBase>,
+}
+
+/// Where and what an autosave writes as its journal's base
+/// ([`crate::journal::write_base`]).
+#[derive(Debug, Clone)]
+pub struct JournalBase {
+    /// The autosave entry.
+    pub entry: PathBuf,
+    /// The last journal entry the snapshot holds.
+    pub seq: u64,
+    /// The journal stream.
+    pub stream: String,
+    /// The entry's blobs.
+    pub blobs: crate::journal::Blobs,
 }
 
 impl std::fmt::Debug for SaveJob {
@@ -106,6 +122,9 @@ pub struct SaveOutcome {
     /// What happened: a summary, or why it failed, in words for the status
     /// bar.
     pub result: Result<SaveSummary, String>,
+    /// The journal base it wrote: the last entry it holds and the blobs it
+    /// refers to. `None` when it wrote none.
+    pub journal_base: Option<(u64, std::collections::HashSet<String>)>,
 }
 
 impl SaveJob {
@@ -131,7 +150,16 @@ impl SaveJob {
             deterministic: false,
             text: Some(crate::svg_text::placer()),
             images: None,
+            journal: None,
         }
+    }
+
+    /// Writes the operation journal's base ([`crate::journal`]) from the
+    /// same snapshot, before the package: an autosave.
+    #[must_use]
+    pub fn with_journal_base(mut self, base: JournalBase) -> SaveJob {
+        self.journal = Some(base);
+        self
     }
 
     /// Renders the thumbnail with the document's decoded bitmaps
@@ -176,7 +204,8 @@ impl SaveJob {
         let started = Instant::now();
         let mut restored = Document::new_empty();
         let snapshot = self.snapshot.take();
-        let result = self.write(started, &mut restored, snapshot);
+        let mut journal_base = None;
+        let result = self.write(started, &mut restored, snapshot, &mut journal_base);
         let SaveJob {
             kind,
             doc,
@@ -196,6 +225,7 @@ impl SaveJob {
             path,
             serial,
             result,
+            journal_base,
         }
     }
 
@@ -204,7 +234,14 @@ impl SaveJob {
         started: Instant,
         doc: &mut Document,
         snapshot: Option<Snapshot>,
+        journal_base: &mut Option<(u64, std::collections::HashSet<String>)>,
     ) -> Result<SaveSummary, String> {
+        // The journal's base goes first: a crash between it and the
+        // package leaves a base newer than the package, never older.
+        if let (Some(j), Some(snap)) = (&self.journal, &snapshot) {
+            let keys = crate::journal::write_base(&j.entry, snap, j.seq, &j.stream, &j.blobs)?;
+            *journal_base = Some((j.seq, keys));
+        }
         // The job owns its snapshot, so the nodes move into the document
         // instead of being cloned.
         if let Some(snapshot) = snapshot {

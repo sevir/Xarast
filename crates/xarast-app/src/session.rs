@@ -277,6 +277,9 @@ pub struct Session {
     /// How many of the walker's font substitutions were already handed
     /// out by [`Session::take_font_substitutions`].
     substitutions_reported: usize,
+    /// The operation journal this document's operations go to, while
+    /// [`crate::AppState`] autosaves it ([`crate::journal`]).
+    pub(crate) journal: Option<crate::journal::JournalHandle>,
 }
 
 impl Session {
@@ -330,6 +333,7 @@ impl Session {
             lock: None,
             diagnostics: Vec::new(),
             substitutions_reported: 0,
+            journal: None,
         }
     }
 
@@ -1421,7 +1425,64 @@ impl Session {
         self.run_tool(|m, cx| m.handle(input, cx))
     }
 
+    /// Hands what the bus recorded to the operation journal, if one runs:
+    /// after every operation, and after anything that changed the resource
+    /// tables outside a transaction.
+    pub(crate) fn flush_journal(&mut self) {
+        if let Some(j) = &mut self.journal {
+            self.bus.sync_journal(&self.doc);
+            j.send(self.bus.take_journal());
+        }
+    }
+
+    /// Whether the operation journal runs for this document.
+    #[must_use]
+    pub fn journal_running(&self) -> bool {
+        self.journal.is_some()
+    }
+
+    /// Whether the journal needs a new base before it can record again:
+    /// it is not running, it hit an operation it cannot represent, or an
+    /// entry could not be written.
+    #[must_use]
+    pub fn journal_needs_base(&self) -> bool {
+        match &self.journal {
+            None => true,
+            Some(j) => self.bus.journal_suspended() || j.writer().broken(),
+        }
+    }
+
+    /// Restarts the journal at the document as it is now — the snapshot an
+    /// autosave is about to take — and says what base to write with it.
+    /// `None` when no journal runs.
+    pub(crate) fn restart_journal(&mut self) -> Option<crate::save::JournalBase> {
+        let j = self.journal.as_mut()?;
+        // What was recorded before this instant belongs to the old base's
+        // journal: numbered first, so the new base holds it.
+        j.send(self.bus.start_journal(&self.doc));
+        Some(crate::save::JournalBase {
+            entry: j.entry().to_path_buf(),
+            seq: j.last_seq(),
+            stream: j.stream().to_owned(),
+            blobs: j.blobs().clone(),
+        })
+    }
+
+    /// Stops the journal, waiting for its writer to finish.
+    pub(crate) fn stop_journal(&mut self) {
+        let _ = self.bus.stop_journal();
+        self.journal = None;
+    }
+
+    /// Continues a journal recovery replayed into this session
+    /// ([`crate::journal::recover`]).
+    pub(crate) fn resume_journal(&mut self, handle: crate::journal::JournalHandle) {
+        self.bus.resume_journal(&self.doc);
+        self.journal = Some(handle);
+    }
+
     fn after_mutation(&mut self) {
+        self.flush_journal();
         // Hand the picker what changed; it re-walks only those objects at
         // the next pick (XARA-T-0168), never here on the undo path.
         self.picker.note_changes(self.doc.tree.drain_changes());

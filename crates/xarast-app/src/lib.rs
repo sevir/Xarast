@@ -86,6 +86,7 @@ pub mod geometry;
 pub mod headless;
 pub mod import;
 pub mod intent;
+pub mod journal;
 pub mod live_edit;
 pub mod locks;
 pub mod mould_tool;
