@@ -175,9 +175,9 @@ undo 1.7 ms (budgets 50 ms). Live, GardenPlan, 2056×1286, GPU tiles:
     the major axis the radius scales, across it not); typing W/H keeps the
     absolute radius. Answer to K8 by representation, pending VM
     observation.
-23. **Creation preview is an overlay outline**, not a phantom node: the
-    walker (owned elsewhere) has no phantom support. Radius drags hide the
-    node (`Preview::hidden`) and draw the new outline.
+23. **Creation preview is a filled phantom** (XARA-T-0169, decision 114):
+    `Preview::phantom` plus the outline overlay. Radius-handle drags still
+    hide the node (`Preview::hidden`) and draw the new outline.
 24. **Current attributes** are session state (`EditState::current`),
     applied as the new object's own attribute children; empty = document
     defaults (black 0.25 pt outline, no fill).
@@ -1562,6 +1562,52 @@ cycling (T6.11). Tests: `crates/xarast-app/tests/selector_extras.rs`
      get bumps by adding the item. A run of bumps is one undo step (it
      shares the nudge run). The original's ±360 clamp on Angle bumps is
      covered by the `% 360` reduction.
+114. **Shape tool leftovers (XARA-T-0169).**
+     - **Phantom preview.** `Preview::phantom: Vec<PhantomShape>` (a layer,
+       a `QuickShape`, the attributes the creation will write). The walker
+       paints each on top of its layer (at the layer's `LeaveScope`, or at
+       the visit of an *empty* layer, which has no scope events) through
+       `paint_geometry`, with the scene id `3 << 62 | index` and a content
+       hash of the shape's `Debug` text plus the attribute fingerprints, so
+       every drag frame repaints. `Session` widens `scene_ink` by its
+       bounds. Test: the pixels after the release equal the pixels of the
+       last drag frame (`tests/transforms.rs`). The outline overlay stays,
+       so a shape with no fill and no line is still visible.
+     - **Radius mode** (Adjust + Constrain while drawing, whenever the
+       two are down, as the original). Facts read from `tools/oprshape.cpp`
+       (`DragPointerMove`, 245-250, 293-313) and `DocView::ConstrainToAngle`
+       (`Kernel/docview.cpp:4760`): the temporary mode is RADIUS when Adjust
+       and Constrain are both down in bounds mode (Adjust alone in
+       diameter mode, which no Xarast tool uses). The pointer is put on the
+       nearest multiple of the constrain angle (45°) about the shape's
+       *current* centre, at its true distance, and only then snapped to
+       the grid. Major axis = the centre-to-pointer vector turned 180°
+       (it points away from the pointer); minor axis = the same vector
+       turned a further 90° (-270° in the original's y-up convention, i.e.
+       +90°); both have the pointer's distance as length, so a rectangle
+       is a square whose circumradius is that distance and an ellipse a
+       circle. The centre is not touched: it is the press point, or the
+       centre of the box drawn so far if the modifiers came down mid-drag
+       (`ShapeDrag::Create::at`). The re-centre bookkeeping (`IsShiftDown`)
+       is untouched in radius mode, so letting Constrain go continues
+       as plain Adjust from the pointer. Code: `ShapeKind::drawn_radius`,
+       `shapes::constrain_about`.
+     - **Convert to shapes** is the one existing command (decision 30,
+       `AppCommand::ConvertToShapes`, Ctrl+Shift+C: the original's
+       Ctrl+Shift+S stays Save As); it dispatches to quick shapes, text and
+       live controllers alike, so no second command. It had skipped quick
+       shapes with no cached path; `picking::geometry_of` now generates one.
+       Test: two shapes convert in one step, pixels unchanged, undo/redo
+       digest-exact.
+     - **Pathless quick shapes** (`shapes_pending`): the walker and
+       `picking::geometry_of` generate the outline from the parameters when
+       no path is cached (`walker::quick_shape_path`), every walk, not
+       cached. `shapes_pending` now counts only shapes whose parameters
+       produce no outline.
+     - **Still needing the VM** (not observable here): the corner radius
+       under a non-uniform scale (K8; the ratio to the major axis is
+       kept), what the original's Angle field shows, the default of "scale
+       lines".
 113. **Point cycling** is pure selection (`node_edit::cycle_selection`): no
      undo step, digest unchanged. Not done: scrolling the view to show
      the newly selected point.
@@ -1698,10 +1744,7 @@ cycling (T6.11). Tests: `crates/xarast-app/tests/selector_extras.rs`
 - [ ] Guide properties dialog; Delete all guides has no menu item yet;
       snapping of the shape editor's nodes (W6) and of guide drags.
 - [ ] Clone (Ctrl+K), duplicate-offset preference, Paste attributes.
-- [ ] Phantom-node preview (a filled shape while drawing) needs walker
-      support (`Preview::phantom`).
-- [ ] Constrain+Adjust while drawing is "square from the centre" here; the
-      original's radius mode (rotates with the pointer) is not done.
+- [x] Phantom-node preview and the radius mode (XARA-T-0169, decision 114).
 - [ ] Observe in the VM: the radius under a non-uniform scale (K8), what
       the original's Angle field shows, the default of "scale lines".
 - [ ] Undo of a large group move (thousands of nodes) costs ~1.5 ms: the
