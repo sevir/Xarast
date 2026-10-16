@@ -2,13 +2,14 @@
 id: XARA-T-0355
 type: task
 title: "Proptest failure: xarast-geom paths.rs hull_contains_tight_bounds (degenerate vertical cubic)"
-status: in_progress
+status: done
 priority: medium
 author: mcp
 labels: [geometry, bug]
 created: 2026-10-16T11:43:23Z
-updated: 2026-10-16T12:06:51Z
+updated: 2026-10-16T12:46:37Z
 started: 2026-10-16T12:06:51Z
+closed: 2026-10-16T12:46:37Z
 ---
 
 ## Description
