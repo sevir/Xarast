@@ -686,6 +686,24 @@ after). Shell: `arrows_nudge_a_selected_fill_handle_and_pan_otherwise`.
     until editing ends. An imported empty story only entered and left is
     never touched.
 
+116. **Text on a path is edited by commands, the text tool and the shape
+    editor (XARA-T-0251, T9.5.5; facts and decisions in `text.md`,
+    "Editing text on a path").** `EditCommand::TextPath(TextPathEdit)`
+    (`text_path_edit.rs`) carries `Fit { story, path }`, `Remove`,
+    `Reverse` (every selected story on a path) and `Indents { story,
+    left, right }`; the session raises the first three from
+    `Intent::FitTextToPath` / `RemoveTextFromPath` / `ReverseTextOnPath`
+    (Arrange menu; `Ctrl+Shift+R` reverses) through `apply_edit`, so the
+    bus records them and the journal with it, and selects the stories.
+    The text tool shows two `HandleShape::Radius` handles on the path of
+    the story it edits; dragging one (grabbed before any text hit) moves
+    the indent along the path, never past the other, and the release is
+    one "Path Indent" step (an unchanged drag emits nothing).
+    `node_edit::edited_paths` maps a selected story on a path to its path
+    child, so the shape editor shows and drags that path's nodes (one
+    step per drag, the text follows); the story's box is still drawn as
+    a non-path selection.
+
 ### Shortcuts added (`research/04 §4.2–4.4`)
 
 | Keys | Command | Note |
@@ -703,6 +721,7 @@ after). Shell: `arrows_nudge_a_selected_fill_handle_and_pan_otherwise`.
 | NumPad 1 | Show guides | keypad only (`ChordKey::NumPad`), so `1` stays 100 % |
 | F5 / F6 | Fill tool / Transparency tool | `research/04 §4.4` line 640 |
 | F8 | Text tool | `research/04` (`TOOL21`, F8); arrows/Home/End/PgUp/PgDn (+Ctrl, +Shift) move the caret while one is up |
+| Ctrl+Shift+R | Reverse text on path | `research/04 §4.2`, the original's `ReverseStoryPath`; Arrange › Fit text to path / Remove text from path have no key (nor in the original) |
 
 Clashes: none with the path tools' plain L/C/S/Z/B/J/Enter, Backspace and
 Ctrl+Shift+S (XARA-US-0034), checked by `no_two_commands_share_a_key`.

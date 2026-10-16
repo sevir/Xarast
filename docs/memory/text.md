@@ -21,7 +21,7 @@ architecture open question 4 is closed (see "Text on a path" below).
 | XARA-US-0049 W9.6 outlines | T9.6.1–T9.6.2 done; T9.6.3 convert command (XARA-T-0243) and T9.6.4 source text (XARA-T-0244) done, see "Convert to shapes" below; T9.6.5 export fallback done for PDF and SVG (XARA-T-0245, see "Font embedding"), profile C open | in review |
 | XARA-US-0045 W9.2 text model | read side done: `StoryText`, `TextPos`/`TextCursor`, attribute bridge, importer scoping and surrogates; edit commands (T9.2.4): `InsertText`, `DeleteRange` done (XARA-T-0223), `SetTextAttr` done (XARA-T-0225), `InsertKern`, `SetStoryMode` open; story invariants (T9.2.5) open | in review |
 | XARA-US-0047 W9.4 text tool | T9.4.1 state machine, T9.4.2 caret (blinking, split at direction boundaries), T9.4.3 selection spans in visual order, T9.4.4 keyboard navigation done; the T9.4.5 mouse gestures (click-to-position, drag, double/triple click) came along. T9.4.6 typing, grapheme deletion, undo per burst done (XARA-T-0223, with the T9.2.4 `InsertText`/`DeleteRange` commands). Text infobar, OpenType panel and interactive ruler (T9.4.9–T9.4.10) done (XARA-T-0225). IME composition and the text clipboard (T9.4.7–T9.4.8) done headlessly (XARA-T-0224, see "IME composition and the text clipboard"); the per-compositor check of the candidate window is open | in review |
-| XARA-US-0048 W9.5 text on a path | T9.5.1 spike A, T9.5.2 spike B (test only), T9.5.3 measurement, T9.5.4 A shipped; the walker paints the followed path; convert to shapes follows the path (XARA-T-0246); T9.5.6 the base SVG follows the path (XARA-T-0252, per-character `rotate`, not `<textPath>`: see "Base SVG along the path"). T9.5.5 editing (reverse, fit/remove commands, path editing) open | in review |
+| XARA-US-0048 W9.5 text on a path | T9.5.1 spike A, T9.5.2 spike B (test only), T9.5.3 measurement, T9.5.4 A shipped; the walker paints the followed path; convert to shapes follows the path (XARA-T-0246); T9.5.6 the base SVG follows the path (XARA-T-0252, per-character `rotate`, not `<textPath>`: see "Base SVG along the path"); T9.5.5 editing done (XARA-T-0251: fit, remove, reverse, indent handles, the shape editor on the path; word wrap on a path a documented non-goal, see "Editing text on a path") | in review |
 | XARA-US-0050 W9.7 corpus | text renders in the walker (every corpus story); the `.xarast` text writer is exact (XARA-T-0172, done: 59/59 render round trip, T9.7.3); T9.7.1 tag inventory and T9.7.2 golden renders done (XARA-T-0260, see "TextDesigns acceptance gate"); T9.7.4 WOFF2/fsType done (XARA-T-0218, see "Font embedding"), T9.7.5 multi-script open (XARA-T-0261), gate against the original's reference bitmaps open (XARA-T-0262) | in review |
 
 Public API (`crates/xarast-text/src/lib.rs`):
@@ -1178,7 +1178,8 @@ Facts about the original (read, not copied):
   alignment and full justification work along the path. We lay out a
   `Column { width: length − indents, wrap: false }` and add the left
   indent to the distance. Word wrap on a path (possible in the original)
-  is not modelled: `OnPath` has no wrap flag and the corpus never wraps.
+  is not modelled: `OnPath` has no wrap flag and the corpus never wraps
+  (decided a non-goal in T9.5.5, see "Editing text on a path").
 - **Placement** (`TextLine::FitTextToPath`, `Kernel/nodetxtl.cpp:1686-1755`):
   distance = position in line + half the character's *width* (its advance
   without tracking or kerns); point and tangent at that distance; the
@@ -1290,9 +1291,126 @@ on `TextCurve.xar` line 7: with tight tracking (advance 14.1 pt in a
 point too. Both carets are the same offset; the test clicks a quarter of
 the cluster inwards instead.
 
-Not done (tracker tasks): editing (T9.5.5, XARA-T-0251: fit text to
-a path, remove from path, reverse, drag the indents; word wrap on a
-path).
+### Editing text on a path (T9.5.5, as built, XARA-T-0251)
+
+Code: `xarast-app/src/text_path_edit.rs` (`TextPathEdit`, run as
+`EditCommand::TextPath`, so through the bus and the journal),
+`text_tool.rs` (indent handles), `node_edit.rs::edited_paths`,
+`xarast-text` `TextPath::project`.
+
+Facts about the original (read, not copied; `tools/textops.cpp`
+`OpFitTextToCurve`, `OpReverseStoryPath`, `OpDragStoryPath*Indent`,
+`Kernel/nodetxts.cpp` `MatrixFitToPath`/`MatrixRemoveFromPath`/`Transform`/
+`GetLeftIndentPos`, `Kernel/matrix.cpp` `Decompose`/`Compose`,
+`Kernel/textacts.cpp` `ReversePathAction`, `wxOil/xrc/SHARED_MENU.res`,
+`STANDARD_HOTKEYS.res`):
+
+- **One menu item toggles** ("FitTextToPath", last item of Arrange): it
+  fits when exactly one story (not on a path) and exactly one object that
+  can become a path are selected, and removes when the selected story is
+  already on a path. No key. The object is moved into the story as its
+  first child and converted to a path if it is not one; the selection
+  becomes the story. Before moving it, the original **translates the story
+  so its bounds' low corner meets the object's** ("so that attributes and
+  effects are in roughly the right position").
+- **MatrixFitToPath**: decompose the story matrix into scale (signed;
+  negative = mirrored), aspect, rotation (atan2 of the x axis), shear and
+  translation, keep them as `CharsScale/Aspect/Rotation/Shear`; if the
+  rotation is past ±90° toggle "reversed" and turn the rotation by π
+  (towards 0); the story matrix becomes the translation alone.
+- **MatrixRemoveFromPath**: if reversed, turn the rotation back by π and
+  toggle reversed; compose scale, aspect, rotation, shear (then the
+  remaining story matrix) into the new story matrix. The path moves out as
+  the story's **next sibling**; the story's width becomes the path length
+  minus both indents **only if it word-wraps**.
+- `Compose` is x' = |s|·aspect·x + s·tan(shear)·y, y' = s·y, then rotate,
+  then translate. `Decompose` reports the shear with the mirror's sign
+  folded in (for s < 0 it gives −shear), which is why `Transform` negates
+  it for a negative scale; `MatrixFitToPath` does not, so a mirrored and
+  sheared story slants the other way once fitted in the original. We do
+  not reproduce that: our split is exact (below).
+- `TextStory::Transform` bakes any scale (and, off a path, aspect) into
+  font size, line spacing, margins, indents and story width, so the
+  original's story matrix normally has |scale| = 1 and aspect 1;
+  `Validate` asserts both.
+- **Reverse** (`Ctrl+Shift+R`, "ReverseStoryPath") toggles the reversed
+  flag of every selected story on a path, nothing else. Greyed when a
+  selected story is not on a path.
+- **Indents**: two blobs on the path; left at distance `LeftIndent` from
+  the path's start (from its end when reversed), right at `RightIndent`
+  from its end (start when reversed). A drag snaps the pointer to the
+  nearest point of the path, the new indent is that point's distance from
+  the start (left) or from the end (right), swapped when reversed, and a
+  handle is stopped at the other one. One undoable op per drag.
+- Word wrap on a path: the `WordWrapping` flag survives a fit; on a path
+  `StoryWidth` is the path length, so a wrapping story on a path breaks
+  its lines at the path's length.
+
+Decisions (ours):
+
+- **Commands**: Arrange › "Fit text to path", "Remove text from path"
+  (both keyless, as the original) and "Reverse text on path"
+  (`Ctrl+Shift+R`, free in our table). Fit and remove are two commands,
+  not one toggle, so the menu says what will happen. Remove and reverse
+  act on every selected story on a path; fit needs exactly one story and
+  one path, shape or quick shape (anything else selected: nothing). Each
+  is one undo step ("Fit Text to Path", "Remove Text from Path",
+  "Reverse Text on Path", "Path Indent"); nothing applicable records no
+  step.
+- **The split is exact by construction** (`fit_placement`): rotation θ =
+  atan2(b, a), mirror = sign of the determinant, shear φ from the matrix
+  with the rotation taken out (upper triangular [[|A|, p], [0, s]],
+  tan φ = p / s, which is the fit's own `PathFit` pre-transform); past ±90°
+  reversed and θ turned by π. The stored angles are rounded to 16.16 and
+  the matrix that stays is the old one **times the inverse of what was
+  taken out** (rotation × characters' transform, using the rounded
+  angles), so `removed_placement` gives the old matrix back to ~1e-12 and
+  the translation exactly. A uniform scale stays in the matrix (the fit
+  then scales the text and the path's story-space length together, which
+  draws the same); a non-uniform remainder stays too (the original keeps
+  aspect in `CharsAspect`, which our model has no field for).
+- **No translation onto the path** (deviation): the story keeps its
+  translation, so fit then remove draws the story exactly where it was
+  (acceptance), which the original's move to the path's corner would not.
+- **The path keeps its look** both ways (`move_keeping_look`): before the
+  move its resolved non-text attributes are read, and every one that
+  would differ in the new place becomes its own attribute (the original
+  localises and factors out attributes around the move). It is placed
+  after the story's attribute block (no `AttrAfterInk` warning) on fit,
+  and as the story's next sibling (in front) on remove.
+- **Remove gives a point story** (`AtPoint`), indents dropped.
+- **Word wrap on a path: non-goal.** `OnPath` has no wrap flag; a column
+  story fitted to a path loses its column (width and wrap) and comes off
+  as a point story. Reasons: the corpus never wraps on a path; wrapping
+  would need the flag in the model, both writers and the importer for a
+  behaviour (lines broken at the path's length, each later line on a
+  parallel offset of the start normal) that is rarely what anyone wants
+  on a curve. Revisit only with a user request.
+- **Indent handles** (text tool): shown while a caret is in a story on a
+  path, as `HandleShape::Radius` (a shape's own handle), at the indents in
+  the text's direction (`PathFit::path()` already reversed, story space,
+  mapped by the story matrix). Grabbed within `HANDLE_TOLERANCE_PX`
+  before any text hit. The drag projects the pointer onto the
+  story-space path (`TextPath::project`: kurbo's nearest, polished by
+  Newton — kurbo alone was off by up to ~130 mp on a 650 pt curve) and
+  stops at the other handle. Release emits one `Indents` step; an
+  unchanged drag emits nothing.
+- **The path stays editable**: the shape editor treats a selected story
+  on a path as its path (`edited_paths`), so its nodes show and drag as
+  any path's, and the text follows.
+
+Tests: `xarast-app/tests/text_path_edit.rs` (6: fit and remove one step
+each, digest-exact undo, the journal replays the fit, fit then remove
+renders as before, the path's attributes unchanged; past 90° reversed and
+back; a quick shape becomes the path, wrong selections record nothing;
+reverse on `TextCurve.xar`: every first-line character at length − d on
+the other side, flags START_LEFT ⇄ END_RIGHT; an indent drag and the
+clamp; the shape editor on a story's path), `text_path_edit` unit tests
+(the split), `xarast-text` `path::tests` (projection).
+
+**Dead end:** comparing distances along the path in **document** space on
+`TextCurve.xar`: its first story's matrix carries a shear (c ≈ 0.39), so
+document lengths are not story lengths; measure in story space.
 
 ### Base SVG along the path (T9.5.6, as built, XARA-T-0252)
 
