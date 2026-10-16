@@ -244,6 +244,13 @@ fn recover_svg(
     Err(first)
 }
 
+/// What [`open_recovering`] returns: the document, and the repair report when
+/// the container had to be rebuilt.
+pub type RecoveredOpen = (
+    OpenedDocument<std::io::Cursor<Vec<u8>>>,
+    Option<crate::repair::RepairReport>,
+);
+
 /// Opens a package that may be damaged: the strict open first, and when the
 /// container is refused, [`repair`](crate::repair::repair) in memory and open
 /// that. A malformed `document.svg` is recovered as well
@@ -256,16 +263,7 @@ fn recover_svg(
 /// # Errors
 ///
 /// [`OpenError`] when nothing can be recovered; the error is the strict open's.
-pub fn open_recovering(
-    bytes: &[u8],
-    opts: &OpenOptions,
-) -> Result<
-    (
-        OpenedDocument<std::io::Cursor<Vec<u8>>>,
-        Option<crate::repair::RepairReport>,
-    ),
-    OpenError,
-> {
+pub fn open_recovering(bytes: &[u8], opts: &OpenOptions) -> Result<RecoveredOpen, OpenError> {
     let mut o = opts.clone();
     o.recover = true;
     let strict = open_reader(std::io::Cursor::new(bytes.to_vec()), &o);

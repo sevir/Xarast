@@ -154,13 +154,10 @@ fn truncation_at_every_offset_never_panics_and_never_yields_a_bad_package() {
     let original = package(&fixture());
     let mut rebuilt = 0usize;
     for len in 0..original.len() {
-        match repair(&original[..len], &RepairOptions::default()) {
-            Ok(r) => {
-                rebuilt += 1;
-                XarastReader::open(Cursor::new(r.bytes.clone()))
-                    .unwrap_or_else(|e| panic!("cut at {len}: rebuilt package refused: {e}"));
-            }
-            Err(_) => {}
+        if let Ok(r) = repair(&original[..len], &RepairOptions::default()) {
+            rebuilt += 1;
+            XarastReader::open(Cursor::new(r.bytes.clone()))
+                .unwrap_or_else(|e| panic!("cut at {len}: rebuilt package refused: {e}"));
         }
     }
     assert!(rebuilt > original.len() / 2, "only {rebuilt} cuts rebuilt");
@@ -332,12 +329,9 @@ fn a_document_cut_anywhere_never_panics_and_mostly_opens() {
     let step = (svg.len() / 300).max(1);
     for cut in (0..svg.len()).step_by(step) {
         let damaged = with_svg(&original, &svg[..cut]);
-        match open_recovering(&damaged, &OpenOptions::default()) {
-            Ok((o, _)) => {
-                opened += 1;
-                assert!(o.read_only_suggested, "cut at {cut}");
-            }
-            Err(_) => {}
+        if let Ok((o, _)) = open_recovering(&damaged, &OpenOptions::default()) {
+            opened += 1;
+            assert!(o.read_only_suggested, "cut at {cut}");
         }
     }
     assert!(opened > 10, "only {opened} cuts opened");
