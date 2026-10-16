@@ -116,6 +116,7 @@ mod text;
 pub mod text_clip;
 pub mod text_edit;
 pub mod text_infobar;
+pub mod text_path_edit;
 #[cfg(test)]
 mod text_path_fidelity;
 pub mod text_tool;

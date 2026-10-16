@@ -225,6 +225,14 @@ pub enum AppCommand {
     /// Convert to editable shapes (`Ctrl+Shift+C`): rectangles, ellipses
     /// and quick shapes become paths.
     ConvertToShapes,
+    /// Arrange › Fit text to path: the selected story onto the selected
+    /// path (phase 9, T9.5.5). The original has no key for it.
+    FitTextToPath,
+    /// Arrange › Remove text from path. The original's fit command does
+    /// this when the story is already on a path; it has no key.
+    RemoveTextFromPath,
+    /// Arrange › Reverse text on path (`Ctrl+Shift+R`, the original's).
+    ReverseTextOnPath,
     /// Edit › Cut.
     Cut,
     /// Edit › Copy.
@@ -267,7 +275,7 @@ pub const ZOOM_STEP: f64 = std::f64::consts::SQRT_2;
 impl AppCommand {
     /// Every command, in menu order, then the tools in palette order.
     /// Tools reserved for later phases are not here: they have no key yet.
-    pub const ALL: [AppCommand; 67] = [
+    pub const ALL: [AppCommand; 70] = [
         AppCommand::Open,
         AppCommand::Import,
         AppCommand::Export,
@@ -330,6 +338,9 @@ impl AppCommand {
         AppCommand::Action(ToolAction::Break),
         AppCommand::Action(ToolAction::Join),
         AppCommand::ConvertToShapes,
+        AppCommand::FitTextToPath,
+        AppCommand::RemoveTextFromPath,
+        AppCommand::ReverseTextOnPath,
         AppCommand::ShowPane(DockPane::Layers),
         AppCommand::ShowPane(DockPane::ColourEditor),
         AppCommand::ShowPane(DockPane::ColourGallery),
@@ -362,6 +373,9 @@ impl AppCommand {
             AppCommand::Tool(t) => t.label(),
             AppCommand::Action(a) => a.label(),
             AppCommand::ConvertToShapes => "Convert to editable shapes",
+            AppCommand::FitTextToPath => "Fit text to path",
+            AppCommand::RemoveTextFromPath => "Remove text from path",
+            AppCommand::ReverseTextOnPath => "Reverse text on path",
             AppCommand::Cut => "Cut",
             AppCommand::Copy => "Copy",
             AppCommand::Paste => "Paste",
@@ -461,6 +475,8 @@ impl AppCommand {
         // The original's Ctrl+Shift+S is Save As here, as on every other
         // desktop program; Ctrl+Shift+C is Inkscape's "Object to Path" (tools.md).
         const CONVERT: &[KeyChord] = &[KeyChord::ctrl_shift('c')];
+        // `research/04 §4.2`: the original's "ReverseStoryPath".
+        const REVERSE_TEXT: &[KeyChord] = &[KeyChord::ctrl_shift('r')];
         const NONE: &[KeyChord] = &[];
         // Not documented for the original; Ctrl+Shift+G is free.
         const DELETE_ALL_GUIDES: &[KeyChord] = &[KeyChord::ctrl_shift('g')];
@@ -554,6 +570,8 @@ impl AppCommand {
                 | ToolAction::LastPoint => NONE,
             },
             AppCommand::ConvertToShapes => CONVERT,
+            AppCommand::FitTextToPath | AppCommand::RemoveTextFromPath => NONE,
+            AppCommand::ReverseTextOnPath => REVERSE_TEXT,
             AppCommand::Cut => CUT,
             AppCommand::Copy => COPY,
             AppCommand::Paste => PASTE,
@@ -637,6 +655,9 @@ impl AppCommand {
             AppCommand::Action(ToolAction::SelectAll) => Intent::SelectAll,
             AppCommand::Action(a) => Intent::ToolAction(a),
             AppCommand::ConvertToShapes => Intent::ConvertToShapes,
+            AppCommand::FitTextToPath => Intent::FitTextToPath,
+            AppCommand::RemoveTextFromPath => Intent::RemoveTextFromPath,
+            AppCommand::ReverseTextOnPath => Intent::ReverseTextOnPath,
             AppCommand::Cut => Intent::Cut,
             AppCommand::Copy => Intent::Copy,
             AppCommand::Paste => Intent::Paste { in_place: false },
@@ -785,6 +806,11 @@ mod tests {
             Intent::ShowExportDialog
         );
         assert_eq!(key(AppCommand::ConvertToShapes), "Ctrl+Shift+C");
+        assert_eq!(key(AppCommand::ReverseTextOnPath), "Ctrl+Shift+R");
+        assert_eq!(
+            AppCommand::ReverseTextOnPath.intent(DevicePoint::new(0.0, 0.0)),
+            Intent::ReverseTextOnPath
+        );
         assert_eq!(
             AppCommand::Save.intent(DevicePoint::new(0.0, 0.0)),
             Intent::Save
@@ -878,10 +904,13 @@ mod tests {
         for c in AppCommand::ALL {
             assert!(!c.label().is_empty());
             // The panes the original has no gallery key for are reached
-            // from the Window menu alone.
+            // from the Window menu alone, and so are fitting text to a
+            // path and taking it off (the original's menu item has no key).
             let keyless = matches!(
                 c,
                 AppCommand::ShowPane(DockPane::ColourEditor | DockPane::Photo)
+                    | AppCommand::FitTextToPath
+                    | AppCommand::RemoveTextFromPath
             );
             assert_eq!(c.primary_shortcut().is_none(), keyless, "{c:?}");
         }

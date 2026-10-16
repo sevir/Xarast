@@ -1651,6 +1651,35 @@ impl Session {
                 let nodes: Vec<_> = self.edit.selection().collect();
                 changed |= self.convert_to_shapes(crate::convert::ConvertCommand::new(nodes))?;
             }
+            Intent::FitTextToPath => {
+                let nodes: Vec<_> = self.edit.selection().collect();
+                if let Some((story, path)) = crate::text_path_edit::fit_target(&self.doc, &nodes) {
+                    changed |= self.text_path(
+                        crate::text_path_edit::TextPathEdit::Fit { story, path },
+                        vec![story],
+                    )?;
+                }
+            }
+            Intent::RemoveTextFromPath => {
+                let nodes: Vec<_> = self.edit.selection().collect();
+                let stories = crate::text_path_edit::stories_on_path(&self.doc, &nodes);
+                changed |= self.text_path(
+                    crate::text_path_edit::TextPathEdit::Remove {
+                        stories: stories.clone(),
+                    },
+                    stories,
+                )?;
+            }
+            Intent::ReverseTextOnPath => {
+                let nodes: Vec<_> = self.edit.selection().collect();
+                let stories = crate::text_path_edit::stories_on_path(&self.doc, &nodes);
+                changed |= self.text_path(
+                    crate::text_path_edit::TextPathEdit::Reverse {
+                        stories: stories.clone(),
+                    },
+                    stories,
+                )?;
+            }
             Intent::DeleteSelection => {
                 changed |= self.cancel_gesture();
                 let (c, took) = self.tool_action(ToolAction::Delete)?;
@@ -1969,6 +1998,21 @@ impl Session {
             .collect();
         self.edit.select(selection, SelectMode::Replace);
         changed |= Changed::DOCUMENT | Changed::SELECTION | Changed::UI;
+        Ok(changed)
+    }
+
+    /// Runs an edit of text on a path ([`crate::text_path_edit`]) as one
+    /// undo step and selects `select` (the stories) after it.
+    fn text_path(
+        &mut self,
+        edit: crate::text_path_edit::TextPathEdit,
+        select: Vec<xarast_doc::NodeId>,
+    ) -> Result<Changed, SessionError> {
+        let mut changed = self.cancel_gesture();
+        if self.apply_edit(EditCommand::TextPath(edit))?.is_some() {
+            self.edit.select(select, SelectMode::Replace);
+            changed |= Changed::DOCUMENT | Changed::SELECTION | Changed::UI;
+        }
         Ok(changed)
     }
 

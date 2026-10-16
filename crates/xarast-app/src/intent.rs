@@ -301,6 +301,12 @@ pub enum Intent {
     /// Turn the selected rectangles, ellipses and quick shapes into
     /// editable paths.
     ConvertToShapes,
+    /// Fit the selected story to the selected path (phase 9, T9.5.5).
+    FitTextToPath,
+    /// Take the selected stories off their paths.
+    RemoveTextFromPath,
+    /// Reverse the selected stories along their paths.
+    ReverseTextOnPath,
     /// A caret movement key for the text being edited (arrows, Home, End,
     /// Page Up, Page Down, with Ctrl and Shift). The shell sends these
     /// instead of panning while [`crate::Session::text_editing`] is true.

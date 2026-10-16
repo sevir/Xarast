@@ -294,6 +294,9 @@ pub enum EditCommand {
         /// The key of the undo step it merges into, if any.
         joins: Option<CoalesceKey>,
     },
+    /// Fits a story to a path, takes it off, reverses it along the path or
+    /// sets its indents on it (phase 9, T9.5.5; [`crate::text_path_edit`]).
+    TextPath(crate::text_path_edit::TextPathEdit),
 }
 
 /// Where [`EditCommand::PasteText`] puts its text.
@@ -400,6 +403,7 @@ impl EditCommand {
             EditCommand::PasteText { .. } => "Paste",
             EditCommand::CutText { .. } => "Cut",
             EditCommand::RemoveEmptyStory { .. } => "Delete Text",
+            EditCommand::TextPath(e) => e.label(),
             EditCommand::SetTextAttr { edits, .. } => edits
                 .first()
                 .and_then(|(_, v)| v.slot())
@@ -477,6 +481,7 @@ impl EditCommand {
             }
             EditCommand::CutText { range, .. } => range.is_empty(),
             EditCommand::SetTextAttr { edits, .. } => edits.is_empty(),
+            EditCommand::TextPath(e) => e.is_noop(),
             EditCommand::CreateShape { .. }
             | EditCommand::SetShapeParams { .. }
             | EditCommand::SetPath { .. }
@@ -740,6 +745,7 @@ impl xarast_doc::Command for EditCommand {
                 check_layers(tx, &[*story])?;
                 xarast_doc::remove_empty_story(tx, *story).map(|_| ())
             }
+            EditCommand::TextPath(e) => e.run(tx),
         }
     }
 
