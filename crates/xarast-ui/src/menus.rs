@@ -338,6 +338,15 @@ fn arrange_menu(ui: &mut egui::Ui, model: &UiModel, out: &mut CommandSink) {
     }
     ui.separator();
     command_item(ui, model, AppCommand::AlignDialog, out);
+    // Text on a path, last in the menu as in the original's Arrange menu.
+    ui.separator();
+    for c in [
+        AppCommand::FitTextToPath,
+        AppCommand::RemoveTextFromPath,
+        AppCommand::ReverseTextOnPath,
+    ] {
+        labelled_item(ui, c, c.label(), selected, out);
+    }
 }
 
 /// "Undo Move", or plain "Undo" greyed out when there is nothing to undo.
