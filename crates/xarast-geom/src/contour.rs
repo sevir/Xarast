@@ -526,7 +526,7 @@ fn refit_closed(b: &mut crate::PathBuilder, segs: &[crate::Segment], tol: f64) {
     let dir = |i: usize| unit(kp(segs[i % n].end()) - kp(segs[i % n].start()));
     // Samples of a run of lines from vertex `from`, `count` edges long:
     // each vertex and points along each edge, at least three and no
-    // further apart than the run's shortest edge (at most 64 an edge), so
+    // further apart than the run's shortest edge (at most eight an edge), so
     // that a curve cannot bulge between them.
     let samples = |from: usize, count: usize| {
         let step = (0..count)
@@ -538,7 +538,7 @@ fn refit_closed(b: &mut crate::PathBuilder, segs: &[crate::Segment], tol: f64) {
             let seg = segs[(from + k) % n];
             let (p, q) = (kp(seg.start()), kp(seg.end()));
             s.push(p);
-            let m = ((len(from + k) / step).ceil() as usize).clamp(4, 65);
+            let m = ((len(from + k) / step).ceil() as usize).clamp(4, 9);
             for j in 1..m {
                 s.push(p.lerp(q, j as f64 / m as f64));
             }
