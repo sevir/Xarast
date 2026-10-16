@@ -443,3 +443,67 @@ fn a_bitmap_without_an_original_is_copied_as_a_png_of_its_pixels() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// XARA-T-0350: a file over the inline limit is read and decoded on the
+/// import worker; the bitmap keeps its old image until the new one has
+/// arrived, then swaps as the same one undo step.
+#[test]
+fn a_large_replacement_is_decoded_in_the_background() {
+    let mut f = fixture();
+    f.app = std::mem::take(&mut f.app).with_inline_import_limit(0);
+    let dir = temp_dir("background");
+    let digest = session(&f.app).doc.canonical_digest();
+    let steps = session(&f.app).bus.history().len();
+    f.app
+        .apply(Intent::BitmapGallery(BitmapGalleryOp::Replace(f.a)))
+        .unwrap();
+    f.app.take_requests();
+    let path = replacement(&mut f.app, &dir);
+    // Nothing was decoded on this thread: the document is as it was and a
+    // job is on the status bar.
+    assert_eq!(f.app.import_progress().len(), 1);
+    assert_eq!(session(&f.app).doc.canonical_digest(), digest);
+    assert_eq!(session(&f.app).bus.history().len(), steps);
+
+    f.app.wait_imports();
+    assert!(f.app.import_progress().is_empty());
+    let s = session(&f.app);
+    assert_eq!(s.bus.history().len(), steps + 1, "one undo step");
+    assert_eq!(s.undo_label(), Some("Replace Bitmap"));
+    let res = s.doc.resources.bitmap(f.a).unwrap();
+    assert_eq!(res.name.as_ref(), "green.png");
+    assert_eq!(
+        res.original.as_ref().unwrap().bytes.as_ref(),
+        std::fs::read(&path).unwrap().as_slice()
+    );
+    // No new object was placed by the import.
+    assert_eq!(
+        s.doc
+            .tree
+            .preorder(s.doc.tree.root())
+            .filter(|n| matches!(s.doc.tree.kind(*n), Some(NodeKind::Bitmap(_))))
+            .count(),
+        2
+    );
+    f.app.apply(Intent::Undo).unwrap();
+    assert_eq!(session(&f.app).doc.canonical_digest(), digest);
+
+    // A file that does not decode says so and changes nothing.
+    f.app
+        .apply(Intent::BitmapGallery(BitmapGalleryOp::Replace(f.b)))
+        .unwrap();
+    f.app.take_requests();
+    let bad = dir.join("notes.png");
+    std::fs::write(&bad, b"this is not a picture").unwrap();
+    f.app.apply(Intent::ReplaceBitmapWith(bad)).unwrap();
+    f.app.wait_imports();
+    assert_eq!(session(&f.app).doc.canonical_digest(), digest);
+    let notice = f.app.take_notice();
+    assert!(
+        notice
+            .as_deref()
+            .is_some_and(|n| n.starts_with("Could not replace the bitmap")),
+        "{notice:?}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

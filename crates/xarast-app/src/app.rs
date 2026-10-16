@@ -301,6 +301,9 @@ struct PendingImport {
     doc: DocumentId,
     /// The drop point in document space, or `None` for the view's centre.
     centre: Option<crate::geometry::DocPoint>,
+    /// The bitmap the image replaces (the gallery's Replace) instead of
+    /// being placed as a new object.
+    replace: Option<xarast_doc::BitmapId>,
 }
 
 /// The last copy of text made in this process (T9.4.8).
@@ -495,7 +498,12 @@ impl AppState {
             return self.place_image(Some(doc), img, centre, "Import Bitmap");
         }
         let id = self.imports.start(path, size);
-        self.pending_imports.push(PendingImport { id, doc, centre });
+        self.pending_imports.push(PendingImport {
+            id,
+            doc,
+            centre,
+            replace: None,
+        });
         if let Some(p) = self.imports.progress().into_iter().find(|p| p.id == id) {
             self.notice = Some(p.label());
         }
@@ -523,7 +531,39 @@ impl AppState {
         let Some((doc, id)) = self.replacing.take() else {
             return Changed::empty();
         };
-        let img = match crate::place::image_from_file(path) {
+        // A large file is read and decoded on the import worker, like an
+        // import over the inline limit; the bitmap is swapped when it
+        // arrives (XARA-T-0350).
+        let size = std::fs::metadata(path).map_or(0, |m| m.len());
+        let inline = self
+            .inline_import_bytes
+            .unwrap_or(crate::import::INLINE_IMPORT_BYTES);
+        if size > inline {
+            let job = self.imports.start(path.to_path_buf(), size);
+            self.pending_imports.push(PendingImport {
+                id: job,
+                doc,
+                centre: None,
+                replace: Some(id),
+            });
+            if let Some(p) = self.imports.progress().into_iter().find(|p| p.id == job) {
+                self.notice = Some(p.label());
+            }
+            return Changed::UI;
+        }
+        let img = crate::place::image_from_file(path);
+        self.finish_replace(doc, id, img)
+    }
+
+    /// Swaps `id`'s image for a decoded one as one undo step, or says why
+    /// not. The document or the bitmap may be gone by now.
+    fn finish_replace(
+        &mut self,
+        doc: DocumentId,
+        id: xarast_doc::BitmapId,
+        img: Result<crate::place::ImageToPlace, crate::place::PlaceError>,
+    ) -> Changed {
+        let img = match img {
             Ok(i) => i,
             Err(crate::place::PlaceError::Cancelled) => return Changed::empty(),
             Err(e) => return self.paste_notice(&format!("Could not replace the bitmap: {e}")),
@@ -640,6 +680,10 @@ impl AppState {
                 continue;
             };
             let p = self.pending_imports.remove(i);
+            if let Some(bitmap) = p.replace {
+                changed |= self.finish_replace(p.doc, bitmap, f.result);
+                continue;
+            }
             match self.place_image(Some(p.doc), f.result, p.centre, "Import Bitmap") {
                 Ok(c) => changed |= c,
                 Err(e) => changed |= self.paste_notice(&format!("Could not place the image: {e}")),
