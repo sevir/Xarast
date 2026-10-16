@@ -2,13 +2,14 @@
 id: XARA-T-0189
 type: task
 title: Snapping for shape-editor nodes, pen points and guide drags; guide properties and Delete all guides
-status: in_progress
+status: done
 parent: XARA-US-0036
 author: mcp
 labels: [phase-7, tools]
 created: 2026-09-23T19:29:14Z
-updated: 2026-10-16T09:13:40Z
+updated: 2026-10-16T09:52:08Z
 started: 2026-10-16T09:13:40Z
+closed: 2026-10-16T09:52:08Z
 ---
 
 ## Description

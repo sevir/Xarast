@@ -2,13 +2,14 @@
 id: XARA-T-0290
 type: task
 title: "T10.7.6: Replace bitmap (keeping every placement and fill) and Save a copy in the bitmap gallery"
-status: backlog
+status: in_progress
 priority: medium
 parent: XARA-US-0055
 author: mcp
 labels: [phase-10, ui]
 created: 2026-09-24T11:52:16Z
-updated: 2026-09-24T11:52:16Z
+updated: 2026-10-16T09:52:08Z
+started: 2026-10-16T09:52:08Z
 ---
 
 ## Description
