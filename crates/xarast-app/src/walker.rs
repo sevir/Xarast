@@ -1514,8 +1514,23 @@ impl SceneWalker {
             return false;
         };
         let fonts = self.story_fonts(doc);
+        // A cage being dragged (the mould tool): drawn through the
+        // previewed parameters, keyed apart from the committed output.
+        let previewed = self
+            .live_preview
+            .iter()
+            .find(|(n, _)| *n == controller)
+            .map(|(_, k)| k.clone());
+        let over = xarast_doc::RegenOverride {
+            kind: previewed.as_ref(),
+            moved: None,
+        };
+        let params = match &previewed {
+            Some(xarast_doc::LiveKind::Mould(p)) => Some(&**p),
+            _ => None,
+        };
         let mut generate = |doc: &Document, c: NodeId, _dpi: f64| {
-            let shapes = xarast_doc::mould::generate_with(doc, c, &mut |doc, story| {
+            let shapes = xarast_doc::mould::generate_preview(doc, c, params, &mut |doc, story| {
                 crate::text::story_outlines(&fonts, doc, story).map(|(runs, _)| runs)
             });
             Ok(match shapes {
@@ -1524,9 +1539,9 @@ impl SceneWalker {
             })
         };
         // Moulds are geometry: the same at every resolution.
-        let Some((key, out)) = self
-            .live
-            .current_or_regenerate(doc, controller, 0.0, &mut generate)
+        let Some((key, out)) =
+            self.live
+                .current_or_regenerate_with(doc, controller, 0.0, over, &mut generate)
         else {
             return false;
         };

@@ -662,6 +662,38 @@ impl Session {
         }
         // A previewed outer contour reaches as far as its previewed width.
         for (c, kind) in &self.preview.live {
+            // A previewed cage moves the mould's copy anywhere: the image
+            // of its source through the dragged cage, grown by how far the
+            // source's strokes reach past its rectangle.
+            if let xarast_doc::LiveKind::Mould(p) = kind
+                && let Some(parts) = xarast_doc::live::parts(&self.doc.tree, *c)
+            {
+                let src = xarast_doc::mould::source_rect(&self.doc, p, parts.source);
+                let ink = crate::viewport::nodes_rect(&self.doc, [parts.source]);
+                let reach = if ink.is_empty() || src.is_empty() {
+                    0
+                } else {
+                    [
+                        src.lo.x.raw().saturating_sub(ink.lo.x.raw()),
+                        src.lo.y.raw().saturating_sub(ink.lo.y.raw()),
+                        ink.hi.x.raw().saturating_sub(src.hi.x.raw()),
+                        ink.hi.y.raw().saturating_sub(src.hi.y.raw()),
+                    ]
+                    .into_iter()
+                    .max()
+                    .unwrap_or(0)
+                    .max(0)
+                };
+                let r = xarast_geom::mould::MouldGeometry::extent(&*p.geometry(src))
+                    .inflated(xarast_geom::Mp::new(reach));
+                if !r.is_empty() {
+                    self.scene_ink = if self.scene_ink.is_empty() {
+                        r
+                    } else {
+                        self.scene_ink.union(r)
+                    };
+                }
+            }
             if let xarast_doc::LiveKind::Contour(p) = kind
                 && let Some(parts) = xarast_doc::live::parts(&self.doc.tree, *c)
             {

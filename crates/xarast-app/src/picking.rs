@@ -346,6 +346,25 @@ fn collect_top(doc: &Document, top: NodeId, stack: &mut AttrStack) -> Vec<Found>
                     }
                     walk.control(xarast_doc::Descend::Skip);
                 }
+                // A mould's source is not drawn where it stands: it is
+                // picked through its moulded copy, at the generated node.
+                Some(NodeKind::Live(l))
+                    if matches!(l.kind, xarast_doc::LiveKind::Mould(_))
+                        && l.role == xarast_doc::LiveRole::Source =>
+                {
+                    walk.control(xarast_doc::Descend::Skip);
+                }
+                Some(NodeKind::Live(l))
+                    if matches!(l.kind, xarast_doc::LiveKind::Mould(_))
+                        && l.role == xarast_doc::LiveRole::Generated =>
+                {
+                    if let Some(c) = tree.links(node).parent
+                        && let Some(f) = moulded_leaf(doc, c, stack)
+                    {
+                        out.push(f);
+                    }
+                    walk.control(xarast_doc::Descend::Skip);
+                }
                 k if own_ink(k) && tree.links(node).first_child.is_none() => {
                     add(node, stack, &mut out);
                 }
@@ -374,6 +393,71 @@ fn collect_top(doc: &Document, top: NodeId, stack: &mut AttrStack) -> Vec<Found>
         }
     }
     out
+}
+
+/// A mould controller's moulded copy as one leaf, keyed by the controller
+/// (which a constrained click then selects: nothing inside a mould is
+/// picked on its own). Its outline is every moulded shape's; it is filled
+/// (non-zero) when any shape paints a fill, and stroked as the first shape
+/// that paints a stroke. Text inside the mould is not outlined here (the
+/// picker has no fonts): a mould with nothing else falls back to its box.
+fn moulded_leaf(doc: &Document, controller: NodeId, stack: &mut AttrStack) -> Option<Found> {
+    let shapes = xarast_doc::mould::generate(doc, controller)?;
+    let mut b = Path::builder();
+    let mut fill = None;
+    let mut stroke: Option<(StrokeStyle, Mp)> = None;
+    for shape in &shapes {
+        if shape.path.is_empty() {
+            continue;
+        }
+        stack.push_scope();
+        for a in shape.attrs.iter() {
+            stack.push(Arc::new(a.clone()));
+        }
+        if shape.filled
+            && matches!(stack.get(AttrSlot::FillGeometry), AttrValue::Fill(p) if paints(doc, p))
+        {
+            fill = Some(FillRule::NonZero);
+        }
+        if stroke.is_none()
+            && shape.stroked
+            && matches!(stack.get(AttrSlot::StrokeColour),
+                AttrValue::StrokeColour(p) if paints(doc, p))
+        {
+            stroke = Some((stroke_style(stack), half_width(stack)));
+        }
+        stack.pop_scope();
+        for sp in shape.path.subpaths() {
+            let segs = shape.path.subpath_segments(&sp);
+            let Some(first) = segs.first() else { continue };
+            b.move_to(first.start());
+            for seg in &segs {
+                match *seg {
+                    xarast_geom::Segment::Line { p1, .. } => b.line_to(p1),
+                    xarast_geom::Segment::Cubic { p1, p2, p3, .. } => b.cubic_to(p1, p2, p3),
+                };
+            }
+            if sp.closed {
+                b.close();
+            }
+        }
+    }
+    let path = b.build();
+    if path.is_empty() || (fill.is_none() && stroke.is_none()) {
+        return None;
+    }
+    let reach = stroke.as_ref().map_or(Mp::ZERO, |(s, half)| {
+        Mp::from_f64_round(half.to_f64() * s.mitre_limit.max(1.0))
+    });
+    let bounds = path.bounds().inflated(reach);
+    Some(Found {
+        node: controller,
+        bounds,
+        geometry: Geometry::Path(Arc::new(path)),
+        fill,
+        interior: fill,
+        stroke: stroke.map(|(s, _)| s),
+    })
 }
 
 /// Where a changed node sits, as far as the index cares.
