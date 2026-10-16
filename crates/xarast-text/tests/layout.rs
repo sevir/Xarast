@@ -352,11 +352,7 @@ fn tabs_go_to_the_ruler_then_to_default_stops() {
         text,
         &r,
         ParagraphStyle {
-            tabs: vec![TabStop {
-                pos: Mp::new(50_000),
-                kind: TabKind::Left,
-            }]
-            .into(),
+            tabs: vec![TabStop::new(Mp::new(50_000), TabKind::Left)].into(),
             ..ParagraphStyle::default()
         },
         StoryMode::Point,

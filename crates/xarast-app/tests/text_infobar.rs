@@ -386,6 +386,7 @@ fn paragraph_attributes_and_the_ruler_edit_the_caret_s_paragraph() {
     let tab = |p: i32| TabStop {
         position: Mp::new(p),
         kind: 2,
+        decimal: None,
     };
     assert_eq!(r.tabs, [tab(36_000), tab(72_000)]);
     assert_eq!(r.tab_kind, 2);

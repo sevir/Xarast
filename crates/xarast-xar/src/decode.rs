@@ -513,6 +513,21 @@ pub enum TextAttr {
     RightIndent(Mp),
 }
 
+/// One entry of a `TAG_TEXT_RULER` record (`Kernel/rechtext.cpp:1546-1575`).
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct RulerStop {
+    /// The kind byte, the original's `TxtTabType` enum in its low two bits
+    /// (0 left, 1 right, 2 centre, 3 decimal) and bit 2 set when the stop
+    /// has a filler character.
+    pub type_and_flags: u8,
+    /// The stop's position.
+    pub position: Mp,
+    /// The decimal-point character of a decimal stop, a UTF-16 code unit.
+    pub decimal: Option<u16>,
+    /// The tab filler character, when the flag says there is one.
+    pub filler: Option<u16>,
+}
+
 /// One decoded record.
 ///
 /// Deliberately flat and deliberately without a document in sight: a
@@ -880,6 +895,8 @@ pub enum Decoded {
     },
     /// A character-level text attribute.
     TextAttr(TextAttr),
+    /// `TAG_TEXT_RULER`: the tab stops of a paragraph.
+    TextRuler(Vec<RulerStop>),
     /// A record whose tag has no decoder. Its payload size is kept so that
     /// reports can say what was skipped.
     Unhandled {
@@ -910,7 +927,7 @@ pub const fn has_decoder(tag: u32) -> bool {
         | 2900..=2920
         | 4010 | 4011 | 4012 | 4050..=4057 | 4060..=4062 | 4066 | 4067 | 4070 | 4072..=4074 | 4075..=4078 | 4084 | 4085 | 4086 | 4087 | 4088
         | 4114 | 4115 | 4116 | 4119 | 4120 | 4121 | 4123 | 4124 | 4129
-        | 4030 | 4031 | 4201..=4203)
+        | 4030 | 4031 | 4201..=4204)
 }
 
 /// Decodes one record payload.
@@ -1121,6 +1138,7 @@ pub fn decode(
             distance_to_previous: c.mp()?,
         },
         2900..=2920 | 4201..=4203 => Decoded::TextAttr(text_attr(tag, &mut c)?),
+        4204 => Decoded::TextRuler(text_ruler(&mut c)?),
         4030 => Decoded::LayerFrameProps {
             delay: c.u32()?,
             flags: c.opt_u8().unwrap_or(0),
@@ -1328,6 +1346,36 @@ fn text_story(tag: u32, c: &mut Cur<'_>, origin: Point) -> Result<TextStory, Xar
         rotation,
         shear,
     })
+}
+
+/// The entries of a ruler: a count, then per entry a kind byte, a position,
+/// the decimal-point character when the kind is decimal and the filler
+/// character when bit 2 of the kind byte is set. The count is not trusted
+/// for allocation: a short record fails at the first missing entry.
+fn text_ruler(c: &mut Cur<'_>) -> Result<Vec<RulerStop>, XarError> {
+    let n = c.u16()?;
+    let mut out = Vec::new();
+    for _ in 0..n {
+        let type_and_flags = c.u8()?;
+        let position = c.mp()?;
+        let decimal = if type_and_flags & 3 == 3 {
+            Some(c.u16()?)
+        } else {
+            None
+        };
+        let filler = if type_and_flags & 4 != 0 {
+            Some(c.u16()?)
+        } else {
+            None
+        };
+        out.push(RulerStop {
+            type_and_flags,
+            position,
+            decimal,
+            filler,
+        });
+    }
+    Ok(out)
 }
 
 fn text_attr(tag: u32, c: &mut Cur<'_>) -> Result<TextAttr, XarError> {

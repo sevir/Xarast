@@ -1345,10 +1345,19 @@ fn parse_features(v: &str) -> Arc<[xarast_doc::FeatureSetting]> {
 fn parse_ruler(v: &str) -> Arc<[xarast_doc::TabStop]> {
     v.split_ascii_whitespace()
         .filter_map(|pair| {
-            let (pos, kind) = pair.split_once(':')?;
+            let mut fields = pair.split(':');
+            let pos = fields.next()?;
+            let kind = fields.next()?;
+            // The optional third field is the decimal-point character's
+            // code point; one that is not a character reads as absent.
+            let decimal = fields
+                .next()
+                .and_then(|d| d.parse::<u32>().ok())
+                .and_then(char::from_u32);
             Some(xarast_doc::TabStop {
                 position: mp_i32(parse::mp(pos)?),
                 kind: kind.parse::<u8>().ok()?,
+                decimal,
             })
         })
         .collect()

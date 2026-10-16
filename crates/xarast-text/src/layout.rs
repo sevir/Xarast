@@ -25,7 +25,7 @@ use crate::shape::{
 };
 use crate::style::{
     Direction, Justification, LineSpacing, ParagraphStyle, StoryInput, StoryMode, StyleRange,
-    sanitize_aspect,
+    TabKind, TabStop, sanitize_aspect,
 };
 
 /// Distance between default tab stops when the ruler has none left: half an
@@ -181,18 +181,93 @@ struct LineSpan {
     tab_advances: Vec<(usize, Mp)>,
 }
 
-fn next_tab_stop(pos: Mp, para: &ParagraphStyle) -> Mp {
-    // Only left stops are honoured yet (T9.3.8): a centre, right or decimal
-    // stop is treated as a left stop at its position.
+/// The first stop strictly beyond `pos`: its position, kind and decimal
+/// character. Past the last ruler stop the stops are left stops on the
+/// default grid (`Kernel/txtattr.cpp:3181-3205`).
+fn next_tab_stop(pos: Mp, para: &ParagraphStyle) -> (Mp, TabKind, char) {
     for t in para.tabs.iter() {
         if t.pos > pos {
-            return t.pos;
+            return (t.pos, t.kind, t.decimal);
         }
     }
     let p = i64::from(pos.raw());
     let step = i64::from(DEFAULT_TAB_INTERVAL.raw());
     let next = p + step - p.rem_euclid(step);
-    Mp::new(i32::try_from(next).unwrap_or(i32::MAX))
+    (
+        Mp::new(i32::try_from(next).unwrap_or(i32::MAX)),
+        TabKind::Left,
+        TabStop::DEFAULT_DECIMAL,
+    )
+}
+
+/// The state of the tab section being measured: the text since the last
+/// tab, anchored to that tab's stop (`Kernel/nodetxtl.cpp`, `FormatState`).
+///
+/// A left stop starts its text at the stop. For the other kinds, `remaining`
+/// is the room between the tab character and the stop; part of the text
+/// (half for centre, all for right, up to the decimal point for decimal)
+/// goes into that room, and only what does not fit pushes `width` past the
+/// stop. The tab's own width is whatever room is left when the section
+/// ends.
+#[derive(Copy, Clone)]
+struct FormatState {
+    /// The right edge of everything placed so far.
+    width: Mp,
+    kind: TabKind,
+    remaining: Mp,
+    decimal: char,
+    decimal_found: bool,
+}
+
+impl FormatState {
+    fn new(indent: Mp) -> FormatState {
+        FormatState {
+            width: indent,
+            kind: TabKind::Left,
+            remaining: Mp::ZERO,
+            decimal: TabStop::DEFAULT_DECIMAL,
+            decimal_found: false,
+        }
+    }
+
+    /// Places a character of width `w`. `is_point` is true for the decimal
+    /// character of an active decimal section.
+    fn advance_by(&mut self, w: Mp, is_point: bool) {
+        let left_of_stop = self.remaining > Mp::ZERO;
+        match self.kind {
+            TabKind::Centre if left_of_stop => {
+                let half = Mp::new(w.raw() / 2);
+                let used = if self.remaining >= half {
+                    half
+                } else {
+                    self.remaining
+                };
+                self.remaining = self.remaining - used;
+                self.width = add(self.width, w - used);
+            }
+            TabKind::Right | TabKind::Decimal
+                if left_of_stop
+                    && (self.kind == TabKind::Right || (!self.decimal_found && !is_point)) =>
+            {
+                if self.remaining >= w {
+                    self.remaining = self.remaining - w;
+                } else {
+                    self.width = add(self.width, w - self.remaining);
+                    self.remaining = Mp::ZERO;
+                }
+            }
+            _ => self.width = add(self.width, w),
+        }
+    }
+
+    /// Whether a character of width `w` still fits within `limit`. For a
+    /// left section that is the plain sum; otherwise part of the character
+    /// goes left of the stop, so the answer is found by placing it.
+    fn fits(&self, w: Mp, is_point: bool, limit: Mp) -> bool {
+        let mut t = *self;
+        t.advance_by(w, is_point);
+        t.width <= limit
+    }
 }
 
 fn add(a: Mp, b: Mp) -> Mp {
@@ -200,7 +275,12 @@ fn add(a: Mp, b: Mp) -> Mp {
 }
 
 /// Splits a shaped paragraph into lines.
-fn break_lines(sp: &ShapedParagraph, para: &ParagraphStyle, mode: StoryMode) -> Vec<LineSpan> {
+fn break_lines(
+    text: &str,
+    sp: &ShapedParagraph,
+    para: &ParagraphStyle,
+    mode: StoryMode,
+) -> Vec<LineSpan> {
     let n = sp.clusters.len();
     let wrap_limit = match mode {
         StoryMode::Column { width, wrap: true } if width > Mp::ZERO => {
@@ -217,46 +297,83 @@ fn break_lines(sp: &ShapedParagraph, para: &ParagraphStyle, mode: StoryMode) -> 
         } else {
             para.left_margin
         };
-        let mut pos = left;
+        let mut st = FormatState::new(left);
         let mut last_break: Option<usize> = None;
-        let mut tabs = Vec::new();
+        // Each tab: its cluster, whether it is a left tab and the advance a
+        // left tab takes.
+        let mut tab_marks: Vec<(usize, bool, Mp)> = Vec::new();
+        // Room left of the active stop after each cluster, from `start`: a
+        // non-left tab's advance is what remains when its section ends.
+        let mut remaining_after: Vec<Mp> = Vec::new();
         let mut end = n;
         let mut i = start;
         while i < n {
             let c = &sp.clusters[i];
             match c.kind {
                 ClusterKind::Space => {
-                    pos = add(pos, add(c.kern_before, add(c.advance, c.tracking)));
+                    st.advance_by(add(c.kern_before, add(c.advance, c.tracking)), false);
                 }
                 ClusterKind::Tab => {
                     // A line may break before a tab.
                     if i > start {
                         last_break = Some(i - 1);
                     }
-                    let stop = next_tab_stop(add(pos, c.kern_before), para);
-                    let adv = stop - pos;
-                    tabs.push((i, adv));
-                    pos = stop;
+                    let (stop, kind, decimal) = next_tab_stop(add(st.width, c.kern_before), para);
+                    let adv = stop - st.width;
+                    tab_marks.push((i, kind == TabKind::Left, adv));
+                    st.width = stop;
+                    st.kind = kind;
+                    st.remaining = if kind == TabKind::Left { Mp::ZERO } else { adv };
+                    st.decimal = decimal;
+                    st.decimal_found = false;
                 }
                 ClusterKind::Char => {
-                    let needed = add(pos, add(c.kern_before, c.advance));
-                    let fits = wrap_limit.is_none_or(|lim| needed <= lim);
+                    let is_point = st.kind == TabKind::Decimal
+                        && text
+                            .get(c.range.clone())
+                            .and_then(|t| t.chars().next())
+                            .is_some_and(|ch| ch == st.decimal);
+                    let w = add(c.kern_before, c.advance);
+                    let fits = wrap_limit.is_none_or(|lim| st.fits(w, is_point, lim));
                     if i > start && !fits {
                         end = match last_break {
                             Some(b) if b + 1 > start => b + 1,
                             _ => i, // emergency break before the overflowing cluster
                         };
-                        tabs.retain(|&(t, _)| t < end);
                         break;
                     }
-                    pos = add(needed, c.tracking);
+                    st.advance_by(add(w, c.tracking), is_point);
+                    if is_point {
+                        st.decimal_found = true;
+                    }
                 }
             }
+            remaining_after.push(st.remaining);
             if c.break_after {
                 last_break = Some(i);
             }
             i += 1;
         }
+        let tabs = tab_marks
+            .iter()
+            .enumerate()
+            .filter(|&(_, &(t, _, _))| t < end)
+            .map(|(k, &(t, left, adv))| {
+                if left {
+                    return (t, adv);
+                }
+                // The section runs to the next tab or the end of the line.
+                let section_end = tab_marks
+                    .get(k + 1)
+                    .map_or(end, |&(nt, _, _)| nt.min(end))
+                    .saturating_sub(1);
+                let rem = remaining_after
+                    .get(section_end.saturating_sub(start))
+                    .copied()
+                    .unwrap_or(Mp::ZERO);
+                (t, rem)
+            })
+            .collect();
         let done = end >= n;
         lines.push(LineSpan {
             start,
@@ -348,7 +465,7 @@ impl Shaper {
                     Direction::Rtl => Some(Level::rtl()),
                 },
             );
-            for span in break_lines(&sp, para, input.mode) {
+            for span in break_lines(text, &sp, para, input.mode) {
                 let line = self.position_line(
                     &mut st,
                     &mut db,
@@ -726,8 +843,8 @@ mod tests {
     #[test]
     fn default_tab_stops_are_every_half_inch_strictly_after() {
         let p = ParagraphStyle::default();
-        assert_eq!(next_tab_stop(Mp::ZERO, &p), Mp::new(36_000));
-        assert_eq!(next_tab_stop(Mp::new(36_000), &p), Mp::new(72_000));
-        assert_eq!(next_tab_stop(Mp::new(1), &p), Mp::new(36_000));
+        assert_eq!(next_tab_stop(Mp::ZERO, &p).0, Mp::new(36_000));
+        assert_eq!(next_tab_stop(Mp::new(36_000), &p).0, Mp::new(72_000));
+        assert_eq!(next_tab_stop(Mp::new(1), &p).0, Mp::new(36_000));
     }
 }

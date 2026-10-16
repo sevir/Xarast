@@ -44,7 +44,7 @@ use xarast_doc::{
     ArrowSpec, AttrSlot, AttrStack, AttrValue, BitmapData, BitmapId, BitmapInfo, BitmapResource,
     BuildLimits, DocumentBuilder, DocumentMeta, GridKind, GridNode, ImageFormat, LayerNode,
     NodeKind, OpaqueNode, OriginalEncoded, PageNode, Paint, PathNode, ProceduralParams, QuickShape,
-    Ramp, RampStop, SpreadNode, TextItem, TextLayout, TextStoryNode, Tiling, TranspPaint,
+    Ramp, RampStop, SpreadNode, TabStop, TextItem, TextLayout, TextStoryNode, Tiling, TranspPaint,
     TypefaceRef,
 };
 use xarast_geom::{BiasGain, Cap, DashPattern, FillRule, Join, Matrix, Mp, Point, Rect, Vector};
@@ -2512,6 +2512,23 @@ impl<'o> Mapper<'o> {
                 profile: BiasGain::new(*bias, *gain),
             },
             Decoded::TextAttr(a) => self.text_attribute(*a, at)?,
+            // The kind keeps the original's enum in its low two bits; the
+            // filler flag is dropped with the filler, which the model does
+            // not carry. A decimal character of 0 or a lone surrogate is
+            // no character.
+            Decoded::TextRuler(stops) => AttrValue::Ruler(
+                stops
+                    .iter()
+                    .map(|s| TabStop {
+                        position: s.position,
+                        kind: s.type_and_flags & 3,
+                        decimal: s
+                            .decimal
+                            .and_then(|u| char::from_u32(u32::from(u)))
+                            .filter(|&c| c != '\0'),
+                    })
+                    .collect(),
+            ),
             _ => return None,
         })
     }

@@ -243,6 +243,7 @@ mod tests {
             tabs: vec![TabStop {
                 position: Mp::from_pt(72.0),
                 kind: 0,
+                decimal: None,
             }],
             tab_kind: 2,
         }

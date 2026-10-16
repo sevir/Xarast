@@ -136,11 +136,19 @@ impl PartialEq for Placer {
 impl Eq for Placer {}
 
 /// A ruler as the profile writes it: `position:kind` pairs, the position
-/// in points and the kind the format's `type_and_flags` byte.
+/// in points and the kind the format's `type_and_flags` byte. A stop that
+/// states a decimal-point character has a third field, its code point in
+/// decimal (`72:3:46`); a stop without one writes exactly two fields.
 pub(crate) fn ruler_text(stops: &[TabStop]) -> String {
     let v: Vec<String> = stops
         .iter()
-        .map(|t| format!("{}:{}", mp(i64::from(t.position.raw())), t.kind))
+        .map(|t| {
+            let base = format!("{}:{}", mp(i64::from(t.position.raw())), t.kind);
+            match t.decimal {
+                Some(c) => format!("{base}:{}", u32::from(c)),
+                None => base,
+            }
+        })
         .collect();
     v.join(" ")
 }

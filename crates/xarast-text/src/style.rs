@@ -270,6 +270,26 @@ pub struct TabStop {
     pub pos: Mp,
     /// How text aligns to it.
     pub kind: TabKind,
+    /// The character a [`TabKind::Decimal`] stop aligns on. Unused by the
+    /// other kinds.
+    pub decimal: char,
+}
+
+impl TabStop {
+    /// The decimal-point character a decimal stop uses when the document
+    /// does not say.
+    pub const DEFAULT_DECIMAL: char = '.';
+
+    /// A stop at `pos` of the given kind, with the default decimal
+    /// character.
+    #[must_use]
+    pub const fn new(pos: Mp, kind: TabKind) -> TabStop {
+        TabStop {
+            pos,
+            kind,
+            decimal: TabStop::DEFAULT_DECIMAL,
+        }
+    }
 }
 
 /// Base paragraph direction.

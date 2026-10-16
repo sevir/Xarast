@@ -69,6 +69,7 @@ fn story_doc() -> Document {
         ruler: Some(Arc::from(vec![TabStop {
             position: Mp::new(72_000),
             kind: 2,
+            decimal: None,
         }])),
     })))
     .unwrap();
@@ -84,6 +85,7 @@ fn story_doc() -> Document {
     b.attribute(AttrValue::Ruler(Arc::from(vec![TabStop {
         position: Mp::new(36_000),
         kind: 1,
+        decimal: None,
     }])))
     .unwrap();
     b.attribute(AttrValue::Tracking(Mp::new(50))).unwrap();

@@ -94,7 +94,7 @@ pub use cur::Cur;
 pub use decode::{
     BevelRecord, BitmapDefinition, BitmapFormat, BlendRecord, BlenderExtra, ContourRecord, Decoded,
     FillEffect, FillGeometry, FillKind, FillRepeat, FontDefinition, FractalParams, GradientFill,
-    GradientTransparency, LayerFlags, RegularShape, ShadowControllerRecord, ShapeFlags,
+    GradientTransparency, LayerFlags, RegularShape, RulerStop, ShadowControllerRecord, ShapeFlags,
     SpreadInformation, TextAttr, TextPlacement, TextStory, decode, has_decoder,
 };
 pub use diag::{DiagCode, DiagSink, Diagnostic, Severity, severity_str};

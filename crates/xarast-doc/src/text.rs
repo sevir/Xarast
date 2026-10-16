@@ -170,6 +170,10 @@ pub struct TabStop {
     pub position: Mp,
     /// The stop's kind, as the format's `type_and_flags` byte gives it.
     pub kind: u8,
+    /// The character a decimal stop (`kind & 3 == 3`) aligns on, when the
+    /// file stated one. `None` for a stop that did not; layout then uses the
+    /// full stop. `.xar` stores the character with every decimal stop.
+    pub decimal: Option<char>,
 }
 
 /// One OpenType feature setting of a text run (phase 9, T9.3.10 and the

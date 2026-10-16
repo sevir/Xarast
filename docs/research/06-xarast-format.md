@@ -1446,7 +1446,10 @@ render then follow — while the base SVG shows the text where Xarast draws it.
    shows the text along the path (rule 6), not through `<textPath>`.
 1. **One line `<tspan>` per `TextLine`**, with the line's id. A line node's own ruler
    (the one a `.xar` line carried) is `xarast:ruler`: `position:kind` pairs, the
-   position in points, the kind the format's `type_and_flags` byte.
+   position in points, the kind the format's `type_and_flags` byte. A decimal stop
+   (`kind & 3 == 3`) that states its decimal-point character adds a third field, the code
+   point in decimal (`72:3:46`); a stop without one is exactly `position:kind`, so files
+   from before the field are unchanged byte for byte.
 2. **Runs.** Inside a line, one `<tspan>` per maximal sequence of the line's items whose
    *written* attributes are identical (the text attributes below, the paint and its
    twins). Every item — characters, kerns, breaks — belongs to exactly one run, in

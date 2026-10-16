@@ -222,6 +222,7 @@ fn paragraph_style(
             .iter()
             .map(|t| TabStop {
                 pos: t.position,
+                decimal: t.decimal.unwrap_or(TabStop::DEFAULT_DECIMAL),
                 kind: match t.kind & 3 {
                     1 => TabKind::Right,
                     2 => TabKind::Centre,

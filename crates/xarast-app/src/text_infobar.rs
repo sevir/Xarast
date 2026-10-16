@@ -451,6 +451,7 @@ pub fn tabs_after(
         (InfobarField::TextTabAdd, InfobarValue::Length(at)) => v.push(TabStop {
             position: at.max(Mp::ZERO),
             kind,
+            decimal: (kind & 3 == 3).then_some('.'),
         }),
         (InfobarField::TextTabMove(i), InfobarValue::Length(at)) => {
             v.get_mut(usize::from(i))?.position = at.max(Mp::ZERO);
@@ -491,6 +492,7 @@ mod tests {
         let t = |p: i32, kind: u8| TabStop {
             position: Mp::new(p),
             kind,
+            decimal: None,
         };
         let tabs = [t(36_000, 0), t(72_000, 1)];
         let add = tabs_after(
