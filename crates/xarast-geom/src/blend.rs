@@ -588,6 +588,83 @@ pub fn segments(o: &Outline) -> Vec<Segment> {
         .collect()
 }
 
+/// A path measured by arc length, for a blend along it (F6): where a step
+/// stands and which way the path runs there. Every segment is measured
+/// once (to [`LENGTH_ACCURACY`]), so a step costs one binary search and
+/// one arc-length inversion. Subpaths follow one another; zero-length
+/// segments are skipped.
+#[derive(Clone, Debug)]
+pub struct PathRun {
+    segs: Vec<kurbo::PathSeg>,
+    /// Arc length at the start of each segment.
+    starts: Vec<f64>,
+    length: f64,
+}
+
+impl PathRun {
+    /// Measures `path`. `None` when it has no length (empty, a lone point,
+    /// or lengths that are not finite).
+    #[must_use]
+    pub fn new(path: &Path) -> Option<PathRun> {
+        let mut segs = Vec::new();
+        let mut starts = Vec::new();
+        let mut length = 0.0f64;
+        for s in path.segments() {
+            let k = s.to_kurbo();
+            let l = k.arclen(LENGTH_ACCURACY);
+            if !l.is_finite() || l <= 1e-9 {
+                continue;
+            }
+            starts.push(length);
+            segs.push(k);
+            length += l;
+        }
+        (length.is_finite() && length > 0.0).then_some(PathRun {
+            segs,
+            starts,
+            length,
+        })
+    }
+
+    /// The path's length, millipoints.
+    #[must_use]
+    pub fn length(&self) -> f64 {
+        self.length
+    }
+
+    /// The point `distance` along the path (clamped to it) and the
+    /// direction of travel there, radians anticlockwise from +x.
+    #[must_use]
+    pub fn at(&self, distance: f64) -> (K, f64) {
+        let d = if distance.is_nan() {
+            0.0
+        } else {
+            distance.clamp(0.0, self.length)
+        };
+        let i = self.starts.partition_point(|&s| s <= d).saturating_sub(1);
+        let seg = self.segs[i];
+        let local = d - self.starts[i];
+        let t = seg.inv_arclen(local, LENGTH_ACCURACY).clamp(0.0, 1.0);
+        let p = seg.eval(t);
+        let dir = match seg {
+            kurbo::PathSeg::Line(l) => l.p1 - l.p0,
+            kurbo::PathSeg::Quad(q) => kurbo::ParamCurveDeriv::deriv(&q).eval(t).to_vec2(),
+            kurbo::PathSeg::Cubic(c) => {
+                let d = kurbo::ParamCurveDeriv::deriv(&c).eval(t).to_vec2();
+                // A cubic whose control point sits on its end point has no
+                // derivative there: its chord says which way it runs.
+                if d.hypot2() > 1e-18 { d } else { c.p3 - c.p0 }
+            }
+        };
+        let angle = if dir.hypot2() > 0.0 {
+            dir.y.atan2(dir.x)
+        } else {
+            0.0
+        };
+        (p, angle)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -601,6 +678,28 @@ mod tests {
             .line_to(Point::raw(x, y))
             .close();
         b.build()
+    }
+
+    #[test]
+    fn a_path_run_measures_by_arc_length_and_turns_with_the_path() {
+        // Right 3000, then up 4000: 7000 long.
+        let mut b = Path::builder();
+        b.move_to(Point::raw(0, 0))
+            .line_to(Point::raw(3000, 0))
+            .line_to(Point::raw(3000, 4000));
+        let run = PathRun::new(&b.build()).unwrap();
+        assert!((run.length() - 7000.0).abs() < 1e-6);
+        let (p, a) = run.at(1500.0);
+        assert!((p.x - 1500.0).abs() < 1e-6 && p.y.abs() < 1e-6);
+        assert!(a.abs() < 1e-9);
+        let (p, a) = run.at(5000.0);
+        assert!((p.x - 3000.0).abs() < 1e-6 && (p.y - 2000.0).abs() < 1e-6);
+        assert!((a - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+        // Clamped at both ends; NaN is the start.
+        assert_eq!(run.at(-5.0).0, kurbo::Point::new(0.0, 0.0));
+        assert_eq!(run.at(1e12).0, kurbo::Point::new(3000.0, 4000.0));
+        assert_eq!(run.at(f64::NAN).0, kurbo::Point::new(0.0, 0.0));
+        assert!(PathRun::new(&Path::new()).is_none());
     }
 
     #[test]
