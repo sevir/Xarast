@@ -26,9 +26,10 @@ depth limit) stay in [`geometry.md`](geometry.md).
 | Fill commands `SetFillGeometry`, `MoveFillControl`, `InsertStop`, `MoveStop`, `RemoveStop`, `SetStopValue`, `SetFillProfile`, `SetRampMapping`, `SetFillEffect`, `SetTiling`, `SetTranspMode` | `xarast-doc/src/fill_edit.rs` | done |
 | Pure helpers `move_control`, `set_stop`, `stop_value`, `ramp_insert`, `ramp_move`, `rebuild_ramp`, `fill_arm`, `arm_position`, `fill_in_force`, `set_own_attr` | `fill_edit.rs` | done |
 | `MutateFill`, `mutate_fill` (the W8.2 mapping table), `FillShape`, `MutationLoss` | `xarast-doc/src/fill_mutate.rs` | done (XARA-US-0039, for the type menu) |
-| Group transparency (T8.2.7), "no colour" value (T8.1.5), `.xarast` palette round trip (T8.1.7) | — | **not done**, filed |
+| Group transparency (T8.2.7), `.xarast` palette round trip (T8.1.7) | — | **not done**, filed |
+| "No colour" as `Colour::None` (T8.1.5) through `.xar` import, the model, `.xarast`, the walker, picking | `xarast-color/src/table.rs`, all consumers | done (XARA-T-0204, decision 33) |
 | App `EditCommand::Fill` for the fill commands | `xarast-app/src/ops.rs`, `fill_tool.rs` | done (XARA-US-0039) |
-| Walker using `PaletteResolver` + epoch in cache keys | `xarast-app` | **not done**, filed (XARA-T-0203) |
+| Walker using `PaletteResolver` + epoch in cache keys | `xarast-app/src/paint.rs`, `walker.rs` | done (XARA-T-0203, decision 34) |
 | `EditCommand::Palette(PaletteCommand)` — `Create`, `Redefine`, `Rename`, `Derive` (reparent + link mask in one step), `Delete` | `xarast-app/src/colour_editor.rs`, `ops.rs` | done (XARA-US-0041) |
 | Colour editor model: `ColourEditorModel`, `ColourEditorView`, `ColourEditorOp`, `Intent::ColourEditor` | `xarast-app/src/colour_editor.rs` | done (XARA-US-0041) |
 | Colour editor UI: 2D field + slider, numeric entry, derivation editor, Redefine / Apply | `xarast-ui/src/colour_field.rs`, `panels/colour.rs` | done (XARA-US-0041) |
@@ -136,9 +137,9 @@ replays exactly. No UI yet (H7).
    `xarast-render` (`research/03 §2.10`). Two constants on purpose.
 3. **Two quantisers.** `to_rgba8` rounds; `to_rgba8_packed` is the
    original's `+0x8000 … ×255 >> 24` and is what `cached_rgb`,
-   `ColourContext::srgb_of` and `PaletteResolver` produce. `to_rgba8` was
-   not changed, so no render golden moved; switching the walker is part of
-   the filed wiring task.
+   `ColourContext::srgb_of` and `PaletteResolver` produce. The scene
+   walker paints with the packed one since XARA-T-0203 (decision 34); the
+   `.xarast`/SVG writer and the editors still round (`to_rgba8`).
 4. **Tints apply in the child's model, shades in HSV, both after bringing
    the parent into the child's model.** The original skips the conversion
    for tints because a tint takes its parent's model when linked; converting
@@ -292,9 +293,8 @@ replays exactly. No UI yet (H7).
     then 14 standard colours chosen for Xarast (`colour_bar::STANDARD`;
     not the original's template palette). A named swatch applies a live
     `Colour::Indexed` reference; a standard one a direct colour. "No
-    colour" is `rgbt(0, 0, 0, 1)` — the importer's representation, which
-    the renderer and the picker already treat as "paint nothing"
-    (`colour_bar::no_colour`); XARA-T-0204 will replace it.
+    colour" applies `Colour::None` (decision 33; it was transparent black
+    and `colour_bar::no_colour` until XARA-T-0204).
 27. **A click follows the original's colour-change mutation**
     (`Kernel/fillattr.cpp`, `AttrColourChange::MutateFill`): with the fill
     tool's handle selected only that stop changes (`selected_stop`: tool in
@@ -338,6 +338,77 @@ replays exactly. No UI yet (H7).
     the fill slot, and the title says which stop ("Fill end colour of 1
     object", "Fill stop 2 …", "Fill corner 3 …"). Edits coalesce as before
     (same label, same nodes).
+
+33. **"No colour" is `Colour::None`** (XARA-T-0204, 2026-10-16), a third
+    variant, not a sentinel value. The original keeps it as a flag on its
+    colour (`NoColour` in `Kernel/doccolor.h:142`), independent of the
+    components, and any two no-colours compare equal (`doccolor.cpp:
+    1571`). Facts kept: references 0 and −1 are no colour
+    (`research/01 §9.4`); colour mixing returns no colour when both ends
+    are and treats a single one as white (`doccolor.cpp:1043-1060`, blend
+    steps); the renderer skips a no-colour flat colour entirely
+    (`wxOil/grndrgn.cpp:5365`). Ours:
+    * `resolve` gives `Colour::NONE_VALUE` (transparent black), so every
+      render path paints what it painted when the importer stored
+      transparent black — **the corpus raster is unchanged, 0 pixels**.
+      Callers that must tell it apart ask `is_none()`.
+    * `Stop::lerp`: none ↔ none = none; none ↔ literal fades as
+      transparent black did (not the original's white — that rule is its
+      blend-step mixer, and changing blends is a separate question).
+    * `to_direct(table)` replaces `Colour::Direct(c.resolve(t))` where
+      references are baked (contour, blend, structure paste): it keeps
+      none.
+    * The factory default fill is `Colour::None` (`research/02 §4.4`), so
+      an unattributed or `none` fill equals the default and the readers
+      skip it as a default.
+    * Picking: a flat fill or line that `is_none()` **or** resolves to
+      alpha 0 is not hit-testable (the second keeps older `.xarast` files
+      and literal transparent colours as before).
+    * `.xarast`: a flat none is `none`; a key (gradient stop, mesh corner,
+      contone, procedural end) in none is transparent black with the token
+      `none` in its `xarast:*-refs` list. A literal transparent flat
+      colour is still written `none` and reads back as `Colour::None`
+      (it has no spelling of its own; it paints nothing either way).
+    * A palette entry is a `ColourValue`, so no palette edit can produce
+      none; `Detach` turns references into direct colours, never none.
+    * `xarast-render` never sees it: the walker drops an invisible flat
+      paint before the scene (it works in `Rgba8`).
+34. **The walker resolves every colour through one `PaletteResolver`**
+    (XARA-T-0203, 2026-10-16), held by `SceneWalker` (reset with its
+    other caches; a walker belongs to one document, the memo is keyed on
+    the palette epoch, which is per table). `PaintCtx::rgba` is the one
+    path: flat, ramp ends and stops, mesh corners, stroke, contone,
+    procedural tile colours, the degenerate-frame fallback, shadow and
+    bevel colours (`shadow_of`/`bevel_of` take the resolver). Blend and
+    contour steps are interpolated in the document as `ColourValue`s and
+    quantised here too. `doc.palette_epoch()` is folded into the scope
+    seed of every content hash next to `resources_rev`.
+    * **Goldens moved: 14, all by one level** — `contour_blend_tools`,
+      `effect_sweep/blend_steps_min`, ten `nesting/*` with a blend,
+      `xar_blends`, `xar_contours` (216 – 8 528 px each, max |Δ| 1).
+      Interpolated step colours land in the `k + 0.5 … k + 0.502` band.
+      No render-crate golden moved (they build scenes in `Rgba8`).
+    * The colour sheet fixture's `Patch` gained `raster` (packed): PNG,
+      WebP and the PDF (written from the scene) carry it; the SVG writer
+      still carries `expected` (rounded). "rgb amber" 0.9 → 229 vs 230,
+      "cmyk mixed" 0.7/0.5 → 178/127 vs 179/128.
+    * **Corpus PNG export** (72 dpi, paper, against 28be304): 14 of 59
+      files change, 202 017 of 15.4 M pixels; 94 % of them by one level,
+      11 files have a few pixels over 1 (max 19 in ProbeX16, 5 in
+      SimpleSphere/Spitfire): the inputs move by at most one level by
+      construction, so these are amplified downstream — HSV-effect ramps
+      on near-grey keys and non-linear transparency/bevel lighting.
+    * **Dirty region**: kept the scene diff (`app-core.md` decision 40),
+      not a `ColourUses` dirty rect. Measured on 5 000 users + 500
+      others (`xarast-shell/tests/edit_damage.rs`,
+      `redefining_a_colour_used_by_5000_objects_repaints_exactly_its_users`,
+      release): the redefinition 17 µs; `ColourUses::build` 3.2 ms +
+      `changed_between` + `users_of` + bounds 3.5 ms on the main thread;
+      the scene rebuild 8.4 ms and the repainted frame (diff + raster)
+      20 ms on the render thread, whose damage is exactly the users'
+      union (no non-user touched) and equals a full render. A dirty rect
+      would add ~7 ms to the interface thread and nothing consumes a
+      narrower `Dirty` than the view; the diff already finds it.
 
 ## Invariants that must not be broken
 
@@ -387,9 +458,13 @@ replays exactly. No UI yet (H7).
 
 ## Open TODOs
 
-- [ ] Walker: resolve through `PaletteResolver`, fold `palette_epoch` into
-      render cache keys, repaint `ColourUses::users_of(changed)`
-      (XARA-T-0203).
+- [x] Walker: resolve through `PaletteResolver`, fold `palette_epoch` into
+      render cache keys (XARA-T-0203, decision 34); the repaint stays the
+      scene diff, measured.
+- [ ] The SVG/`.xarast` writer still quantises by rounding: a palette
+      colour exports 1 level off its cached RGB in the band. Switching it
+      needs `resolve_rgba8` (the reader's palette-twin check) switched in
+      the same change, and moves `.xarast` bytes.
 - [x] App: `EditCommand::Fill` and the fill/transparency tools
       (XARA-US-0039); `EditCommand::Palette` (XARA-US-0041) closes the
       palette half of XARA-T-0212. The repaint set
@@ -397,13 +472,15 @@ replays exactly. No UI yet (H7).
       palette edit today repaints through the whole-resources bump.
 - [x] Colour editor on a gradient: follows the fill tool's selected stop
       (XARA-T-0247, decision 32); the start colour otherwise.
-- [ ] Colour editor: "no colour" cannot be set from it (waits for
-      XARA-T-0204); spot colours are editable as normal ones (no ink
-      name / separation UI).
+- [ ] Colour editor: "no colour" cannot be set from it (the bar's
+      swatch sets `Colour::None`; the editor shows a none as transparent
+      black); spot colours are editable as normal ones (no ink name /
+      separation UI).
 - [ ] `ColourUses` incremental maintenance in the attribute-set paths
       (today: rebuild on load and after a batch).
-- [ ] T8.1.5 "no colour" as a first-class `Colour` value (XARA-T-0204;
-      today it is `Option<Colour>` in the importer); T8.1.7 palette
+- [x] T8.1.5 "no colour" as a first-class `Colour` value (XARA-T-0204,
+      decision 33).
+- [ ] T8.1.7 palette
       `.xarast` round trip with signed shades (XARA-T-0205); T8.2.5
       `MutateFill` (XARA-T-0210, done); T8.2.7 group transparency (XARA-T-0211).
 - [ ] `ColourModel::Ciet` has no converter in the original at all; ours is

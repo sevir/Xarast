@@ -189,7 +189,9 @@ undo 1.7 ms (budgets 50 ms). Live, GardenPlan, 2056×1286, GPU tiles:
     under the selected object. Top objects with no testable leaf (text,
     unrendered live effects) fall back to their box. **A transparent
     interior no longer selects** — fixtures that click inside shapes must
-    fill them.
+    fill them. "No colour" is `Colour::None` since XARA-T-0204
+    (`picking::paints` tests `is_none()` and, as before, alpha 0;
+    `tests/picking.rs` `an_interior_in_no_colour_does_not_pick`).
 26. **Momentary switching** (`xarast-shell/src/input/momentary.rs`): press
     raises `MomentaryTool(Some)`, release of the *same key* (whatever the
     modifiers by then) or focus loss raises `MomentaryTool(None)`; repeats

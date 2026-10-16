@@ -196,9 +196,10 @@ reason the walker *reports*, which is its own test.
 9. **`push_transparency`/`pop_transparency` only wrap a non-opaque
    object.** Wrapping every object would double the op count for
    nothing.
-10. **An invisible fill emits no command at all.** "No colour" in the
-    model is a flat colour with zero alpha; emitting it would put a
-    no-op in every display list and in every tile bin.
+10. **An invisible fill emits no command at all.** "No colour"
+    (`Colour::None`, which the walker's resolver paints transparent) and a
+    flat colour with zero alpha both resolve to alpha 0; emitting them
+    would put a no-op in every display list and in every tile bin.
 11. **The walker takes `&Document` and a test asserts the canonical
     digest is unchanged.** The signature makes mutation impossible by
     assignment; the digest is what would catch it happening through an
@@ -1310,6 +1311,12 @@ be better run once at `Tx::commit` than after every call.
   invalidates the view and the render thread diffs scenes (T-0221), which
   covers a palette edit. `ColourUses::users_of(changed_between(..))` stays
   available for a panel that wants the affected objects (tested).
+  XARA-T-0203 measured the alternative on 5 000 users and kept the diff
+  (`colour.md` decision 34): the diff's damage is exactly the users'
+  union, and a `ColourUses` dirty rect would cost ~7 ms on the interface
+  thread for nothing that consumes it. The walker now paints every colour
+  through its `PaletteResolver` and folds the palette epoch into the
+  content hashes' scope seed.
 - `PaletteCommand::Create` builds its `CreateColour` inside `run`, so the
   new id is read back with `colours.by_name(..)`, not `created`.
 - Journal (XARA-T-0217): both variants are plain data (no closures); add

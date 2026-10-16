@@ -1173,6 +1173,26 @@ initial `fill-rule` is `nonzero`. As for the join (above):
   (`paint::mask_row`), with the bytes unchanged; the contone
   `LUMA_MATRIX` stays BT.601 on its own (see `render.md`).
 
+## "No colour" (XARA-T-0204, 2026-10-16)
+
+- `Colour::None` (`colour.md` decision 33). A flat fill or line in it is
+  written `none` (as every invisible flat colour already was) and `none`
+  reads back as `Colour::None` (`read/build/paint.rs` `transparent()`).
+  It equals the factory default fill, so a `none` fill adds no attribute
+  on read.
+- A **key** in "no colour" (gradient end or stop, mesh corner, contone or
+  procedural end) is written as transparent black (`#00000000`) with the
+  token **`none`** in its `xarast:stop-refs` / `xarast:colour-refs` /
+  `xarast:contone-refs` list (`paint::key_ref`); the reader's `KeyRef`
+  turns it back into `Colour::None` only when the written colour is
+  transparent. A reader that does not know the token reads transparent
+  black, which paints the same: no format version bump.
+- A literal transparent flat colour has no spelling of its own and reads
+  back as `Colour::None`; a literal transparent key stays a literal.
+- Pinned by `tests/no_colour.rs` (every place it can stand reloads equal,
+  re-save byte-identical; a key without the token stays a colour). The
+  corpus round trip (59/59 model, bytes, render) is unchanged.
+
 ## Repair and partial recovery (F6.8/F6.9, XARA-T-0088, 2026-10-16)
 
 The strict open stays strict (`XarastReader::open`, `open_reader` with

@@ -1163,6 +1163,11 @@ the digest recorded for that state serial.
       4.77 → 4.75, SoftShadow 10.51 → 10.49, ProbeX16 8.96 → 8.97, others
       unchanged); the corpus export check moves ≤ 0.12 (Broken Butt Cap pdf
       0.97 → 0.85) and no limit. `.xarast`: see `xarast-format.md`.
+- [x] **The default fill is "no colour"** (XARA-T-0204, 2026-10-16):
+      `default_for(FillGeometry)` is a flat `Colour::None`
+      (`research/02 §4.4`), not transparent white; it paints the same.
+      `Colour::None` is a variant of its own (`colour.md` decision 33) and
+      hashes as tag 2 in the canonical digest.
 - [x] **The default winding rule differs from the original's too.** Done
       (XARA-T-0331, 2026-10-15): `default_for(WindingRule)` is
       `FillRule::EvenOdd`, and `TAG_WINDINGRULE` is read as the

@@ -171,9 +171,11 @@ Every one is deliberate, and every one is a phase that owns it:
   document node, so tag 40 is consumed and its children stay at the root
   level. Pushing a scope for it would emit an `UnbalancedScope` warning on
   every single file.
-- **"No colour" is the transparent colour.** The model's `Paint` always
-  holds a colour, and `TAG_FLATFILL_NONE` means *do not paint*, which a
-  flat fill of fully transparent black expresses exactly.
+- **"No colour" is `Colour::None`** (XARA-T-0204; it was transparent
+  black before). `ColourRegistry::resolve` returns a `Colour`: references
+  0 and −1, `TAG_FLATFILL_NONE`/`TAG_LINECOLOUR_NONE` and an unknown
+  built-in (with its diagnostic) are `Colour::None`; a bitmap fill whose
+  bitmap is missing is a flat `Colour::None`. See `colour.md` decision 33.
 - **Tolerant reads everywhere.** `Cur::opt_i32`/`opt_f64`/`opt_u8`/
   `opt_profile` return `None` at end of payload and the caller substitutes
   a documented default. Where a size constant in the original's headers
