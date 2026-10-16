@@ -174,6 +174,10 @@ pub struct SceneWalker {
     /// The union of the text the last walk drew, document space: text has
     /// no cached bounds, so whoever needs the ink extent adds this.
     text_ink: Rect,
+    /// The union of the contour rings the last walk drew, document space,
+    /// grown by their strokes: where a previewed contour reaches, and the
+    /// rings of text, which no cached bounds hold (XARA-T-0332).
+    live_ink: Rect,
     /// The text runs the last walk painted, with their glyphs: what an
     /// exporter embedding fonts needs besides the outlines.
     painted_text: Vec<xarast_io::TextRun>,
@@ -388,6 +392,16 @@ impl SceneWalker {
         self.text_ink
     }
 
+    /// The document-space box of the contour rings the last walk drew,
+    /// strokes included (empty when it drew none). The committed bounds
+    /// hold a contour's rings exactly, but not those a preview draws with
+    /// other parameters, nor the rings of text: a caller that needs the
+    /// drawing's extent unions this in.
+    #[must_use]
+    pub const fn live_ink(&self) -> Rect {
+        self.live_ink
+    }
+
     /// What the last walk found.
     #[must_use]
     pub const fn stats(&self) -> WalkStats {
@@ -512,6 +526,7 @@ impl SceneWalker {
             p.used = false;
         }
         self.text_ink = Rect::EMPTY;
+        self.live_ink = Rect::EMPTY;
         self.painted_text.clear();
 
         let mut clip = dirty.map(|d| doc_rect_of(vp, d));
@@ -1439,6 +1454,12 @@ impl SceneWalker {
         doc: &Document,
         controller: NodeId,
     ) -> Option<(xarast_doc::RegenKey, Arc<xarast_doc::LiveOutput>)> {
+        // A contour of text contours its glyphs (XARA-T-0332): laid out
+        // with this walker's fonts, which only a source holding a story
+        // needs.
+        let contour = matches!(doc.tree.kind(controller), Some(NodeKind::Live(l))
+            if matches!(l.kind, xarast_doc::LiveKind::Contour(_)));
+        let fonts = (contour && holds_text(doc, controller)).then(|| self.story_fonts(doc));
         let over = xarast_doc::RegenOverride {
             kind: self
                 .live_preview
@@ -1458,8 +1479,22 @@ impl SceneWalker {
             controller,
             0.0,
             over,
-            &mut |d: &Document, c: NodeId, dpi: f64| {
-                xarast_doc::regen::regenerate_with(d, c, dpi, over)
+            &mut |d: &Document, c: NodeId, dpi: f64| match &fonts {
+                Some(fonts) => {
+                    let params = match over.kind {
+                        Some(xarast_doc::LiveKind::Contour(p)) => Some(&**p),
+                        _ => None,
+                    };
+                    let shapes =
+                        xarast_doc::contour::generate_full(d, c, params, &mut |doc, story| {
+                            crate::text::story_outlines(fonts, doc, story).map(|(runs, _)| runs)
+                        });
+                    Ok(match shapes {
+                        Some(s) => xarast_doc::LiveOutput::Shapes(Arc::from(s)),
+                        None => xarast_doc::LiveOutput::Stored,
+                    })
+                }
+                None => xarast_doc::regen::regenerate_with(d, c, dpi, over),
             },
         )
     }
@@ -1508,6 +1543,12 @@ impl SceneWalker {
             // The original fills every ring under a negative rule, whatever
             // is in force (`Kernel/nodecntr.cpp:605-609`): non-zero as drawn.
             attrs.push(Arc::new(AttrValue::WindingRule(FillRule::Negative)));
+            let reach = ring.path.bounds().inflated(attrs.stroke_extent());
+            self.live_ink = if self.live_ink.is_empty() {
+                reach
+            } else {
+                self.live_ink.union(reach)
+            };
             // Tags are `u32`, so the ring index above them keeps every
             // ring's id apart from every node's (and from a preview's,
             // which sets the top bit).
@@ -2491,11 +2532,7 @@ fn outside_clip(
     let mut drawn = Rect::EMPTY;
     for c in doc.tree.children(node) {
         if c != clip_child {
-            drawn = drawn.union(xarast_doc::bounds::compute_bounds_with(
-                &doc.tree,
-                c,
-                Mp::ZERO,
-            ));
+            drawn = drawn.union(xarast_doc::bounds::compute_bounds_in(doc, c, Mp::ZERO));
         }
     }
     if drawn.is_empty() {
@@ -2671,11 +2708,27 @@ fn point64(p: Point) -> xarast_render::Point64 {
 /// bounds" and "empty bounds" are the same value and guessing wrong loses
 /// pixels.
 fn is_culled(doc: &Document, node: NodeId, clip: Rect, attrs: &AttrStack) -> bool {
+    // A contour of text reaches past bounds that hold no text: its rings
+    // are only known once laid out (XARA-T-0332).
+    if matches!(doc.tree.kind(node), Some(NodeKind::Live(l))
+        if l.role == xarast_doc::LiveRole::Controller
+            && matches!(l.kind, xarast_doc::LiveKind::Contour(_)))
+        && holds_text(doc, node)
+    {
+        return false;
+    }
     let b = match doc.tree.bounds(node).get() {
         Some(b) => b,
-        None => xarast_doc::bounds::compute_bounds_with(&doc.tree, node, attrs.stroke_extent()),
+        None => xarast_doc::bounds::compute_bounds_in(doc, node, attrs.stroke_extent()),
     };
     !b.is_empty() && !b.intersects(clip)
+}
+
+/// Whether a text story stands anywhere under `node`.
+fn holds_text(doc: &Document, node: NodeId) -> bool {
+    doc.tree
+        .preorder(node)
+        .any(|n| matches!(doc.tree.kind(n), Some(NodeKind::TextStory(_))))
 }
 
 /// The shadow a shadow controller casts, and how far beyond its source it
@@ -2705,9 +2758,7 @@ fn shadow_of(
     let parts = xarast_doc::live::parts(&doc.tree, node)?;
     let src = match doc.tree.bounds(parts.source).get() {
         Some(b) => b,
-        None => {
-            xarast_doc::bounds::compute_bounds_with(&doc.tree, parts.source, attrs.stroke_extent())
-        }
+        None => xarast_doc::bounds::compute_bounds_in(doc, parts.source, attrs.stroke_extent()),
     };
     if src.is_empty() {
         return None;

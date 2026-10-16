@@ -309,8 +309,9 @@ fn bevel_band(
         .iter()
         .map(|i| match i {
             crate::contour::Ink::Node(n) => crate::contour::silhouette(doc, *n, false),
-            crate::contour::Ink::Moulded(g) => {
-                crate::contour::silhouette_of(doc, &g.path, &i.attrs(doc), false)
+            crate::contour::Ink::Moulded(GeneratedShape { path, .. })
+            | crate::contour::Ink::Drawn { path, .. } => {
+                crate::contour::silhouette_of(doc, path, &i.attrs(doc), false)
             }
         })
         .filter(|s| !s.is_empty())
@@ -417,7 +418,7 @@ pub fn source_rect(doc: &Document, params: &MouldParams, source: NodeId) -> Rect
         Some(b) if !b.is_empty() => b,
         _ => {
             let attrs = resolve_uncached(&doc.tree, source, &doc.defaults);
-            crate::bounds::compute_bounds(&doc.tree, source, &attrs)
+            crate::bounds::compute_bounds_in(doc, source, attrs.stroke_extent())
         }
     }
 }

@@ -184,6 +184,8 @@ fn end_of(
                     return Some(((*g.path).clone(), a, g.filled, g.stroked));
                 }
                 Ink::Node(n) => n,
+                // `inks` reads no nested output and no text (decision 54).
+                Ink::Drawn { .. } => return None,
             };
             {
                 let path = geometry(doc, n)?;

@@ -711,7 +711,7 @@ impl Session {
                 };
             }
         }
-        // A previewed outer contour reaches as far as its previewed width.
+        // A previewed mould reaches wherever its dragged cage puts it.
         for (c, kind) in &self.preview.live {
             // A previewed cage moves the mould's copy anywhere: the image
             // of its source through the dragged cage, grown by how far the
@@ -745,18 +745,16 @@ impl Session {
                     };
                 }
             }
-            if let xarast_doc::LiveKind::Contour(p) = kind
-                && let Some(parts) = xarast_doc::live::parts(&self.doc.tree, *c)
-            {
-                let r = crate::viewport::nodes_rect(&self.doc, [parts.source]).inflated(p.growth());
-                if !r.is_empty() {
-                    self.scene_ink = if self.scene_ink.is_empty() {
-                        r
-                    } else {
-                        self.scene_ink.union(r)
-                    };
-                }
-            }
+        }
+        // Contour rings as drawn: a previewed contour's, and the rings of
+        // text, which the committed bounds do not hold (XARA-T-0332).
+        let rings = self.walker.live_ink();
+        if !rings.is_empty() {
+            self.scene_ink = if self.scene_ink.is_empty() {
+                rings
+            } else {
+                self.scene_ink.union(rings)
+            };
         }
         self.resolver_snapshot = None;
         Ok(stats)

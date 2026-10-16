@@ -153,6 +153,18 @@ impl ResolvedAttrs {
         stroke_extent_of(|s| self.get(s))
     }
 
+    /// [`stroke_extent`](Self::stroke_extent) once `over` is applied on
+    /// top (the last value of a slot wins), without building a snapshot.
+    #[must_use]
+    pub fn stroke_extent_over(&self, over: &[AttrValue]) -> Mp {
+        stroke_extent_of(|s| {
+            over.iter()
+                .rev()
+                .find(|v| v.slot() == Some(s))
+                .unwrap_or_else(|| self.get(s))
+        })
+    }
+
     /// The colour fill in force.
     #[must_use]
     pub fn fill(&self) -> &crate::fill::Paint {

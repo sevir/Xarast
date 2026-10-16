@@ -9,6 +9,7 @@
 mod attrs;
 mod blend;
 mod builder;
+mod contour;
 mod foreign;
 mod invariants;
 mod journal;

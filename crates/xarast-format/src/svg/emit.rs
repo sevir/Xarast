@@ -1600,7 +1600,7 @@ impl<'d, 'b> Emitter<'d, 'b> {
                 Some(NodeKind::TextStory(_)) => return effect::Region::Object { margin: 0.5 },
                 _ => continue,
             };
-            let cb = xarast_doc::bounds::compute_bounds_with(tree, c, Mp::ZERO);
+            let cb = xarast_doc::bounds::compute_bounds_in(self.doc, c, Mp::ZERO);
             if cb.is_empty() {
                 continue;
             }
@@ -2248,8 +2248,15 @@ impl<'d, 'b> Emitter<'d, 'b> {
             AttrValue::JoinType(j) => *j,
             _ => Join::Mitre,
         };
+        // Text in the source is contoured from its outlines when the
+        // placer makes them (XARA-T-0332), as the walker draws it.
+        let placer = self.placer.clone();
         let rings = controller
-            .and_then(|c| xarast_doc::contour::generate(self.doc, c))
+            .and_then(|c| {
+                xarast_doc::contour::generate_full(self.doc, c, None, &mut |doc, story| {
+                    placer.as_ref().and_then(|p| p.0.outlines(doc, story))
+                })
+            })
             .unwrap_or_default();
         let start = rings.iter().position(|r| r.attrs.is_empty());
         for (i, ring) in rings.iter().enumerate() {
@@ -2409,12 +2416,11 @@ impl<'d, 'b> Emitter<'d, 'b> {
         // The floor map, in the document's frame, anchored on the source's
         // bounds as the renderer anchors it.
         let map = parts.as_ref().filter(|_| floor).map(|p| {
-            let tree = &self.doc.tree;
             // Computed, never read from the cache, and without the line
             // width (the walker's anchor includes it, but where the width
             // lives moves between a built document and a read one), so a
             // save is a function of the model alone and a fixed point.
-            let src = xarast_doc::bounds::compute_bounds_with(tree, p.source, Mp::ZERO);
+            let src = xarast_doc::bounds::compute_bounds_in(self.doc, p.source, Mp::ZERO);
             sh.silhouette_map(src)
         });
         let reach = blur + glow + (dx.abs().max(dy.abs()) * 1000.0).ceil();

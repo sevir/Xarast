@@ -540,6 +540,14 @@ fn ink_rect(
                         half_width(&stack),
                     ));
                 }
+                // An outer contour's rings reach past its objects
+                // (XARA-T-0332): their exact box.
+                if matches!(tree.kind(parent), Some(NodeKind::Live(l))
+                    if l.role == xarast_doc::LiveRole::Controller
+                        && matches!(&l.kind, xarast_doc::LiveKind::Contour(p) if p.outer))
+                {
+                    add(xarast_doc::contour::ring_extent(doc, parent));
+                }
                 stack.pop_scope();
             }
         }
@@ -576,7 +584,7 @@ pub fn content_rect(doc: &xarast_doc::Document) -> DocRect {
     let root = doc.tree.root();
     match doc.tree.bounds(root).get() {
         Some(r) if !r.is_empty() => r,
-        _ => xarast_doc::bounds::compute_bounds_with(&doc.tree, root, Mp::ZERO),
+        _ => xarast_doc::bounds::compute_bounds_in(doc, root, Mp::ZERO),
     }
 }
 
@@ -593,7 +601,7 @@ where
         }
         let b = match doc.tree.bounds(id).get() {
             Some(b) => b,
-            None => xarast_doc::bounds::compute_bounds_with(&doc.tree, id, Mp::ZERO),
+            None => xarast_doc::bounds::compute_bounds_in(doc, id, Mp::ZERO),
         };
         if b.is_empty() {
             continue;

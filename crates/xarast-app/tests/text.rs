@@ -25,6 +25,12 @@ fn doc(layout: TextLayout) -> xarast_doc::Document {
 /// path follows).
 fn doc_with(layout: TextLayout, path: Option<xarast_geom::Path>) -> xarast_doc::Document {
     let mut b = skeleton(BuildLimits::default()).unwrap();
+    story(&mut b, layout, path);
+    b.finish().unwrap().0
+}
+
+/// The story of [`doc_with`], built where `b` stands.
+fn story(b: &mut xarast_doc::DocumentBuilder, layout: TextLayout, path: Option<xarast_geom::Path>) {
     b.node(NodeKind::TextStory(Box::new(TextStoryNode {
         transform: Matrix::translate(Vector::new(Mp::new(100_000), Mp::new(200_000))),
         layout,
@@ -57,7 +63,6 @@ fn doc_with(layout: TextLayout, path: Option<xarast_geom::Path>) -> xarast_doc::
         .unwrap();
     b.pop_scope();
     b.pop_scope();
-    b.finish().unwrap().0
 }
 
 fn walk(doc: &xarast_doc::Document) -> (SceneWalker, Scene) {
@@ -174,4 +179,46 @@ fn the_text_walk_is_stable_and_leaves_the_document_alone() {
         "{:?}",
         w1.text_ink()
     );
+}
+
+#[test]
+fn a_contour_of_text_follows_the_glyphs() {
+    use xarast_doc::{ContourParams, LiveKind, LiveNode, LiveRole, RegenState};
+    let kind = LiveKind::Contour(Box::new(ContourParams {
+        steps: 0,
+        width: Mp::new(2_000),
+        outer: true,
+        ..ContourParams::default()
+    }));
+    let live = |role| {
+        NodeKind::Live(Box::new(LiveNode {
+            role,
+            kind: kind.clone(),
+            regen: RegenState::Clean,
+            name: None,
+        }))
+    };
+    let mut b = skeleton(BuildLimits::default()).unwrap();
+    let c = b.node(live(LiveRole::Controller)).unwrap();
+    b.push_scope().unwrap();
+    b.node(live(LiveRole::Generated)).unwrap();
+    b.node(live(LiveRole::Source)).unwrap();
+    b.push_scope().unwrap();
+    story(&mut b, TextLayout::AtPoint, None);
+    b.pop_scope();
+    b.pop_scope();
+    let d = b.finish().unwrap().0;
+    let c = c.node_id();
+    let (w, _) = walk(&d);
+    let text = w.text_ink();
+    let rings = w.live_ink();
+    assert!(!text.is_empty());
+    // The rings stand 2 pt around the glyphs (plus their stroke): what
+    // the walker reports, since the document's bounds hold no text.
+    assert!(
+        rings.contains_rect(text.inflated(Mp::new(1_900))),
+        "{rings:?} {text:?}"
+    );
+    assert!(!text.contains_rect(rings));
+    assert!(xarast_doc::contour::ring_extent(&d, c).is_empty());
 }

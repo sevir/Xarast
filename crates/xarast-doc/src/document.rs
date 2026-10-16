@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use crate::attr::{AttrResolver, AttrStack, DefaultAttrs};
-use crate::bounds::{BoundsCache, Epoch, compute_bounds_with};
+use crate::bounds::{BoundsCache, Epoch, compute_bounds_in};
 use crate::digest::CanonicalHasher;
 use crate::kind::NodeKind;
 use crate::resources::DocumentResources;
@@ -90,6 +90,9 @@ pub struct Document {
     pub attrs: AttrResolver,
     /// The logical clock: bumped by every committed transaction.
     pub epoch: Epoch,
+    /// Each contour's ring extent, kept by the state it was computed for
+    /// (`contour::ring_extent`). Derived, like `attrs`.
+    pub(crate) ring_extents: crate::contour::RingExtents,
 }
 
 impl Default for Document {
@@ -153,6 +156,7 @@ impl Document {
             meta: DocumentMeta::default(),
             attrs: AttrResolver::new(),
             epoch: Epoch::default(),
+            ring_extents: crate::contour::RingExtents::default(),
         }
     }
 
@@ -167,6 +171,7 @@ impl Document {
             meta: DocumentMeta::default(),
             attrs: AttrResolver::new(),
             epoch: Epoch::default(),
+            ring_extents: crate::contour::RingExtents::default(),
         }
     }
 
@@ -308,7 +313,7 @@ impl Document {
                     }
                     _ => {
                         if self.tree.links(node).first_child.is_none() {
-                            let r = compute_bounds_with(&self.tree, node, stack.stroke_extent());
+                            let r = compute_bounds_in(self, node, stack.stroke_extent());
                             computed.insert(node, r);
                         }
                     }
@@ -322,7 +327,7 @@ impl Document {
                             r = if r.is_empty() { *cb } else { r.union(*cb) };
                         }
                     }
-                    let own = compute_bounds_with(&self.tree, parent, stack.stroke_extent());
+                    let own = compute_bounds_in(self, parent, stack.stroke_extent());
                     if !own.is_empty() {
                         r = if r.is_empty() { own } else { r.union(own) };
                     }

@@ -183,7 +183,8 @@ fn narrowing(lo: Point, hi: Point) -> LiveKind {
 
 fn bounds(s: &Session, n: NodeId) -> Rect {
     let attrs = xarast_doc::attr::resolve_uncached(&s.doc.tree, n, &s.doc.defaults);
-    xarast_doc::bounds::compute_bounds(&s.doc.tree, n, &attrs)
+    // What the mould reads its source rectangle from (exact for a contour).
+    xarast_doc::bounds::compute_bounds_in(&s.doc, n, attrs.stroke_extent())
 }
 
 /// Gives `n` the effect `kind`, a blend going to `other`; returns what

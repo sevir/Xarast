@@ -316,6 +316,42 @@ fn dragging_a_handle_out_gives_an_outer_contour_in_one_exact_step() {
 }
 
 #[test]
+fn a_contour_is_bounded_by_its_rings_and_its_preview_widens_the_ink() {
+    const BG: [u8; 4] = [128, 128, 132, 255];
+    const PAGE: [u8; 4] = [255, 255, 255, 255];
+    let (mut s, nodes) = fixture(&[CENTRE], ToolId::Contour);
+    let object = xarast_app::viewport::nodes_rect(&s.doc, [nodes[0]]);
+    // Mid-drag, the preview's rings are not in the document: the frame's
+    // ink must still cover them.
+    drag_open(&mut s, RIGHT, Point::raw(262_000, 200_000), 0);
+    s.rebuild_scene(None).unwrap();
+    let previewed = s.frame_job(BG, PAGE).ink;
+    release(&mut s, Point::raw(262_000, 200_000), 10);
+    let c = selection(&s)[0];
+    let rings = xarast_doc::contour::ring_extent(&s.doc, c);
+    assert!(!rings.is_empty());
+    let drawn = xarast_app::viewport::device_rect_of(&s.viewport, rings);
+    assert!(
+        previewed.x0 <= drawn.x0
+            && previewed.y0 <= drawn.y0
+            && previewed.x1 >= drawn.x1
+            && previewed.y1 >= drawn.y1,
+        "{previewed:?} {drawn:?}"
+    );
+    // The controller's box is its rings' (12 pt out, plus the stroke),
+    // not 12 pt times the mitre limit (137 pt), and so is the drawing's.
+    let bounds = xarast_app::viewport::nodes_rect(&s.doc, [c]);
+    assert_eq!(bounds, object.union(rings));
+    assert!(bounds.lo.x.raw() > object.lo.x.raw() - 14_000, "{bounds:?}");
+    let drawing = xarast_app::viewport::drawing_rect(&s.doc);
+    assert!(drawing.contains_rect(rings), "{drawing:?} {rings:?}");
+    assert!(
+        drawing.lo.x.raw() > object.lo.x.raw() - 14_000,
+        "{drawing:?}"
+    );
+}
+
+#[test]
 fn dragging_a_handle_in_gives_an_inner_contour_over_the_object() {
     let (mut s, _) = fixture(&[CENTRE], ToolId::Contour);
     let before = s.doc.canonical_digest();

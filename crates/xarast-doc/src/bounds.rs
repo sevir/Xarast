@@ -95,6 +95,32 @@ pub fn compute_bounds(tree: &Tree, id: NodeId, attrs: &ResolvedAttrs) -> Rect {
 /// hand already and should not pay for a snapshot per node.
 #[must_use]
 pub fn compute_bounds_with(tree: &Tree, id: NodeId, stroke_extent: xarast_geom::Mp) -> Rect {
+    bounds_of(tree, id, stroke_extent, &|_| None)
+}
+
+/// [`compute_bounds_with`] with the document at hand, which makes an
+/// outer contour's box **exact** (XARA-T-0332): its source's box and the
+/// box its rings paint ([`contour::ring_extent`](crate::contour::ring_extent),
+/// kept per state), instead of the source's grown by the distance times
+/// the mitre limit, which is all the tree alone can promise.
+/// Deterministic: the same document always gives the same box, however
+/// often it is asked. What culling, damage and "fit the drawing" read.
+#[must_use]
+pub fn compute_bounds_in(
+    doc: &crate::Document,
+    id: NodeId,
+    stroke_extent: xarast_geom::Mp,
+) -> Rect {
+    bounds_of(&doc.tree, id, stroke_extent, &|c| {
+        Some(crate::contour::ring_extent(doc, c))
+    })
+}
+
+/// What an outer contour controller's rings cover, when the caller can
+/// regenerate them; `None` falls back to a conservative bound.
+type RingBox<'a> = dyn Fn(NodeId) -> Option<Rect> + 'a;
+
+fn bounds_of(tree: &Tree, id: NodeId, stroke_extent: xarast_geom::Mp, rings: &RingBox<'_>) -> Rect {
     let Some(node) = tree.get(id) else {
         return Rect::EMPTY;
     };
@@ -125,7 +151,7 @@ pub fn compute_bounds_with(tree: &Tree, id: NodeId, stroke_extent: xarast_geom::
             if l.role == crate::live::LiveRole::Controller
                 && matches!(l.kind, crate::live::LiveKind::Shadow(_)) =>
         {
-            let own = union_children(tree, id, *attrs);
+            let own = union_children(tree, id, *attrs, rings);
             match &l.kind {
                 crate::live::LiveKind::Shadow(p) if !own.is_empty() => own.union(p.extent(own)),
                 _ => own,
@@ -139,7 +165,7 @@ pub fn compute_bounds_with(tree: &Tree, id: NodeId, stroke_extent: xarast_geom::
             if l.role == crate::live::LiveRole::Controller
                 && matches!(l.kind, crate::live::LiveKind::Mould(_)) =>
         {
-            let own = union_children(tree, id, *attrs);
+            let own = union_children(tree, id, *attrs, rings);
             match &l.kind {
                 crate::live::LiveKind::Mould(p) => {
                     let s = p.source();
@@ -161,9 +187,10 @@ pub fn compute_bounds_with(tree: &Tree, id: NodeId, stroke_extent: xarast_geom::
             }
         }
         // An outer bevel's faces lie outside its source, as far as its
-        // width reaches; an outer contour's rings as far as its distance
-        // (times the mitre limit when its corners may be mitred: a cheap
-        // bound, not the rings' own box, which only regeneration knows).
+        // width reaches. An outer contour's rings are where they are when
+        // the caller can regenerate them (`compute_bounds_in`); else as far
+        // as its distance, times the mitre limit when its corners may be
+        // mitred (a cheap bound that may be far too big).
         NodeKind::Live(l)
             if l.role == crate::live::LiveRole::Controller
                 && match &l.kind {
@@ -172,10 +199,14 @@ pub fn compute_bounds_with(tree: &Tree, id: NodeId, stroke_extent: xarast_geom::
                     _ => false,
                 } =>
         {
-            let own = union_children(tree, id, *attrs);
+            let own = union_children(tree, id, *attrs, rings);
             match &l.kind {
                 crate::live::LiveKind::Bevel(p) if !own.is_empty() => own.inflated(p.growth()),
-                crate::live::LiveKind::Contour(p) if !own.is_empty() => own.inflated(p.growth()),
+                crate::live::LiveKind::Contour(p) if !own.is_empty() => match rings(id) {
+                    Some(r) if r.is_empty() => own,
+                    Some(r) => own.union(r),
+                    None => own.inflated(p.growth()),
+                },
                 _ => own,
             }
         }
@@ -187,16 +218,16 @@ pub fn compute_bounds_with(tree: &Tree, id: NodeId, stroke_extent: xarast_geom::
         | NodeKind::Live(_)
         | NodeKind::ClipView(_)
         | NodeKind::TextStory(_)
-        | NodeKind::TextLine(_) => union_children(tree, id, *attrs),
+        | NodeKind::TextLine(_) => union_children(tree, id, *attrs, rings),
     }
 }
 
-fn union_children(tree: &Tree, id: NodeId, extent: xarast_geom::Mp) -> Rect {
+fn union_children(tree: &Tree, id: NodeId, extent: xarast_geom::Mp, rings: &RingBox<'_>) -> Rect {
     let mut r = Rect::EMPTY;
     for c in tree.children(id) {
         let cb = match tree.bounds(c).get() {
             Some(b) => b,
-            None => compute_bounds_with(tree, c, extent),
+            None => bounds_of(tree, c, extent, rings),
         };
         if !cb.is_empty() {
             r = if r.is_empty() { cb } else { r.union(cb) };

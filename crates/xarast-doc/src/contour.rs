@@ -38,7 +38,8 @@ use crate::document::Document;
 use crate::fill::{FillGeometry, Perspective, Ramp, RampStop};
 use crate::kind::NodeKind;
 use crate::live::{ContourParams, LiveKind, LiveRole, parts};
-use crate::regen::GeneratedShape;
+use crate::mould::TextOutlines;
+use crate::regen::{GeneratedShape, RegenKey};
 use crate::tree::{NodeId, Tree};
 
 /// The slots a ring's attributes are blended in. Everything else is drawn
@@ -66,12 +67,27 @@ pub fn generate(doc: &Document, controller: NodeId) -> Option<Vec<GeneratedShape
 
 /// [`generate`] with `params` in place of the controller's own, when
 /// given: what a drag of a contour's width or steps previews before
-/// anything is in the document.
+/// anything is in the document. Text in the source is left out:
+/// [`generate_full`] takes the outliner that lays it out.
 #[must_use]
 pub fn generate_with(
     doc: &Document,
     controller: NodeId,
     params: Option<&ContourParams>,
+) -> Option<Vec<GeneratedShape>> {
+    generate_full(doc, controller, params, &mut |_, _| None)
+}
+
+/// [`generate_with`], laying the source's text out with `text`
+/// (XARA-T-0332): a story is contoured from its glyph outlines, as the
+/// original contours a text story's path conversion. The document cannot
+/// lay text out; the application (walker, export, conversion) can.
+#[must_use]
+pub fn generate_full(
+    doc: &Document,
+    controller: NodeId,
+    params: Option<&ContourParams>,
+    text: &mut TextOutlines<'_>,
 ) -> Option<Vec<GeneratedShape>> {
     let tree = &doc.tree;
     let Some(NodeKind::Live(l)) = tree.kind(controller) else {
@@ -86,15 +102,16 @@ pub fn generate_with(
     let params = params.unwrap_or(own);
     let p = parts(tree, controller)?;
     let start = resolve_uncached(tree, p.generated.unwrap_or(controller), &doc.defaults);
-    // What the source draws: a nested mould as its moulded copy (J4).
-    let inks = inks(doc, p.source);
+    // What the source draws: a nested mould as its moulded copy (J4),
+    // nested rings and blend steps, text as its outlines.
+    let inks = drawn_inks(doc, p.source, text);
     let end = inks.first().map(|i| i.attrs(doc));
     let sources: Vec<Path> = inks
         .iter()
         .map(|i| match i {
             Ink::Node(n) => silhouette(doc, *n, params.include_line_widths),
-            Ink::Moulded(g) => {
-                silhouette_of(doc, &g.path, &i.attrs(doc), params.include_line_widths)
+            Ink::Moulded(GeneratedShape { path, .. }) | Ink::Drawn { path, .. } => {
+                silhouette_of(doc, path, &i.attrs(doc), params.include_line_widths)
             }
         })
         .filter(|s| !s.is_empty())
@@ -144,6 +161,102 @@ pub fn generate_with(
     Some(out)
 }
 
+/// Each contour controller's ring extent ([`ring_extent`]), kept with the
+/// state ([`RegenKey`]) it was computed for. A derived cache, like the
+/// attribute resolver's: never part of the document's identity, always
+/// equal to what a fresh computation gives, so a box read through it does
+/// not depend on what was asked before.
+#[derive(Debug, Default)]
+pub struct RingExtents {
+    memo: std::sync::Mutex<std::collections::HashMap<NodeId, (RegenKey, xarast_geom::Rect)>>,
+}
+
+impl RingExtents {
+    /// How many controllers it holds before it forgets the ones no longer
+    /// in the tree.
+    const PRUNE_AT: usize = 256;
+
+    fn get(&self, controller: NodeId, key: RegenKey) -> Option<xarast_geom::Rect> {
+        let memo = self.memo.lock().ok()?;
+        memo.get(&controller)
+            .filter(|(k, _)| *k == key)
+            .map(|(_, r)| *r)
+    }
+
+    fn put(&self, tree: &Tree, controller: NodeId, key: RegenKey, r: xarast_geom::Rect) {
+        if let Ok(mut memo) = self.memo.lock() {
+            if memo.len() >= Self::PRUNE_AT {
+                memo.retain(|id, _| tree.contains(*id));
+            }
+            memo.insert(controller, (key, r));
+        }
+    }
+
+    /// How many controllers have an extent kept (tests).
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.memo.lock().map_or(0, |m| m.len())
+    }
+
+    /// Whether nothing is kept.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// The box a contour controller's rings paint, in document space: each
+/// ring's exact curve box grown by the stroke it is drawn with (the
+/// attributes in force at the generated node plus the ring's own). Empty
+/// for anything else, and for a contour with nothing to contour.
+///
+/// It is what an outer contour's bounds add to its source's
+/// (`bounds::compute_bounds_in`, XARA-T-0332), in place of the distance
+/// times the mitre limit. Regenerating is a boolean per ring, so the
+/// result is kept in the document's [`RingExtents`] under the
+/// controller's [`RegenKey`]: asked again for the same state, it is a
+/// hash of the controller's subtree and a lookup. Text in the source is
+/// not laid out (the document has no fonts; text has no box here either),
+/// so a contour of text adds only the rings of its other objects.
+#[must_use]
+pub fn ring_extent(doc: &Document, controller: NodeId) -> xarast_geom::Rect {
+    let Some(key) = crate::regen::regen_key(doc, controller, 0.0) else {
+        return xarast_geom::Rect::EMPTY;
+    };
+    if let Some(r) = doc.ring_extents.get(controller, key) {
+        return r;
+    }
+    let r = ring_extent_uncached(doc, controller);
+    doc.ring_extents.put(&doc.tree, controller, key, r);
+    r
+}
+
+fn ring_extent_uncached(doc: &Document, controller: NodeId) -> xarast_geom::Rect {
+    let Some(rings) = generate(doc, controller) else {
+        return xarast_geom::Rect::EMPTY;
+    };
+    let Some(p) = parts(&doc.tree, controller) else {
+        return xarast_geom::Rect::EMPTY;
+    };
+    let start = resolve_uncached(&doc.tree, p.generated.unwrap_or(controller), &doc.defaults);
+    shapes_extent(&rings, &start)
+}
+
+/// The box `shapes` paint over `base`: each one's exact curve box grown
+/// by its stroke.
+#[must_use]
+pub fn shapes_extent(shapes: &[GeneratedShape], base: &ResolvedAttrs) -> xarast_geom::Rect {
+    let mut r = xarast_geom::Rect::EMPTY;
+    for s in shapes.iter().filter(|s| !s.path.is_empty()) {
+        let b = s
+            .path
+            .tight_bounds()
+            .inflated(base.stroke_extent_over(&s.attrs));
+        r = if r.is_empty() { b } else { r.union(b) };
+    }
+    r
+}
+
 /// How far ring `k` of `n` blends from the start attributes (0) towards
 /// the first object's (1).
 #[must_use]
@@ -175,6 +288,15 @@ pub enum Ink {
     /// A shape of a nested mould's copy, which carries every slot it is
     /// drawn with.
     Moulded(GeneratedShape),
+    /// Anything else drawn that is no node of its own: a nested contour's
+    /// ring, a nested blend's step, a run of a text story's glyphs
+    /// ([`drawn_inks`]), with the attributes it is drawn with.
+    Drawn {
+        /// The outline, document space.
+        path: Arc<Path>,
+        /// What it is drawn with.
+        attrs: ResolvedAttrs,
+    },
 }
 
 impl Ink {
@@ -184,6 +306,7 @@ impl Ink {
         match self {
             Ink::Node(n) => resolve_uncached(&doc.tree, *n, &doc.defaults),
             Ink::Moulded(g) => resolved_from(doc, &g.attrs),
+            Ink::Drawn { attrs, .. } => attrs.clone(),
         }
     }
 }
@@ -199,14 +322,51 @@ pub fn resolved_from(doc: &Document, values: &[AttrValue]) -> ResolvedAttrs {
     stack.snapshot()
 }
 
-/// The objects under `root` as a contour or a blend reads them (phase 13
-/// J4): every ink node in document order, a **mould controller anywhere
-/// below** as its moulded copy (what the original's path conversion of a
-/// mould passes back is its moulder's paths, `Kernel/nodemold.cpp:
-/// 997-1015`), and nothing any other nested live object generated. Text is
-/// left out (its outlines are laid out by the application).
+/// `base` with `over` applied on top.
+fn resolved_over(doc: &Document, base: &ResolvedAttrs, over: &[AttrValue]) -> ResolvedAttrs {
+    if over.is_empty() {
+        return base.clone();
+    }
+    let mut stack = crate::attr::AttrStack::with_defaults(&doc.defaults);
+    for slot in crate::attr::ALL_ATTR_SLOTS {
+        stack.push(Arc::new(base.get(slot).clone()));
+    }
+    for v in over {
+        stack.push(Arc::new(v.clone()));
+    }
+    stack.snapshot()
+}
+
+/// The objects under `root` as a blend reads them (phase 13 J4): every
+/// ink node in document order, a **mould controller anywhere below** as
+/// its moulded copy (what the original's path conversion of a mould
+/// passes back is its moulder's paths, `Kernel/nodemold.cpp:997-1015`),
+/// and nothing any other nested live object generated. Text is left out
+/// (its outlines are laid out by the application). A contour reads more:
+/// [`drawn_inks`].
 #[must_use]
 pub fn inks(doc: &Document, root: NodeId) -> Vec<Ink> {
+    collect_inks(doc, root, false, &mut |_, _| None)
+}
+
+/// The objects under `root` as a contour reads them: what [`inks`]
+/// reads, plus **everything nested live objects draw** — a nested
+/// contour's rings (an inset path's rings without its source), a nested
+/// blend's steps — and text as its glyph outlines laid out by `text`
+/// (XARA-T-0332). The original's path conversion of a contour or a blend
+/// passes back what it draws (`Kernel/ncntrcnt.cpp:520-600`; document
+/// model decision 54).
+#[must_use]
+pub fn drawn_inks(doc: &Document, root: NodeId, text: &mut TextOutlines<'_>) -> Vec<Ink> {
+    collect_inks(doc, root, true, text)
+}
+
+fn collect_inks(
+    doc: &Document,
+    root: NodeId,
+    drawn: bool,
+    text: &mut TextOutlines<'_>,
+) -> Vec<Ink> {
     let tree = &doc.tree;
     let mut out = Vec::new();
     let mut skip_under: Option<NodeId> = None;
@@ -222,15 +382,46 @@ pub fn inks(doc: &Document, root: NodeId) -> Vec<Ink> {
                 if l.role == LiveRole::Controller && matches!(l.kind, LiveKind::Mould(_)) =>
             {
                 skip_under = Some(n);
-                out.extend(
+                let copy = if drawn {
+                    crate::mould::generate_with(doc, n, text)
+                } else {
                     crate::mould::generate(doc, n)
-                        .unwrap_or_default()
+                };
+                out.extend(
+                    copy.unwrap_or_default()
                         .into_iter()
                         .filter(|g| !g.path.is_empty())
                         .map(Ink::Moulded),
                 );
             }
-            Some(NodeKind::Live(l)) if l.role == LiveRole::Generated => skip_under = Some(n),
+            Some(NodeKind::Live(l)) if l.role == LiveRole::Generated => {
+                skip_under = Some(n);
+                if drawn {
+                    nested_output(doc, n, &l.kind, text, &mut out);
+                }
+            }
+            // An inset path draws its rings, not its source.
+            Some(NodeKind::Live(l))
+                if drawn
+                    && n != root
+                    && l.role == LiveRole::Source
+                    && matches!(&l.kind, LiveKind::Contour(c) if c.inset) =>
+            {
+                skip_under = Some(n);
+            }
+            Some(NodeKind::TextStory(_)) if drawn => {
+                skip_under = Some(n);
+                // Glyphs fill non-zero, whatever is in force.
+                let rule = [AttrValue::WindingRule(FillRule::NonZero)];
+                for run in text(doc, n).unwrap_or_default() {
+                    if !run.path.is_empty() {
+                        out.push(Ink::Drawn {
+                            attrs: resolved_over(doc, &run.attrs, &rule),
+                            path: run.path,
+                        });
+                    }
+                }
+            }
             Some(NodeKind::Path(_) | NodeKind::Shape(_) | NodeKind::QuickShape(_)) => {
                 out.push(Ink::Node(n));
             }
@@ -238,6 +429,59 @@ pub fn inks(doc: &Document, root: NodeId) -> Vec<Ink> {
         }
     }
     out
+}
+
+/// What the generated node `node` of a nested live object draws, as
+/// [`Ink::Drawn`]: a contour's rings (filled under a negative rule, as the
+/// walker draws them), a blend pair's steps. A mould's generated node is
+/// reached through its controller; pixel effects draw no outline.
+fn nested_output(
+    doc: &Document,
+    node: NodeId,
+    kind: &LiveKind,
+    text: &mut TextOutlines<'_>,
+    out: &mut Vec<Ink>,
+) {
+    let tree = &doc.tree;
+    let Some(parent) = tree.links(node).parent else {
+        return;
+    };
+    let (shapes, rule): (Vec<GeneratedShape>, Option<AttrValue>) = match kind {
+        LiveKind::Contour(_) => (
+            generate_full(doc, parent, None, text).unwrap_or_default(),
+            Some(AttrValue::WindingRule(FillRule::Negative)),
+        ),
+        // A blend's generated nodes stand between its objects, under its
+        // source: this one is pair `k`.
+        LiveKind::Blend(_) => {
+            let k = crate::blend::blenders(tree, parent)
+                .iter()
+                .position(|&(g, _, _)| g == node);
+            let steps = match (tree.links(parent).parent, k) {
+                (Some(bc), Some(k)) => match crate::regen::regenerate(doc, bc, 0.0) {
+                    Ok(crate::regen::LiveOutput::Groups(g)) => {
+                        g.get(k).map(|s| s.to_vec()).unwrap_or_default()
+                    }
+                    _ => Vec::new(),
+                },
+                _ => Vec::new(),
+            };
+            (steps, None)
+        }
+        _ => return,
+    };
+    let base = resolve_uncached(tree, node, &doc.defaults);
+    for s in shapes {
+        if s.path.is_empty() {
+            continue;
+        }
+        let mut over = s.attrs.to_vec();
+        over.extend(rule.clone());
+        out.push(Ink::Drawn {
+            attrs: resolved_over(doc, &base, &over),
+            path: s.path,
+        });
+    }
 }
 
 /// The objects a contour contours: every ink node under `source`, in

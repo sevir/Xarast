@@ -849,7 +849,7 @@ pub(crate) fn become_shapes(
             }
         }
         LiveKind::Contour(p) => {
-            let rings = xarast_doc::contour::generate(doc, c).unwrap_or_default();
+            let rings = xarast_doc::contour::generate_full(doc, c, None, text).unwrap_or_default();
             for child in doc.tree.children(c) {
                 if Some(child) == parts.generated {
                     let base = xarast_doc::attr::resolve_uncached(&doc.tree, child, &doc.defaults);
