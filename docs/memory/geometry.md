@@ -381,7 +381,36 @@ failing seed (mitre limit 1.0, a self-overlapping cubic) was a red
 herring: the join and self-overlap were irrelevant, only wide stroke +
 large radius mattered. The oracle was right; the hit-test was wrong.
 Regression: `hit.proptest-regressions` and
-`regression_mitre_limit_one_self_overlapping_cubic`.
+`regression_mitre_limit_one_self_overlapping_cubic`. (Re-checked under
+the polyline oracle below: restoring the radius-scaled accuracy still
+fails that seed, so this diagnosis stands.)
+
+**Invariant (XARA-T-0344): the hit oracle counts winding numbers against
+a polyline, never against `kurbo` cubics.** The second failing seed of
+`stroke_matches_the_renderers_outline` (non-uniform scale, mitre limit
+1.0, line + cubic) was the *oracle's* bug, not the hit-test's: the
+hit-test and `stroke_to_path` both stroke in object space and transform
+afterwards, the same geometry, and the hit-test was right. The "inside"
+sample sat 2 160 mp from the centreline of a stroke whose doc-space
+half-width is ≤ 1 403 mp. `kurbo`'s `winding` (0.13.1) finds a cubic's
+crossing with `solve_monotonic_for_y`, which takes the first root in
+[0, 1] from the closed-form `solve_cubic`; one outline cubic had a `y`
+polynomial that is quadratic up to rounding noise once scaled
+(leading coefficient −1.8e−12 against b ≈ −3 377), the closed form
+then returns roots that are not on the curve (t = 0.849, y = 8 112, for
+y = 9 667; the true root is t = 0.626), and the crossing lands on the
+wrong side of the point. The oracle now flattens the region at 0.05 mp
+(`polyline` in `tests/hit.rs`) and counts against lines, which is
+exact; 0.05 mp is far inside the 1 mp / 2 mp margins every check keeps
+from a boundary. Production picking is unaffected (`hit.rs` flattens
+with its own chord bound and counts its own crossings). `fill_contains`
+(`measure.rs`) still uses `kurbo`'s winding, but on integer object-space
+coordinates, where the leading coefficient is an exact integer; a probe
+of near-quadratic integer cubics up to 10^8 mp found no disagreement
+with the polyline. **Do not call `kurbo`'s `winding`/`contains` on
+transformed (non-integer) cubics** where correctness matters.
+Regression: `hit.proptest-regressions` and
+`regression_non_uniform_scale_bevelled_line_and_cubic`.
 
 ### Bounds on hostile input
 
