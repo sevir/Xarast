@@ -820,7 +820,14 @@ placer (XARA-T-0259, 2026-09-24, ext4, load ≈ 3): ProbeX16 UI thread
   `filled`/`stroked`. A mould's **source** is skipped (drawn only through
   the copy); controller and source are not `live_pending`.
 - Scene ids as rings (tag | (index + 1) << 32). The key does not cover
-  fonts: a font change does not re-mould text until the source changes.
+  fonts; instead the walker **clears its `LiveCache`** when its fonts
+  stop serving the document (`sync_caches`, the same test that drops laid
+  out stories) and on `reset` (keys are per tree), so a font change
+  re-moulds text (XARA-T-0337).
+- A shape that carries a positive `Feather` (from a feathered object
+  inside the mould, `document-model.md` decision 54) is painted inside
+  its own `LayerEffect::Feather`; a feather on the mould itself is the
+  controller's, pushed once at its scope.
 - `SvgTextPlacer::outlines` (new `TextPlacer` method) gives the writer the
   same outlines. `tests/xar_moulds.rs` (+ golden): a perspective whose
   linear fill deforms with it, an envelope that bulges.

@@ -2057,6 +2057,28 @@ TODO 33 closed: a wall or floor shadow is cast from its content's
   controller's feather, and a feather on a group *around* a shadow
   controller, still read the shadow as drawn.
 
+### Nesting live effects (XARA-T-0337, phase 13 J4, 2026-10-16)
+
+The composition order is `document-model.md` decision 54 (facts and
+table there). What it means for the renderer: nothing new in the offscreen
+pipeline. A shadow around anything casts from its rendered alpha; a
+feather or a bevel around anything reads the outline silhouette of the
+previous section; geometry generators (contour, blend, mould) call the
+inner generators themselves. The one renderer-facing addition: a moulded
+shape carrying a feather is drawn inside its own `LayerEffect::Feather`
+(per path, as the original applies the attribute to each passed-back
+path), so a feathered object inside a mould stays feathered. A shadow
+inside a mould is not drawn (the original's moulded copy has none); a
+bevel inside one is a flat unlit band. Tests: `xarast-app/tests/
+live_nesting.rs` (30 ordered pairs complete, a shadow on a blend on a
+moulded group with pixel probes, a feathered object inside a mould, the
+refusals, conversion to shapes within mean |Δ| 0.5). **Corpus impact:
+none.** The 59 PNG and SVG exports (72 dpi, paper) are byte-identical
+before (08609f7) and after: no corpus mould holds a shadow, bevel or
+feather, and no corpus contour or blend end holds a mould below its top.
+Corpus export check: 118 comparisons, 0 failures; `svg-check
+--interchange` 59/59.
+
 ## Invariants that must not be broken
 
 1. **Never put absolute millipoints into an `f32`.** A 5 m document is

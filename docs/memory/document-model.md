@@ -576,12 +576,12 @@ New in Phase 2:
     parallelogram filled with itself (`Tiling::Simple`, not stroked). A
     nested generated node (contour rings, blend pair `k`, inner mould)
     is moulded where it stands; an inner mould's or inset path's source
-    is skipped; pixel effects inside a mould are not moulded. A flat
+    is skipped; pixel effects inside a mould follow decision 54. A flat
     cage (no width or height) is the identity: what the importer stores
     for a missing or malformed one. A controller's bounds are the image
     of its source rectangle (an 8×8 sample grid + 2 %), grown by the
-    stroke extent. A blend end that is a mould controller blends from
-    its moulded copy.
+    stroke extent. A blend end that is (or holds) a mould controller
+    blends from its moulded copy.
 53. **Tools build and edit contours and blends through `Tx`**
     (XARA-T-0340). Two narrow additions: `Tx::attach` lets a node made
     in this transaction become the `LastChild` of another made in it,
@@ -597,6 +597,53 @@ New in Phase 2:
     `blend::generate_with(params, moved)` (a moved end's outline and
     geometry-linked attributes through the matrix; a mould end ignores
     the move). `LiveCache::regenerated()` counts computed outputs.
+54. **The composition order of nested live effects** (phase 13 J4,
+    XARA-T-0337). Every live object reads its source **as drawn,
+    bottom-up**: an inner controller is computed first because the outer
+    generator *calls* it (no stored intermediate, no queue order to get
+    wrong; the outer key covers every revision in the inner subtree,
+    decision 42, so an inner change regenerates every outer). How each
+    outer kind sees what is nested in it:
+    | Outer | Reads its source as | Facts |
+    |---|---|---|
+    | shadow | the rendered alpha of everything drawn (nested effects included) | `render.md`, "Shadows from rendered alpha" |
+    | feather, bevel | an outline silhouette (`render.md`, "Nested effects in a silhouette pass") | `Kernel/nodecntr.cpp:1184-1231` |
+    | contour | outlines (`contour::inks`): ink nodes, a **mould anywhere below as its moulded copy**; other nested generated output (rings, steps) left out | a mould's path conversion passes back its moulder's paths, `Kernel/nodemold.cpp:997-1015` |
+    | blend | each end through `contour::inks` (same rule); nested blends blend their own ends | as above; `Kernel/nodeblnd.cpp:502-620` |
+    | mould | outlines of everything (rings, steps, inner moulds moulded where they stand); a **shadow** inside is left out, a **bevel** is its flat unlit band (outer: beneath, inner: over its objects, in its own colour else its first object's fill), a **feather** on an object or group *inside the source* stays on each path from it | `CopyChildrenAsShapes` = `BECOMEA_PASSBACK` (`Kernel/noderend.cpp:4465-4490`); `NodeShadow::DoBecomeA` passes nothing back (`Kernel/nodeshad.cpp:1058-1248`); `NodeBevel` passes its ink path filled, line colour none (`Kernel/nodebev.cpp:2499-2528`); `AttrFeather` is never factored out (`Kernel/fthrattr.cpp:1772-1779`) |
+    A feather on the mould controller or above it feathers the mould as
+    one unit (the walker's `own_feather`), never each shape again
+    (`mould::feather_inside`). **Refused, as the original refuses them**
+    (`live_edit`): a contour on or inside a bevel and a bevel on or
+    inside a contour (`Kernel/nbevcont.cpp:2346-2351`,
+    `Kernel/ncntrcnt.cpp:1246-1249`, whatever the direction); moulding a
+    shadow controller directly ("no direct moulding",
+    `Kernel/nodecont.cpp:413-418`; a group holding one is moulded), an
+    object of a blend (`Kernel/nodeblnd.cpp:1862-1867`) or an object
+    inside a mould (`Kernel/nodemldr.cpp:1528-1535`). Through a group
+    every ordered pair of the six kinds nests: the 30-pair matrix in
+    `xarast-app/tests/live_nesting.rs` renders each completely and undoes
+    it exactly. DPI does not propagate: generators are resolution-free
+    and pixel effects are computed at the resolution shown.
+55. **"Convert to editable shapes" of live objects** (phase 13 A9,
+    `live_edit::become_shapes`). A mould, a contour or a blend becomes a
+    plain group standing where it stood, holding exactly what it drew:
+    a mould's moulded copy (every shape a `Path` with attribute children
+    for what it would not inherit there); a contour's rings (negative
+    winding, as drawn) and its objects; an inset path's rings only; a
+    blend's objects with each pair's steps between them. The controller's
+    own attributes are copied onto the group (the original copies its
+    mould's non-optimising ones, `Kernel/nodemold.cpp:955-966`). Moved
+    objects keep their look (`materialise`). Controllers convert deepest
+    first, one undo step for the whole selection. Live objects inside a
+    blend stay live (the original keeps controllers in a blend,
+    `Kernel/nodeblnd.cpp:560-575`). **Shadows and bevels stay live**: the
+    original rasterises them into a path with a bitmap fill
+    (`Kernel/nodeshad.cpp:1101-1220`, `Kernel/nodebev.cpp:2149-2498`),
+    which needs the renderer's pixels as a `BitmapResource`; not built.
+    A moulded perspective fill stays perspective (the original strips
+    them, `RemovePerspectiveFills`; Xarast's model can say them, so the
+    result looks as the live object did).
 
 ## The `.xar` attribute tag reconciliation
 
@@ -869,18 +916,34 @@ the digest recorded for that state serial.
   moulded object is picked by its moulded outline; snapping and
   editing *inside* a mould still see the undeformed source
   (interaction must map the pointer through
-  `MouldTransform::source_point`); a blend end that *contains* a mould
-  deeper than its top node still blends the undeformed source; shadows,
-  bevels and feathers inside a mould are not moulded; the original's 2×2
-  envelope smooths its inner lines (ours is the Coons patch of its
-  piecewise sides; it cannot come from a `.xar`); "convert to shapes" of
-  a mould is not wired; the walker's mould cache key does not cover
-  fonts.
+  `MouldTransform::source_point`; not started in XARA-T-0337: the shape
+  editor, its handles and snapping would all need the map and its
+  inverse, and the source rectangle would have to follow an edit made
+  inside); the original's 2×2 envelope smooths its inner lines (ours is
+  the Coons patch of its piecewise sides; it cannot come from a
+  `.xar`). Closed by XARA-T-0337: deep mould blend ends and contours
+  around moulds (decision 54), shadows/bevels/feathers inside a mould
+  (decision 54), "convert to shapes" (decision 55), fonts (the walker
+  clears its `LiveCache` when its fonts change, `app-core.md`). Still
+  open from the mould tool: paste any clipboard path as a mould,
+  Remove+Constrain copying the cage, the 2×2 envelope preset; the SVG
+  single-`transform` shortcut for an affine perspective
+  (`research/06 §6.8.5`, a MAY) is not built: the source is already
+  written once inside `<xarast:mould-source>` with its ids, so a second
+  copy under a `transform` would duplicate ids, and a `<use>` of an
+  element inside a foreign element is not known to render in Inkscape.
+- **Converting shadows and bevels to shapes** (decision 55): the
+  original makes a bitmap-filled path; needs the renderer's offscreen
+  result as a `BitmapResource`.
+- **Contours of nested blends and contours**: `contour::inks` leaves
+  nested rings and steps out of a contour's silhouette; the original's
+  conversion passes them back (`Kernel/ncntrcnt.cpp:520-600`).
 - **Blend follow-ups (XARA-T-0333).** F6 (along a path: the record
   family is decoded and reported, the path dropped; none in the corpus;
-  bounds would then need the path); blends whose ends are moulds,
-  shadows or other live objects (9 corpus pairs end at moulds: no
-  steps) — the original blends what those *draw*; text ends (not
+  bounds would then need the path); blends whose ends are shadows or
+  other live objects (moulds, at the top of an end or below it, are
+  blended from their copy: decision 54) — the original blends what
+  those *draw*; text ends (not
   outlined in the document); nested blends blend only their own ends;
   `step_distance` is kept but not used to derive the count; a fill
   family mismatch picks instead of blending the original's way (start's
