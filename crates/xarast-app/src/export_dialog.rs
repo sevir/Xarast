@@ -1,7 +1,7 @@
 //! The File › Export dialog's model (phase 11 T11.1.8, XARA-T-0192).
 //!
 //! The dialog is generated from the registry's
-//! [`Capabilities`](xarast_io::Capabilities), never switched on the
+//! [`Capabilities`], never switched on the
 //! format: a raster format gets a pixel size, `has_dpi` a resolution and
 //! a printed size, `alpha` a background choice, `lossy` a quality slider,
 //! and `max_side` bounds the pixel size. A format without alpha says that
