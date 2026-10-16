@@ -102,7 +102,10 @@ pub use compose::{
 };
 pub use damage::{Damage, image_damage, scene_damage};
 pub use display_list::{DisplayList, DrawCmd, ViewParams};
-pub use effect::{BevelEffect, LayerEffect, MAX_BEVEL_PX, NestedSilhouette, ShadowEffect};
+pub use effect::{
+    BevelEffect, DRAFT_RADIUS_PX, LayerEffect, MAX_BEVEL_PX, NestedSilhouette, ShadowEffect,
+    radius_cap,
+};
 pub use effect_cache::{DEFAULT_EFFECT_CACHE_BYTES, EffectCache, EffectCacheStats};
 pub use layer::{LayerContent, LayerRequest, LayerTarget, render_subtree_to_layer};
 pub use paint::{

@@ -486,7 +486,7 @@ impl DisplayList {
                     });
                 }
                 SceneOp::PushEffect(effect) => {
-                    let reach = effect.reach_px(xf.max_scale());
+                    let reach = effect.reach_px(xf.max_scale(), view.quality);
                     effect_stack.push((cmds.len(), DeviceRect::EMPTY, clip_to));
                     clip_to = clip_to.inflated(reach);
                     doc_window = window_in_document(culled, clip_to, xf);
@@ -508,7 +508,7 @@ impl DisplayList {
                             if !content.is_empty()
                                 && let Some(SceneOp::PushEffect(e)) = ops.get(*op as usize)
                             {
-                                drawn = content.inflated(e.growth_px(xf.max_scale()));
+                                drawn = content.inflated(e.growth_px(xf.max_scale(), view.quality));
                                 bounds = bounds.union(drawn);
                             }
                         }
@@ -690,7 +690,7 @@ impl DisplayList {
                 && let Some(SceneOp::PushEffect(e)) = self.ops.get(*op as usize)
             {
                 let s = self.xforms.get(*xf as usize).map_or(1.0, |t| t.max_scale());
-                bounds = bounds.union(content.inflated(e.growth_px(s)));
+                bounds = bounds.union(content.inflated(e.growth_px(s, self.view.quality)));
             }
             needs_dst_read |= c.needs_dst_read();
         }

@@ -469,7 +469,7 @@ impl Translator<'_> {
                 DrawCmd::PushEffect { op, .. },
             ) => {
                 self.in_effect = 1;
-                let area = content.inflated(effect.growth_px(xf.max_scale()));
+                let area = content.inflated(effect.growth_px(xf.max_scale(), dl.view().quality));
                 self.touch(area);
                 let reason = match effect {
                     xarast_render::LayerEffect::Feather { .. } => {

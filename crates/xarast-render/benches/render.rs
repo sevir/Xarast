@@ -447,6 +447,7 @@ fn effects(c: &mut Criterion) {
                     h,
                     xarast_render::Transform2D::scale(1.0),
                     (0, 0),
+                    RenderQuality::Final,
                 );
             });
         });

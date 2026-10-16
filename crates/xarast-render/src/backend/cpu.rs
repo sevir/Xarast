@@ -42,6 +42,7 @@ use xarast_geom::{Cap, FillRule, Join, StrokeStyle};
 
 use crate::backend::{BackendError, FrameTimings, LayerId, Rasterizer, RasterizerCaps};
 use crate::blend::{BlendFamily, BlendLuts, LumaWeights, TranspSource, Transparency, composite};
+use crate::blur::ReducedSums;
 use crate::display_list::{DisplayList, DrawCmd, DrawItem, ListParts, SCENE_PAINT};
 use crate::effect::{LayerEffect, NestedSilhouette};
 use crate::effect_cache::{Cover, EffectCache, Piece, Probe};
@@ -68,6 +69,10 @@ use crate::tiling::{MIN_BAND_SCANLINES, band_height};
 /// what `determinism::the_band_height_does_not_change_the_pixels` asserts.
 const BAND_GUARD: i32 = 2;
 
+/// [`CpuConfig::effect_region_px`]'s default: 16 Mi pixels, 64 MiB of
+/// colour.
+pub const DEFAULT_EFFECT_REGION_PX: usize = 1 << 24;
+
 /// How the CPU backend is configured.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CpuConfig {
@@ -87,6 +92,14 @@ pub struct CpuConfig {
     /// ([`MissingLevels::Substitute`], the interactive render thread,
     /// which then brings the base back off its thread and repaints).
     pub missing_levels: MissingLevels,
+    /// The most device pixels an effect computed on a reduced grid
+    /// (`LayerEffect::reduction` above 1) renders its region in at once.
+    /// A bigger region keeps only the colour it composites and renders its
+    /// silhouette in strips of about this many pixels, summed into the
+    /// grid. Memory, not pixels: a region's kept pixels are the same
+    /// whatever it is split into (invariant 23), so it is not in the
+    /// effect cache's key.
+    pub effect_region_px: usize,
 }
 
 impl Default for CpuConfig {
@@ -112,6 +125,7 @@ impl CpuConfig {
             band_budget_bytes: 1 << 20,
             weights: LumaWeights::GREY_CONVERSION,
             missing_levels: MissingLevels::Materialise,
+            effect_region_px: DEFAULT_EFFECT_REGION_PX,
         }
     }
 
@@ -130,6 +144,7 @@ impl CpuConfig {
             band_budget_bytes: 1 << 19,
             weights: LumaWeights::GREY_CONVERSION,
             missing_levels: MissingLevels::Materialise,
+            effect_region_px: DEFAULT_EFFECT_REGION_PX,
         }
     }
 
@@ -650,7 +665,7 @@ fn render_effect(
     if content.is_empty() {
         return None;
     }
-    let growth = effect.growth_px(xf.max_scale());
+    let growth = effect.growth_px(xf.max_scale(), dl.view().quality);
     // The pixels kept.
     let keep = content.inflated(growth).intersection(area);
     if keep.is_empty() {
@@ -746,8 +761,9 @@ fn render_fresh(
     left: i32,
 ) -> Option<(DeviceRect, Vec<u8>)> {
     let scale = xf.max_scale();
-    let reach = effect.reach_px(scale);
-    let growth = effect.growth_px(scale);
+    let quality = dl.view().quality;
+    let reach = effect.reach_px(scale, quality);
+    let growth = effect.growth_px(scale, quality);
     // Every pixel the kept pixels' kernels read.
     let need = keep
         .inflated(reach)
@@ -765,6 +781,15 @@ fn render_fresh(
     // every pixel the region can hold.
     let left = left.min(dl.view().viewport.x0).saturating_sub(reach);
     let (w, h) = (region.width() as usize, region.height() as usize);
+    let k = effect.reduction(scale, quality);
+    if k > 1 && w.saturating_mul(h) > cfg.effect_region_px.max(1) {
+        let target = Offscreen {
+            region,
+            rows_per_band,
+            left,
+        };
+        return render_reduced_in_strips(dl, effect, xf, inner, res, luts, cfg, keep, target, k);
+    }
     let nested = materialise(dl, inner, res, luts, cfg, region, rows_per_band, left, None);
     let never = || false;
     let target = Offscreen {
@@ -797,8 +822,102 @@ fn render_fresh(
         h,
         xf,
         (region.x0, region.y0),
+        quality,
     );
     Some((region, colour))
+}
+
+/// [`render_fresh`] for an effect computed on a reduced grid of `k`-pixel
+/// cells whose region (`target.region`) is too big to render whole: the
+/// colour is rendered only over `keep` (on the band grid), and the
+/// silhouette over the region in strips of whole bands, each summed into
+/// the grid and dropped. Memory is the colour, a strip and the grid; the
+/// kept pixels are exactly those of a whole render (invariant 23: every
+/// strip and the colour start coverage at the same `left`, on the same
+/// band grid).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "a band's state is genuinely this wide"
+)]
+fn render_reduced_in_strips(
+    dl: &DisplayList,
+    effect: &LayerEffect,
+    xf: Transform2D,
+    inner: &[DrawCmd],
+    res: &Resolver,
+    luts: &BlendLuts,
+    cfg: &CpuConfig,
+    keep: DeviceRect,
+    target: Offscreen,
+    k: u32,
+) -> Option<(DeviceRect, Vec<u8>)> {
+    let Offscreen {
+        region,
+        rows_per_band,
+        left,
+    } = target;
+    let rpb = i32::try_from(rows_per_band.max(1)).unwrap_or(i32::MAX);
+    let never = || false;
+    // The colour, only where it is kept.
+    let out = DeviceRect::new(keep.x0, keep.y0.div_euclid(rpb) * rpb, keep.x1, keep.y1);
+    let out_target = Offscreen {
+        region: out,
+        rows_per_band,
+        left,
+    };
+    let nested = materialise(dl, inner, res, luts, cfg, out, rows_per_band, left, None);
+    let mut colour = render_region(
+        dl, inner, res, luts, cfg, &nested, out_target, false, &never,
+    )?;
+    drop(nested);
+    // The silhouette, strip by strip, into the grid.
+    let (w, h) = (region.width() as usize, region.height() as usize);
+    let mut sums = ReducedSums::covering((region.x0, region.y0), w, h, k);
+    let bands = (cfg.effect_region_px / w.max(1) / rows_per_band.max(1)).max(1);
+    let strip_rows = i32::try_from(bands * rows_per_band.max(1)).unwrap_or(rpb);
+    let mode = effect.nested_silhouette();
+    let mut y = region.y0;
+    while y < region.y1 {
+        let strip = DeviceRect::new(
+            region.x0,
+            y,
+            region.x1,
+            y.saturating_add(strip_rows).min(region.y1),
+        );
+        let t = Offscreen {
+            region: strip,
+            rows_per_band,
+            left,
+        };
+        let alpha = effect.casts_rendered_alpha();
+        let nested = if alpha || mode == NestedSilhouette::Rendered {
+            materialise(dl, inner, res, luts, cfg, strip, rows_per_band, left, None)
+        } else {
+            Effects::default()
+        };
+        let plane: Vec<u8> = if alpha {
+            let c = render_region(dl, inner, res, luts, cfg, &nested, t, false, &never)?;
+            c.as_chunks::<4>().0.iter().map(|p| p[3]).collect()
+        } else {
+            silhouette_plane(dl, inner, res, luts, cfg, t, mode, &nested)?
+        };
+        sums.add(
+            &plane,
+            strip.width() as usize,
+            strip.height() as usize,
+            (strip.x0, strip.y0),
+        );
+        y = strip.y1;
+    }
+    effect.apply_reduced(
+        &mut colour,
+        sums.finish(),
+        out.width() as usize,
+        out.height() as usize,
+        xf,
+        (out.x0, out.y0),
+    );
+    Some((out, colour))
 }
 
 /// The silhouette of `cmds` over `target.region`, one coverage byte per
@@ -893,8 +1012,9 @@ fn render_outline(
         return None;
     }
     let scale = xf.max_scale();
-    let reach = effect.reach_px(scale);
-    let growth = effect.growth_px(scale);
+    let quality = dl.view().quality;
+    let reach = effect.reach_px(scale, quality);
+    let growth = effect.growth_px(scale, quality);
     let keep = content.inflated(growth).intersection(outer.region);
     if keep.is_empty() {
         return None;
@@ -918,7 +1038,15 @@ fn render_outline(
     let mode = NestedSilhouette::Outline { shadows }.inside(effect);
     let mut plane = silhouette_plane(dl, inner, res, luts, cfg, target, mode, &Effects::default())?;
     let (w, h) = (region.width() as usize, region.height() as usize);
-    effect.outline_at(&mut plane, w, h, xf, (region.x0, region.y0), shadows);
+    effect.outline_at(
+        &mut plane,
+        w,
+        h,
+        xf,
+        (region.x0, region.y0),
+        shadows,
+        quality,
+    );
     let pixels: Vec<u8> = plane.iter().flat_map(|a| [0, 0, 0, *a]).collect();
     Some(EffectLayer {
         pieces: vec![Piece {

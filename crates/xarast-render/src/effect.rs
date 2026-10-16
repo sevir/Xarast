@@ -38,9 +38,10 @@ use xarast_geom::Join;
 use xarast_geom::bevel::{BevelType, Light, shade};
 
 use crate::blend::{BlendFamily, BlendLut, LumaWeights, build_blend_lut};
-use crate::blur::{self, Kernel, MAX_RADIUS_PX};
+use crate::blur::{self, Kernel, MAX_RADIUS_PX, ReducedPlane};
 use crate::precision::Transform2D;
 use crate::ramp::Profile;
+use crate::scene::RenderQuality;
 
 /// One effect the renderer applies to the content it wraps.
 #[derive(Debug, Clone, PartialEq)]
@@ -107,7 +108,40 @@ impl ShadowEffect {
         LayerEffect::feather_radius_px(self.spread * 2.0, scale)
     }
 
-    fn reach_px(&self, scale: f64) -> i32 {
+    /// The blur radius in device pixels, uncapped.
+    fn blur_raw(&self, scale: f64) -> f64 {
+        raw_radius(self.blur, scale)
+    }
+
+    /// The glow's growth in device pixels, uncapped.
+    fn spread_raw(&self, scale: f64) -> f64 {
+        raw_radius(self.spread * 2.0, scale)
+    }
+
+    /// The side of a cell of the grid the shadow's mask is computed on,
+    /// in device pixels ([`LayerEffect::reduction`]): its blur and its
+    /// glow both run at no more than the quality's cap.
+    #[must_use]
+    pub fn reduction(&self, scale: f64, quality: RenderQuality) -> u32 {
+        let r = self.blur_raw(scale).max(self.spread_raw(scale));
+        blur::reduction_for_radius(r, radius_cap(quality))
+    }
+
+    fn reach_px(&self, scale: f64, quality: RenderQuality) -> i32 {
+        let k = self.reduction(scale, quality);
+        if k > 1 {
+            // On the reduced grid: the displacement, the glow and the blur
+            // in cells, two cells of slack for the bilinear sample and the
+            // moved edge, and two for the grid itself (a kept pixel's
+            // upsample reads the cells beside its own, and the region's
+            // edge cells are only partly rendered).
+            let kf = f64::from(k);
+            let blur = cells_reach(self.blur_raw(scale) / kf);
+            let spread = cells_reach(self.spread_raw(scale) / kf);
+            let moved = i64::from(moved_px(self.displacement * scale / kf));
+            let cells = moved + i64::from(blur) + i64::from(spread) + 4;
+            return i32::try_from(cells * i64::from(k)).unwrap_or(i32::MAX);
+        }
         let blur = Kernel::Disc {
             radius_px: self.radius_px(scale),
         }
@@ -116,14 +150,7 @@ impl ShadowEffect {
             radius_px: self.spread_px(scale),
         }
         .reach();
-        let d = self.displacement * scale;
-        let moved = if d.is_finite() && d > 0.0 {
-            // Clamped: a displacement past the pixel budget is not a
-            // shadow anyone can see whole.
-            d.ceil().min(f64::from(1 << 20)) as i32
-        } else {
-            0
-        };
+        let moved = moved_px(self.displacement * scale);
         // Two pixels of slack: the bilinear sample and the antialiased
         // edge of the moved silhouette.
         let slack = 2i64;
@@ -131,36 +158,41 @@ impl ShadowEffect {
         i32::try_from(r).unwrap_or(i32::MAX)
     }
 
-    /// Draws the shadow beneath `colour`. `origin` is the device position of
-    /// the planes' top-left pixel and `xf` the document-to-device transform.
-    fn apply(
+    /// Device output → device input: where the map brings a shadow pixel
+    /// from. `None` for a singular map (a floor of height 0), which casts
+    /// nothing; the identity when the map is.
+    fn back(&self, xf: Transform2D) -> Option<Transform2D> {
+        let map = Transform2D::new(self.map);
+        if map == Transform2D::IDENTITY {
+            return Some(Transform2D::IDENTITY);
+        }
+        xf.invert()
+            .zip(map.invert())
+            .map(|(d_inv, m_inv)| d_inv.then(m_inv).then(xf))
+    }
+
+    /// The shadow's coverage at device resolution from a full-resolution
+    /// silhouette: grown, moved and blurred.
+    fn mask(
         &self,
-        colour: &mut [u8],
         silhouette: &[u8],
         width: usize,
         height: usize,
         xf: Transform2D,
         origin: (i32, i32),
-    ) {
+    ) -> Vec<u8> {
         let scale = xf.max_scale();
         let mut plane = silhouette.to_vec();
         let spread = self.spread_px(scale);
         if spread > 0.0 {
             blur::dilate_plane(&mut plane, width, height, spread);
         }
-        let map = Transform2D::new(self.map);
-        if map != Transform2D::IDENTITY {
+        match self.back(xf) {
+            Some(b) if b == Transform2D::IDENTITY => {}
             // Device → device: a pixel of the shadow takes the silhouette
             // from where the map brings it from.
-            let back = xf
-                .invert()
-                .zip(map.invert())
-                .map(|(d_inv, m_inv)| d_inv.then(m_inv).then(xf));
-            plane = match back {
-                Some(b) => warp(&plane, width, height, b, origin),
-                // A singular map (a floor of height 0) casts nothing.
-                None => vec![0; plane.len()],
-            };
+            Some(b) => plane = warp(&plane, width, height, b, origin),
+            None => plane = vec![0; plane.len()],
         }
         blur::blur_plane(
             &mut plane,
@@ -170,6 +202,66 @@ impl ShadowEffect {
                 radius_px: self.radius_px(scale),
             },
         );
+        plane
+    }
+
+    /// The shadow's coverage at device resolution over `size` pixels at
+    /// `origin`, computed on the grid of `reduced`: the glow, the move and
+    /// the blur run on cells (radii divided by the factor), and the result
+    /// is resampled back.
+    fn reduced_mask(
+        &self,
+        reduced: ReducedPlane,
+        xf: Transform2D,
+        size: (usize, usize),
+        origin: (i32, i32),
+    ) -> Vec<u8> {
+        let scale = xf.max_scale();
+        let kf = f64::from(reduced.factor);
+        let ReducedPlane {
+            mut cells,
+            width: cw,
+            height: ch,
+            origin: corigin,
+            factor,
+        } = reduced;
+        let spread = cells_radius(self.spread_raw(scale) / kf);
+        if spread > 0.0 {
+            blur::dilate_plane(&mut cells, cw, ch, spread);
+        }
+        match self.back(xf) {
+            Some(b) if b == Transform2D::IDENTITY => {}
+            // The same move in cell coordinates: a cell centre `c` is the
+            // device point `k·c`.
+            Some(b) => {
+                let b = Transform2D::scale(kf)
+                    .then(b)
+                    .then(Transform2D::scale(1.0 / kf));
+                cells = warp(&cells, cw, ch, b, corigin);
+            }
+            None => cells = vec![0; cells.len()],
+        }
+        blur::blur_plane(
+            &mut cells,
+            cw,
+            ch,
+            Kernel::Disc {
+                radius_px: cells_radius(self.blur_raw(scale) / kf),
+            },
+        );
+        let reduced = ReducedPlane {
+            cells,
+            width: cw,
+            height: ch,
+            origin: corigin,
+            factor,
+        };
+        blur::upsample_plane(&reduced, size.0, size.1, origin)
+    }
+
+    /// Draws the shadow of coverage `plane` (already grown, moved and
+    /// blurred) beneath `colour`.
+    fn composite_under(&self, colour: &mut [u8], plane: &[u8], width: usize) {
         // The original maps the blurred silhouette's transparency through
         // the profile with its bias negated.
         let table = (self.profile != Profile::IDENTITY).then(|| {
@@ -210,6 +302,60 @@ impl ShadowEffect {
                     px[3] = u8::try_from(a.min(255)).unwrap_or(u8::MAX);
                 }
             });
+    }
+}
+
+/// A radius in device pixels, uncapped: half of `size` document units at
+/// `scale`; zero for a negative or NaN size.
+fn raw_radius(size: f64, scale: f64) -> f64 {
+    let r = size * scale * 0.5;
+    if r.is_nan() || r <= 0.0 { 0.0 } else { r }
+}
+
+/// A radius on the reduced grid, already within the cap (the factor was
+/// chosen so); NaN or negative becomes zero.
+fn cells_radius(r: f64) -> f32 {
+    if r.is_nan() || r <= 0.0 {
+        return 0.0;
+    }
+    // f32-ok: a radius in cells, at most the quality's cap (≤ 100).
+    r.min(f64::from(MAX_RADIUS_PX)) as f32
+}
+
+/// The whole cells a disc of `r` cells reaches.
+fn cells_reach(r: f64) -> u32 {
+    Kernel::Disc {
+        radius_px: cells_radius(r),
+    }
+    .reach()
+}
+
+/// A displacement in pixels (or cells), rounded up and bounded.
+fn moved_px(d: f64) -> i32 {
+    if d.is_finite() && d > 0.0 {
+        // Clamped: a displacement past the pixel budget is not a shadow
+        // anyone can see whole.
+        d.ceil().min(f64::from(1 << 20)) as i32
+    } else {
+        0
+    }
+}
+
+/// The largest blur radius a [`RenderQuality::Draft`] render computes, in
+/// cells of its reduced grid: a larger feather, shadow or glow is computed
+/// on cells of `⌈r / 8⌉` device pixels and resampled (phase 13 J3). A mask
+/// blurred over at least this many cells is smooth enough that the
+/// bilinear resample does not show, and the erosion, dilation and blur
+/// cost about `k³` less.
+pub const DRAFT_RADIUS_PX: f32 = 8.0;
+
+/// The largest blur radius `quality` computes at device resolution: the
+/// original's 100 px at `Final`, [`DRAFT_RADIUS_PX`] at `Draft`.
+#[must_use]
+pub const fn radius_cap(quality: RenderQuality) -> f32 {
+    match quality {
+        RenderQuality::Final => MAX_RADIUS_PX,
+        RenderQuality::Draft => DRAFT_RADIUS_PX,
     }
 }
 
@@ -1105,14 +1251,47 @@ impl LayerEffect {
         r as f32
     }
 
-    /// How far, in device pixels, an input pixel can move an output pixel
-    /// at `scale` device pixels per document unit. The offscreen region is
-    /// rendered this far beyond the pixels it keeps, and a change under the
-    /// effect damages this far around itself.
+    /// The side, in device pixels, of a cell of the grid the effect's masks
+    /// are computed on at `scale` and `quality`: 1 (device resolution)
+    /// while every radius it blurs, erodes or grows by is within the
+    /// quality's cap ([`radius_cap`]: the original's 100 px at `Final`,
+    /// [`DRAFT_RADIUS_PX`] at `Draft`), `⌈r / cap⌉` above it.
+    ///
+    /// Above the cap the silhouette is reduced to that grid, the mask is
+    /// computed there with radii divided by the factor, and resampled back
+    /// ([`blur::ReducedPlane`]), so a large feather keeps its width at any
+    /// zoom, as the original's does (`Kernel/fthrattr.cpp`,
+    /// `CreateSilhouetteBitmap`, "FeatherScaleFactor"; facts only). A
+    /// bevel's band is not a blur and always runs at device resolution.
     #[must_use]
-    pub fn reach_px(&self, scale: f64) -> i32 {
+    pub fn reduction(&self, scale: f64, quality: RenderQuality) -> u32 {
         match self {
             LayerEffect::Feather { size, .. } => {
+                blur::reduction_for_radius(raw_radius(*size, scale), radius_cap(quality))
+            }
+            LayerEffect::Shadow(s) => s.reduction(scale, quality),
+            LayerEffect::Bevel(_) => 1,
+        }
+    }
+
+    /// How far, in device pixels, an input pixel can move an output pixel
+    /// at `scale` device pixels per document unit and `quality`. The
+    /// offscreen region is rendered this far beyond the pixels it keeps,
+    /// and a change under the effect damages this far around itself.
+    #[must_use]
+    pub fn reach_px(&self, scale: f64, quality: RenderQuality) -> i32 {
+        match self {
+            LayerEffect::Feather { size, .. } => {
+                let k = self.reduction(scale, quality);
+                if k > 1 {
+                    // Erosion and blur in cells plus a cell of slack, and
+                    // two cells for the grid (the upsample reads the cells
+                    // beside a pixel's own; the region's edge cells are
+                    // only partly rendered).
+                    let c = cells_reach(raw_radius(*size, scale) / f64::from(k));
+                    let cells = 2 * i64::from(c) + 3;
+                    return i32::try_from(cells * i64::from(k)).unwrap_or(i32::MAX);
+                }
                 let r = LayerEffect::feather_radius_px(*size, scale);
                 if r <= 0.0 {
                     return 0;
@@ -1122,7 +1301,7 @@ impl LayerEffect {
                 let k = Kernel::Disc { radius_px: r }.reach();
                 i32::try_from(2 * k + 1).unwrap_or(i32::MAX)
             }
-            LayerEffect::Shadow(s) => s.reach_px(scale),
+            LayerEffect::Shadow(s) => s.reach_px(scale, quality),
             LayerEffect::Bevel(b) => b.reach_px(scale),
         }
     }
@@ -1131,10 +1310,10 @@ impl LayerEffect {
     /// pixels. A feather draws nothing outside what it wraps; a shadow
     /// reaches as far as it moves, grows and blurs.
     #[must_use]
-    pub fn growth_px(&self, scale: f64) -> i32 {
+    pub fn growth_px(&self, scale: f64, quality: RenderQuality) -> i32 {
         match self {
             LayerEffect::Feather { .. } => 0,
-            LayerEffect::Shadow(s) => s.reach_px(scale),
+            LayerEffect::Shadow(s) => s.reach_px(scale, quality),
             // An inner bevel lights what is there; an outer one paints its
             // band beyond it.
             LayerEffect::Bevel(b) => {
@@ -1194,10 +1373,11 @@ impl LayerEffect {
     /// document-to-device transform the effect applies under and `origin`
     /// the device position of the planes' top-left pixel. A shadow needs
     /// both (its offset and its floor are document-space geometry); a
-    /// feather only the scale.
+    /// feather only the scale. Above `quality`'s cap the masks are
+    /// computed on the reduced grid ([`LayerEffect::reduction`]).
     #[allow(
         clippy::too_many_arguments,
-        reason = "two planes, their size and where they sit"
+        reason = "two planes, their size, where they sit and how well"
     )]
     pub fn apply_at(
         &self,
@@ -1207,35 +1387,94 @@ impl LayerEffect {
         height: usize,
         xf: Transform2D,
         origin: (i32, i32),
+        quality: RenderQuality,
     ) {
+        let Some(sil) = silhouette else { return };
+        if sil.len() != width * height || colour.len() != sil.len() * 4 {
+            return;
+        }
+        let k = self.reduction(xf.max_scale(), quality);
+        if k > 1 {
+            let reduced = blur::downsample_plane(sil, width, height, origin, k);
+            self.apply_reduced(colour, reduced, width, height, xf, origin);
+            return;
+        }
         match self {
-            LayerEffect::Feather { .. } => {
-                self.apply(colour, silhouette, width, height, xf.max_scale());
+            LayerEffect::Feather { size, profile } => {
+                let r = LayerEffect::feather_radius_px(*size, xf.max_scale());
+                if r <= 0.0 {
+                    return;
+                }
+                let mut mask = sil.to_vec();
+                blur::erode_plane(&mut mask, width, height, r);
+                blur::blur_plane(&mut mask, width, height, Kernel::Disc { radius_px: r });
+                feather_colour(colour, &mut mask, *profile);
             }
             LayerEffect::Shadow(s) => {
-                let Some(sil) = silhouette else { return };
-                if sil.len() != width * height || colour.len() != sil.len() * 4 {
+                let plane = s.mask(sil, width, height, xf, origin);
+                s.composite_under(colour, &plane, width);
+            }
+            LayerEffect::Bevel(b) => b.apply(colour, sil, width, height, xf),
+        }
+    }
+
+    /// [`LayerEffect::apply_at`] with the silhouette already reduced to the
+    /// effect's grid: `silhouette.factor` is [`LayerEffect::reduction`] at
+    /// the quality drawn, and its cells cover `colour` (`width × height` at
+    /// device `origin`) with the effect's reach around it. A caller whose
+    /// region is too big to render whole sums its silhouette into the grid
+    /// strip by strip ([`blur::ReducedSums`]) and keeps only the colour it
+    /// composites.
+    pub fn apply_reduced(
+        &self,
+        colour: &mut [u8],
+        silhouette: ReducedPlane,
+        width: usize,
+        height: usize,
+        xf: Transform2D,
+        origin: (i32, i32),
+    ) {
+        if colour.len() != width * height * 4 {
+            return;
+        }
+        let scale = xf.max_scale();
+        match self {
+            LayerEffect::Feather { size, profile } => {
+                let r = cells_radius(raw_radius(*size, scale) / f64::from(silhouette.factor));
+                if r <= 0.0 {
                     return;
                 }
-                s.apply(colour, sil, width, height, xf, origin);
+                let mut s = silhouette;
+                blur::erode_plane(&mut s.cells, s.width, s.height, r);
+                blur::blur_plane(
+                    &mut s.cells,
+                    s.width,
+                    s.height,
+                    Kernel::Disc { radius_px: r },
+                );
+                let mut mask = blur::upsample_plane(&s, width, height, origin);
+                feather_colour(colour, &mut mask, *profile);
+            }
+            LayerEffect::Shadow(s) => {
+                let plane = s.reduced_mask(silhouette, xf, (width, height), origin);
+                s.composite_under(colour, &plane, width);
             }
             LayerEffect::Bevel(b) => {
-                let Some(sil) = silhouette else { return };
-                if sil.len() != width * height || colour.len() != sil.len() * 4 {
-                    return;
-                }
-                b.apply(colour, sil, width, height, xf);
+                // Never reduced ([`LayerEffect::reduction`]); resampled for
+                // completeness.
+                let sil = blur::upsample_plane(&silhouette, width, height, origin);
+                b.apply(colour, &sil, width, height, xf);
             }
         }
     }
 
-    /// Applies the effect to rendered content, in place.
+    /// Applies the effect to rendered content, in place, at `Final`.
     ///
     /// `colour` is premultiplied RGBA8, `silhouette` one coverage byte per
     /// pixel (every paint opaque), both `width × height`. `scale` is device
-    /// pixels per document unit. A shadow is applied as if the planes sat
-    /// at the device origin under a plain `scale`, with no flip: callers
-    /// that know the view use [`LayerEffect::apply_at`].
+    /// pixels per document unit. The planes are taken to sit at the device
+    /// origin under a plain `scale`, with no flip: callers that know the
+    /// view use [`LayerEffect::apply_at`].
     pub fn apply(
         &self,
         colour: &mut [u8],
@@ -1244,42 +1483,36 @@ impl LayerEffect {
         height: usize,
         scale: f64,
     ) {
-        match self {
-            LayerEffect::Feather { size, profile } => {
-                let r = LayerEffect::feather_radius_px(*size, scale);
-                let Some(sil) = silhouette else { return };
-                if r <= 0.0 || sil.len() != width * height || colour.len() != sil.len() * 4 {
-                    return;
-                }
-                let mut mask = sil.to_vec();
-                blur::erode_plane(&mut mask, width, height, r);
-                blur::blur_plane(&mut mask, width, height, Kernel::Disc { radius_px: r });
-                if *profile != Profile::IDENTITY {
-                    // The profile shapes the transparency, 0 opaque to 255
-                    // clear, as a bitmap transparency's profile does.
-                    let table = blur::profile_table(*profile);
-                    for m in &mut mask {
-                        *m = 255 - table[usize::from(255 - *m)];
-                    }
-                }
-                for (px, m) in colour.as_chunks_mut::<4>().0.iter_mut().zip(&mask) {
-                    if *m == 255 {
-                        continue;
-                    }
-                    let m = u32::from(*m);
-                    for c in px {
-                        *c = u8::try_from((u32::from(*c) * m + 127) / 255).unwrap_or(u8::MAX);
-                    }
-                }
-            }
-            LayerEffect::Shadow(_) | LayerEffect::Bevel(_) => self.apply_at(
-                colour,
-                silhouette,
-                width,
-                height,
-                Transform2D::scale(scale),
-                (0, 0),
-            ),
+        self.apply_at(
+            colour,
+            silhouette,
+            width,
+            height,
+            Transform2D::scale(scale),
+            (0, 0),
+            RenderQuality::Final,
+        );
+    }
+}
+
+/// A feather's mask applied to its colour: the profile reshapes the fade,
+/// then every channel is scaled by it.
+fn feather_colour(colour: &mut [u8], mask: &mut [u8], profile: Profile) {
+    if profile != Profile::IDENTITY {
+        // The profile shapes the transparency, 0 opaque to 255 clear, as a
+        // bitmap transparency's profile does.
+        let table = blur::profile_table(profile);
+        for m in mask.iter_mut() {
+            *m = 255 - table[usize::from(255 - *m)];
+        }
+    }
+    for (px, m) in colour.as_chunks_mut::<4>().0.iter_mut().zip(mask.iter()) {
+        if *m == 255 {
+            continue;
+        }
+        let m = u32::from(*m);
+        for c in px {
+            *c = u8::try_from((u32::from(*c) * m + 127) / 255).unwrap_or(u8::MAX);
         }
     }
 }
@@ -1359,6 +1592,14 @@ impl LayerEffect {
     /// * An outer bevel adds its band (the bevel node converts to its own
     ///   ink path, `NodeBevel::DoBecomeA`); an inner bevel's band lies
     ///   inside its content.
+    ///
+    /// A glow wider than `quality`'s cap grows on the reduced grid
+    /// ([`LayerEffect::reduction`]) and is resampled; the move is always
+    /// made at device resolution.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "a plane, its size, where it sits, and how it is seen"
+    )]
     pub fn outline_at(
         &self,
         plane: &mut [u8],
@@ -1367,6 +1608,7 @@ impl LayerEffect {
         xf: Transform2D,
         origin: (i32, i32),
         shadows: bool,
+        quality: RenderQuality,
     ) {
         if plane.len() != width * height || plane.is_empty() {
             return;
@@ -1378,22 +1620,26 @@ impl LayerEffect {
                     return;
                 }
                 let scale = xf.max_scale();
-                let mut moved = plane.to_vec();
-                let spread = s.spread_px(scale);
-                if spread > 0.0 {
-                    blur::dilate_plane(&mut moved, width, height, spread);
-                }
-                let map = Transform2D::new(s.map);
-                if map != Transform2D::IDENTITY {
-                    let back = xf
-                        .invert()
-                        .zip(map.invert())
-                        .map(|(d_inv, m_inv)| d_inv.then(m_inv).then(xf));
-                    moved = match back {
-                        Some(b) => warp(&moved, width, height, b, origin),
-                        // A singular map (a floor of height 0) casts nothing.
-                        None => vec![0; moved.len()],
-                    };
+                let spread = s.spread_raw(scale);
+                let k = blur::reduction_for_radius(spread, radius_cap(quality));
+                let mut moved = if k > 1 {
+                    let mut r = blur::downsample_plane(plane, width, height, origin, k);
+                    let rs = cells_radius(spread / f64::from(k));
+                    blur::dilate_plane(&mut r.cells, r.width, r.height, rs);
+                    blur::upsample_plane(&r, width, height, origin)
+                } else {
+                    let mut moved = plane.to_vec();
+                    let spread = s.spread_px(scale);
+                    if spread > 0.0 {
+                        blur::dilate_plane(&mut moved, width, height, spread);
+                    }
+                    moved
+                };
+                match s.back(xf) {
+                    Some(b) if b == Transform2D::IDENTITY => {}
+                    Some(b) => moved = warp(&moved, width, height, b, origin),
+                    // A singular map (a floor of height 0) casts nothing.
+                    None => moved = vec![0; moved.len()],
                 }
                 union_into(plane, &moved);
             }
@@ -1449,9 +1695,9 @@ mod tests {
             size: 20.0,
             profile: Profile::IDENTITY,
         };
-        assert_eq!(f.reach_px(1.0), 21);
-        assert_eq!(f.growth_px(1.0), 0);
-        assert_eq!(f.reach_px(0.0), 0);
+        assert_eq!(f.reach_px(1.0, RenderQuality::Final), 21);
+        assert_eq!(f.growth_px(1.0, RenderQuality::Final), 0);
+        assert_eq!(f.reach_px(0.0, RenderQuality::Final), 0);
     }
 
     #[test]
@@ -1523,7 +1769,15 @@ mod tests {
             4.0,
         );
         let xf = Transform2D::new([1.0, 0.0, 0.0, -1.0, 0.0, 100.0]);
-        e.apply_at(&mut colour, Some(&sil), w, h, xf, (0, 0));
+        e.apply_at(
+            &mut colour,
+            Some(&sil),
+            w,
+            h,
+            xf,
+            (0, 0),
+            RenderQuality::Final,
+        );
         let px = |x: usize, y: usize| {
             let i = (y * w + x) * 4;
             [colour[i], colour[i + 1], colour[i + 2], colour[i + 3]]
@@ -1539,15 +1793,30 @@ mod tests {
         // Blurred: the edge is soft, half covered on the moved outline.
         let edge = px(69, 25)[3];
         assert!((40..100).contains(&edge), "{edge}");
-        assert!(e.growth_px(1.0) >= 17, "{}", e.growth_px(1.0));
-        assert_eq!(e.reach_px(1.0), e.growth_px(1.0));
+        assert!(
+            e.growth_px(1.0, RenderQuality::Final) >= 17,
+            "{}",
+            e.growth_px(1.0, RenderQuality::Final)
+        );
+        assert_eq!(
+            e.reach_px(1.0, RenderQuality::Final),
+            e.growth_px(1.0, RenderQuality::Final)
+        );
     }
 
     #[test]
     fn a_glow_grows_the_silhouette_before_blurring_it() {
         let (mut colour, sil, w, h) = square_planes(false);
         let e = shadow([1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 0.0, 6.0, 0.0);
-        e.apply_at(&mut colour, Some(&sil), w, h, Transform2D::IDENTITY, (0, 0));
+        e.apply_at(
+            &mut colour,
+            Some(&sil),
+            w,
+            h,
+            Transform2D::IDENTITY,
+            (0, 0),
+            RenderQuality::Final,
+        );
         let a = |x: usize, y: usize| colour[(y * w + x) * 4 + 3];
         assert_eq!(a(40, 40), 128);
         assert_eq!(a(15, 40), 128, "6 px out of the square");
@@ -1560,7 +1829,15 @@ mod tests {
         // Device space is document space here (no flip): the "bottom" of
         // the square in document terms is y = 20. Half height, no shear.
         let e = shadow([1.0, 0.0, 0.0, 0.5, 0.0, 10.0], 20.0, 0.0, 0.0);
-        e.apply_at(&mut colour, Some(&sil), w, h, Transform2D::IDENTITY, (0, 0));
+        e.apply_at(
+            &mut colour,
+            Some(&sil),
+            w,
+            h,
+            Transform2D::IDENTITY,
+            (0, 0),
+            RenderQuality::Final,
+        );
         let a = |x: usize, y: usize| colour[(y * w + x) * 4 + 3];
         assert_eq!(a(40, 25), 128);
         assert_eq!(a(40, 38), 128);
@@ -1571,9 +1848,25 @@ mod tests {
     fn a_singular_floor_casts_nothing_and_a_shadow_without_silhouette_is_left_alone() {
         let (mut colour, sil, w, h) = square_planes(false);
         let e = shadow([1.0, 0.0, 0.0, 0.0, 0.0, 20.0], 40.0, 0.0, 2.0);
-        e.apply_at(&mut colour, Some(&sil), w, h, Transform2D::IDENTITY, (0, 0));
+        e.apply_at(
+            &mut colour,
+            Some(&sil),
+            w,
+            h,
+            Transform2D::IDENTITY,
+            (0, 0),
+            RenderQuality::Final,
+        );
         assert!(colour.iter().all(|v| *v == 0));
-        e.apply_at(&mut colour, None, w, h, Transform2D::IDENTITY, (0, 0));
+        e.apply_at(
+            &mut colour,
+            None,
+            w,
+            h,
+            Transform2D::IDENTITY,
+            (0, 0),
+            RenderQuality::Final,
+        );
         assert!(colour.iter().all(|v| *v == 0));
     }
 
@@ -1593,6 +1886,7 @@ mod tests {
                 h,
                 Transform2D::IDENTITY,
                 (0, 0),
+                RenderQuality::Final,
             );
             colour[(40 * w + 20) * 4 + 3]
         };
@@ -1642,7 +1936,15 @@ mod tests {
     fn an_inner_bevel_lights_the_edge_facing_the_light_and_leaves_the_middle() {
         let (mut c, sil, w, h) = grey_square();
         let before = c.clone();
-        bevel(BevelType::Flat, 8.0, false).apply_at(&mut c, Some(&sil), w, h, y_down(), (0, 0));
+        bevel(BevelType::Flat, 8.0, false).apply_at(
+            &mut c,
+            Some(&sil),
+            w,
+            h,
+            y_down(),
+            (0, 0),
+            RenderQuality::Final,
+        );
         let at = |c: &[u8], x: usize, y: usize| c[(y * w + x) * 4];
         // Top and left edges (towards the light) brighten, bottom and
         // right darken; the middle and the outside are untouched.
@@ -1659,7 +1961,15 @@ mod tests {
         assert_eq!(c[(40 * w + 40) * 4 + 3], 255);
         // A plateau style leaves the inner half of the band alone too.
         let (mut m, sil, w, h) = grey_square();
-        bevel(BevelType::Mesa1, 8.0, false).apply_at(&mut m, Some(&sil), w, h, y_down(), (0, 0));
+        bevel(BevelType::Mesa1, 8.0, false).apply_at(
+            &mut m,
+            Some(&sil),
+            w,
+            h,
+            y_down(),
+            (0, 0),
+            RenderQuality::Final,
+        );
         assert_eq!(at(&m, 40, 26), at(&before, 40, 26));
     }
 
@@ -1668,8 +1978,16 @@ mod tests {
         let (mut c, sil, w, h) = grey_square();
         let before = c.clone();
         let e = bevel(BevelType::Flat, 6.0, true);
-        assert_eq!(e.growth_px(1.0), 8);
-        e.apply_at(&mut c, Some(&sil), w, h, y_down(), (0, 0));
+        assert_eq!(e.growth_px(1.0, RenderQuality::Final), 8);
+        e.apply_at(
+            &mut c,
+            Some(&sil),
+            w,
+            h,
+            y_down(),
+            (0, 0),
+            RenderQuality::Final,
+        );
         let at = |c: &[u8], x: usize, y: usize| (c[(y * w + x) * 4], c[(y * w + x) * 4 + 3]);
         // The content is as it was; the band is opaque, bright above and
         // dark below; beyond the band nothing.
@@ -1693,7 +2011,15 @@ mod tests {
             if let LayerEffect::Bevel(b) = &mut e {
                 b.join = join;
             }
-            e.apply_at(&mut c, Some(&sil), w, h, y_down(), (0, 0));
+            e.apply_at(
+                &mut c,
+                Some(&sil),
+                w,
+                h,
+                y_down(),
+                (0, 0),
+                RenderQuality::Final,
+            );
             // Away from the corner the band is the same for every join.
             assert_eq!(c[(40 * w + 15) * 4 + 3], 255, "{join:?}");
             c[(at * w + at) * 4 + 3]
@@ -1710,19 +2036,30 @@ mod tests {
         assert_eq!(alpha(Join::Mitre, 13), 255);
         assert_eq!(alpha(Join::Bevel, 13), 0);
         // A mitre reaches its limit; a round band only its width.
-        assert_eq!(bevel(BevelType::Flat, 8.0, true).growth_px(1.0), 10);
+        assert_eq!(
+            bevel(BevelType::Flat, 8.0, true).growth_px(1.0, RenderQuality::Final),
+            10
+        );
         let mut m = bevel(BevelType::Flat, 8.0, true);
         if let LayerEffect::Bevel(b) = &mut m {
             b.join = Join::Mitre;
         }
-        assert_eq!(m.growth_px(1.0), 93);
+        assert_eq!(m.growth_px(1.0, RenderQuality::Final), 93);
     }
 
     #[test]
     fn a_bevel_turns_with_a_flipped_view_and_ignores_no_width() {
         let run = |xf: Transform2D| {
             let (mut c, sil, w, h) = grey_square();
-            bevel(BevelType::Flat, 8.0, false).apply_at(&mut c, Some(&sil), w, h, xf, (0, 0));
+            bevel(BevelType::Flat, 8.0, false).apply_at(
+                &mut c,
+                Some(&sil),
+                w,
+                h,
+                xf,
+                (0, 0),
+                RenderQuality::Final,
+            );
             c[(23 * w + 40) * 4]
         };
         // Unflipped, the document's up is the device's down: the top edge
@@ -1732,10 +2069,24 @@ mod tests {
         assert!(flipped + 20 < 127, "{flipped}");
         let (mut c, sil, w, h) = grey_square();
         let before = c.clone();
-        bevel(BevelType::Flat, 0.0, false).apply_at(&mut c, Some(&sil), w, h, y_down(), (0, 0));
+        bevel(BevelType::Flat, 0.0, false).apply_at(
+            &mut c,
+            Some(&sil),
+            w,
+            h,
+            y_down(),
+            (0, 0),
+            RenderQuality::Final,
+        );
         assert_eq!(c, before);
-        assert_eq!(bevel(BevelType::Flat, 8.0, false).growth_px(1.0), 0);
-        assert_eq!(bevel(BevelType::Flat, 8.0, false).reach_px(1.0), 10);
+        assert_eq!(
+            bevel(BevelType::Flat, 8.0, false).growth_px(1.0, RenderQuality::Final),
+            0
+        );
+        assert_eq!(
+            bevel(BevelType::Flat, 8.0, false).reach_px(1.0, RenderQuality::Final),
+            10
+        );
     }
 
     #[test]
@@ -1824,7 +2175,15 @@ mod tests {
         let (_, sil, w, h) = square_planes(false);
         let e = shadow([1.0, 0.0, 0.0, 1.0, 10.0, 6.0], 12.0, 0.0, 8.0);
         let mut plane = sil.clone();
-        e.outline_at(&mut plane, w, h, Transform2D::IDENTITY, (0, 0), true);
+        e.outline_at(
+            &mut plane,
+            w,
+            h,
+            Transform2D::IDENTITY,
+            (0, 0),
+            true,
+            RenderQuality::Final,
+        );
         // The square and its copy moved by (10, 6), both fully opaque: no
         // penumbra, no darkness.
         assert_eq!(covered_box(&plane, w), (20, 20, 70, 66));
@@ -1834,7 +2193,15 @@ mod tests {
         assert!(plane.iter().all(|a| *a == 0 || *a == 255));
         // Seen by a bevel (no shadow outlines), only the object counts.
         let mut plane = sil.clone();
-        e.outline_at(&mut plane, w, h, Transform2D::IDENTITY, (0, 0), false);
+        e.outline_at(
+            &mut plane,
+            w,
+            h,
+            Transform2D::IDENTITY,
+            (0, 0),
+            false,
+            RenderQuality::Final,
+        );
         assert_eq!(plane, sil);
     }
 
@@ -1843,7 +2210,15 @@ mod tests {
         let (_, sil, w, h) = square_planes(false);
         let e = shadow([1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 0.0, 3.0, 8.0);
         let mut plane = sil;
-        e.outline_at(&mut plane, w, h, Transform2D::IDENTITY, (0, 0), true);
+        e.outline_at(
+            &mut plane,
+            w,
+            h,
+            Transform2D::IDENTITY,
+            (0, 0),
+            true,
+            RenderQuality::Final,
+        );
         // A glow's spread is its contour width: 3 px out on every side.
         assert_eq!(covered_box(&plane, w), (17, 17, 63, 63));
     }
@@ -1856,7 +2231,15 @@ mod tests {
             profile: Profile::IDENTITY,
         };
         let mut plane = sil.clone();
-        feather.outline_at(&mut plane, w, h, Transform2D::IDENTITY, (0, 0), true);
+        feather.outline_at(
+            &mut plane,
+            w,
+            h,
+            Transform2D::IDENTITY,
+            (0, 0),
+            true,
+            RenderQuality::Final,
+        );
         assert_eq!(plane, sil);
         let bevel = |outer: bool| {
             LayerEffect::Bevel(Box::new(BevelEffect {
@@ -1877,11 +2260,27 @@ mod tests {
             }))
         };
         let mut plane = sil.clone();
-        bevel(false).outline_at(&mut plane, w, h, Transform2D::IDENTITY, (0, 0), true);
+        bevel(false).outline_at(
+            &mut plane,
+            w,
+            h,
+            Transform2D::IDENTITY,
+            (0, 0),
+            true,
+            RenderQuality::Final,
+        );
         assert_eq!(plane, sil);
         // The band opaque whatever the bevel's colour, 5 px out.
         let mut plane = sil;
-        bevel(true).outline_at(&mut plane, w, h, Transform2D::IDENTITY, (0, 0), true);
+        bevel(true).outline_at(
+            &mut plane,
+            w,
+            h,
+            Transform2D::IDENTITY,
+            (0, 0),
+            true,
+            RenderQuality::Final,
+        );
         assert_eq!(covered_box(&plane, w), (15, 15, 65, 65));
         assert_eq!(plane[40 * w + 16], 255);
     }

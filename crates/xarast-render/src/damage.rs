@@ -50,7 +50,7 @@ use crate::display_list::{ViewParams, device_bounds_of, mapping_bounds};
 use crate::paint::{GradRamp, ImageId, ImageRef, Paint};
 use crate::precision::Transform2D;
 use crate::ramp::RampId;
-use crate::scene::{Scene, SceneOp, stroke_pad};
+use crate::scene::{RenderQuality, Scene, SceneOp, stroke_pad};
 use crate::surface::DeviceRect;
 
 /// Above this many raw rectangles the damage is first reduced by
@@ -282,12 +282,19 @@ fn pop_kind(op: &SceneOp) -> Option<u8> {
 }
 
 /// How far a change under `op` spreads, in device pixels, when `op` is an
-/// effect: its reach, or its growth when that is further.
+/// effect: its reach, or its growth when that is further, at whichever
+/// quality reaches further (a `Draft` effect computed on a reduced grid
+/// reaches a few cells more than its `Final`; padding by both keeps the
+/// damage right whatever quality the repaint is drawn at).
 fn effect_pad(op: &SceneOp, xf: Transform2D) -> i32 {
     match op {
         SceneOp::PushEffect(e) => {
             let s = xf.max_scale();
-            e.reach_px(s).max(e.growth_px(s))
+            [RenderQuality::Final, RenderQuality::Draft]
+                .into_iter()
+                .map(|q| e.reach_px(s, q).max(e.growth_px(s, q)))
+                .max()
+                .unwrap_or(0)
         }
         _ => 0,
     }

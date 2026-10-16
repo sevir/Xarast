@@ -572,6 +572,7 @@ fn effects(a: &BenchArgs, r: &mut Report) -> Result<(), String> {
                     h,
                     xarast_render::Transform2D::scale(1.0),
                     (0, 0),
+                    RenderQuality::Final,
                 );
                 black_box(c);
             })

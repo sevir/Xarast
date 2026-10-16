@@ -49,8 +49,9 @@ use crate::ramp::Profile;
 /// The largest blur radius, in device pixels, at generation resolution.
 ///
 /// The original's ceiling (`MAX_SHADOW_BLUR`, `research/03 §2.9`). Above
-/// it the caller renders at a reduced resolution and scales up, as the
-/// original does for feathers; this module clamps.
+/// it the caller computes the mask on a reduced grid ([`ReducedPlane`],
+/// [`reduction_for_radius`]) and scales it back up, as the original does
+/// for feathers; a kernel itself clamps.
 pub const MAX_RADIUS_PX: f32 = 100.0;
 
 /// A blur kernel, in device pixels.
@@ -293,6 +294,235 @@ pub fn dilate_plane(plane: &mut [u8], width: usize, height: usize, radius_px: f3
         u8::try_from(sum.min(255)).unwrap_or(u8::MAX)
     });
     plane.copy_from_slice(&out);
+}
+
+/// The largest reduction factor [`reduction_for_radius`] returns: a cell of
+/// the reduced grid is at most this many device pixels on a side.
+pub const MAX_REDUCTION: u32 = 1 << 10;
+
+/// How many device pixels a side of one cell of the reduced grid holds when
+/// a kernel of `radius_px` device pixels must run at no more than `cap`
+/// pixels: 1 (device resolution) up to the cap, `⌈radius / cap⌉` above it.
+///
+/// The original renders a feather's silhouette at a reduced resolution
+/// above a 200 px diameter and scales the mask back up, so that a large
+/// feather keeps its width (`Kernel/fthrattr.cpp`, `CreateSilhouetteBitmap`,
+/// "FeatherScaleFactor"; facts only). The factor is a whole number so that
+/// a cell is a block of whole device pixels on the absolute grid.
+#[must_use]
+pub fn reduction_for_radius(radius_px: f64, cap: f32) -> u32 {
+    let cap = f64::from(cap);
+    if cap.is_nan() || radius_px.is_nan() || cap <= 0.0 || radius_px <= cap {
+        return 1;
+    }
+    let k = (radius_px / cap).ceil();
+    if k >= f64::from(MAX_REDUCTION) {
+        MAX_REDUCTION
+    } else {
+        // In 2 ..= MAX_REDUCTION: exact.
+        k as u32
+    }
+}
+
+/// A coverage plane at `1 / factor` of the device resolution, on the
+/// **absolute** device grid: cell `(X, Y)` holds the mean of device pixels
+/// `factor·X .. factor·X + factor` × `factor·Y .. factor·Y + factor`.
+///
+/// Because cells sit on a grid fixed in device space, not on the corner of
+/// whatever region was rendered, a cell's value depends only on the device
+/// pixels it covers, and a mask computed on the grid and resampled back
+/// ([`upsample_plane`]) depends on the view alone (`docs/memory/render.md`,
+/// invariant 23).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReducedPlane {
+    /// One byte per cell, row-major.
+    pub cells: Vec<u8>,
+    /// Cells per row.
+    pub width: usize,
+    /// Rows of cells.
+    pub height: usize,
+    /// The absolute cell index of `cells[0]`.
+    pub origin: (i32, i32),
+    /// Device pixels per cell side.
+    pub factor: u32,
+}
+
+/// Sums device pixels into the cells of a [`ReducedPlane`], one piece of
+/// the region at a time: a region too big to render whole is rendered in
+/// strips and each strip added here.
+#[derive(Debug, Clone)]
+pub struct ReducedSums {
+    sums: Vec<u32>,
+    width: usize,
+    height: usize,
+    origin: (i32, i32),
+    factor: u32,
+}
+
+impl ReducedSums {
+    /// Empty sums over the cells that meet the device rectangle at `origin`,
+    /// `width × height` pixels, with cells of `factor` pixels.
+    #[must_use]
+    pub fn covering(origin: (i32, i32), width: usize, height: usize, factor: u32) -> ReducedSums {
+        // Capped so that a cell's sum fits: 1024² × 255 < 2³².
+        let factor = factor.clamp(1, MAX_REDUCTION);
+        let k = i64::from(factor);
+        let span = |o: i32, n: usize| {
+            let o = i64::from(o);
+            let n = i64::try_from(n).unwrap_or(0);
+            let lo = o.div_euclid(k);
+            let hi = (o + n + k - 1).div_euclid(k);
+            (lo, (hi - lo).max(0))
+        };
+        let (x0, w) = span(origin.0, width);
+        let (y0, h) = span(origin.1, height);
+        let (w, h) = (
+            usize::try_from(w).unwrap_or(0),
+            usize::try_from(h).unwrap_or(0),
+        );
+        ReducedSums {
+            sums: vec![0; w * h],
+            width: w,
+            height: h,
+            origin: (
+                i32::try_from(x0).unwrap_or(i32::MIN),
+                i32::try_from(y0).unwrap_or(i32::MIN),
+            ),
+            factor,
+        }
+    }
+
+    /// Adds a plane of device pixels whose top-left pixel sits at device
+    /// `origin`. Pixels outside the cells are ignored; a pixel added twice
+    /// counts twice, so pieces must not overlap.
+    pub fn add(&mut self, plane: &[u8], width: usize, height: usize, origin: (i32, i32)) {
+        if width == 0 || height == 0 || plane.len() != width * height || self.sums.is_empty() {
+            return;
+        }
+        let k = i64::from(self.factor);
+        let (cx0, cy0) = (i64::from(self.origin.0), i64::from(self.origin.1));
+        let (ox, oy) = (i64::from(origin.0), i64::from(origin.1));
+        let cw = self.width;
+        // The cell column of every plane column, or none.
+        let col: Vec<Option<usize>> = (0..width)
+            .map(|i| {
+                let c = (ox + i as i64).div_euclid(k) - cx0;
+                usize::try_from(c).ok().filter(|c| *c < cw)
+            })
+            .collect();
+        let rows_per_cell = self.factor as usize;
+        // Cell rows in parallel: each owns its sums, and gathers the plane
+        // rows that fall in it.
+        self.sums
+            .par_chunks_mut(cw)
+            .enumerate()
+            .for_each(|(j, sums)| {
+                let top = (cy0 + j as i64) * k - oy;
+                for r in 0..rows_per_cell as i64 {
+                    let y = top + r;
+                    if y < 0 || y >= height as i64 {
+                        continue;
+                    }
+                    let row = &plane[y as usize * width..(y as usize + 1) * width];
+                    for (v, c) in row.iter().zip(&col) {
+                        if let Some(c) = c {
+                            sums[*c] += u32::from(*v);
+                        }
+                    }
+                }
+            });
+    }
+
+    /// The cells: each sum divided by the cell's pixel count, rounded.
+    #[must_use]
+    pub fn finish(self) -> ReducedPlane {
+        let n = u64::from(self.factor) * u64::from(self.factor);
+        let cells = self
+            .sums
+            .par_iter()
+            .map(|s| u8::try_from((u64::from(*s) + n / 2) / n).unwrap_or(u8::MAX))
+            .collect();
+        ReducedPlane {
+            cells,
+            width: self.width,
+            height: self.height,
+            origin: self.origin,
+            factor: self.factor,
+        }
+    }
+}
+
+/// The plane `width × height` at device `origin` reduced to cells of
+/// `factor` pixels ([`ReducedPlane`]). Cells the plane covers only partly
+/// count the missing pixels as uncovered: a caller keeps them out of what
+/// it uses by rendering two cells of margin.
+#[must_use]
+pub fn downsample_plane(
+    plane: &[u8],
+    width: usize,
+    height: usize,
+    origin: (i32, i32),
+    factor: u32,
+) -> ReducedPlane {
+    let mut sums = ReducedSums::covering(origin, width, height, factor);
+    sums.add(plane, width, height, origin);
+    sums.finish()
+}
+
+/// Resamples a [`ReducedPlane`] back to device pixels over the rectangle
+/// `width × height` at device `origin`, bilinearly between cell centres;
+/// cells outside the plane count as uncovered.
+///
+/// Integer arithmetic on absolute positions only: device pixel `x` lies at
+/// `(2x + 1 − k) / 2k` in cell coordinates, so its weights do not depend on
+/// where the rectangle starts. At `factor` 1 it is the identity.
+#[must_use]
+pub fn upsample_plane(
+    reduced: &ReducedPlane,
+    width: usize,
+    height: usize,
+    origin: (i32, i32),
+) -> Vec<u8> {
+    let mut out = vec![0u8; width * height];
+    if width == 0 || height == 0 || reduced.cells.len() != reduced.width * reduced.height {
+        return out;
+    }
+    let k = i64::from(reduced.factor.max(1));
+    let d = 2 * k;
+    // For every device column (row): the left (top) cell, relative to the
+    // plane, and the weight of the next one, out of `d`.
+    let taps = |o: i32, n: usize, c0: i32| -> Vec<(i64, i64)> {
+        (0..n)
+            .map(|i| {
+                let p = i64::from(o) + i as i64;
+                let num = 2 * p + 1 - k;
+                (num.div_euclid(d) - i64::from(c0), num.rem_euclid(d))
+            })
+            .collect()
+    };
+    let xs = taps(origin.0, width, reduced.origin.0);
+    let ys = taps(origin.1, height, reduced.origin.1);
+    let (cw, ch) = (reduced.width as i64, reduced.height as i64);
+    let cell = |x: i64, y: i64| -> u64 {
+        if x < 0 || y < 0 || x >= cw || y >= ch {
+            0
+        } else {
+            u64::from(reduced.cells[(y * cw + x) as usize])
+        }
+    };
+    let norm = (d * d) as u64;
+    out.par_chunks_mut(width)
+        .zip(ys.par_iter())
+        .for_each(|(row, &(cy, fy))| {
+            let (wy0, wy1) = ((d - fy) as u64, fy as u64);
+            for (o, &(cx, fx)) in row.iter_mut().zip(&xs) {
+                let (wx0, wx1) = ((d - fx) as u64, fx as u64);
+                let v = (cell(cx, cy) * wx0 + cell(cx + 1, cy) * wx1) * wy0
+                    + (cell(cx, cy + 1) * wx0 + cell(cx + 1, cy + 1) * wx1) * wy1;
+                *o = u8::try_from((v + norm / 2) / norm).unwrap_or(u8::MAX);
+            }
+        });
+    out
 }
 
 /// Half the width of the Gaussian's support: three standard deviations,
@@ -599,5 +829,100 @@ mod tests {
         blur_plane(&mut p, 4, 4, Kernel::Disc { radius_px: 3.0 });
         erode_plane(&mut p, 4, 4, 3.0);
         assert_eq!(p, vec![9u8; 10]);
+    }
+
+    #[test]
+    fn the_reduction_is_one_up_to_the_cap_and_the_ratio_rounded_up_above() {
+        assert_eq!(reduction_for_radius(0.0, 100.0), 1);
+        assert_eq!(reduction_for_radius(100.0, 100.0), 1);
+        assert_eq!(reduction_for_radius(100.01, 100.0), 2);
+        assert_eq!(reduction_for_radius(200.0, 100.0), 2);
+        assert_eq!(reduction_for_radius(201.0, 100.0), 3);
+        assert_eq!(reduction_for_radius(20.0, 8.0), 3);
+        assert_eq!(reduction_for_radius(f64::NAN, 100.0), 1);
+        assert_eq!(reduction_for_radius(-5.0, 100.0), 1);
+        assert_eq!(reduction_for_radius(50.0, f32::NAN), 1);
+        assert_eq!(reduction_for_radius(1e30, 100.0), MAX_REDUCTION);
+        // The radius on the grid never exceeds the cap.
+        for r in [100.5, 150.0, 333.3, 999.0, 12_345.0] {
+            let k = reduction_for_radius(r, 100.0);
+            assert!(r / f64::from(k) <= 100.0, "{r} / {k}");
+        }
+    }
+
+    #[test]
+    fn at_factor_one_the_grid_is_the_plane() {
+        let (w, h) = (13, 7);
+        let p = plane_with(w, h, |x, y| ((x * 37 + y * 101) % 256) as u8);
+        let r = downsample_plane(&p, w, h, (-3, 5), 1);
+        assert_eq!((r.width, r.height, r.origin), (w, h, (-3, 5)));
+        assert_eq!(r.cells, p);
+        assert_eq!(upsample_plane(&r, w, h, (-3, 5)), p);
+    }
+
+    #[test]
+    fn a_constant_survives_the_round_trip_away_from_the_edges() {
+        let (w, h) = (40, 30);
+        for k in [2, 3, 5] {
+            for v in [0u8, 1, 128, 254, 255] {
+                let p = vec![v; w * h];
+                let r = downsample_plane(&p, w, h, (0, 0), k);
+                let back = upsample_plane(&r, w, h, (0, 0));
+                let m = 2 * k as usize;
+                for y in m..h - m {
+                    for x in m..w - m {
+                        assert_eq!(back[y * w + x], v, "k = {k}, v = {v} at ({x}, {y})");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_grid_is_absolute_so_any_crop_gives_the_same_pixels() {
+        // A pattern over a big device rectangle, reduced and resampled from
+        // two different crops: wherever both crops hold every cell a pixel
+        // reads (two cells inside each), they agree.
+        let f = |x: i32, y: i32| ((x * x + 3 * y * y + x * y) as u32 % 251) as u8;
+        let crop = |x0: i32, y0: i32, w: usize, h: usize, k: u32| {
+            let p: Vec<u8> = (0..w * h)
+                .map(|i| f(x0 + (i % w) as i32, y0 + (i / w) as i32))
+                .collect();
+            let r = downsample_plane(&p, w, h, (x0, y0), k);
+            upsample_plane(&r, w, h, (x0, y0))
+        };
+        for k in [2u32, 3, 7] {
+            let (ax, ay, aw, ah) = (-17, 4, 90, 60);
+            let (bx, by, bw, bh) = (-3, -9, 71, 80);
+            let a = crop(ax, ay, aw, ah, k);
+            let b = crop(bx, by, bw, bh, k);
+            let m = 3 * k as i32;
+            let (x0, x1) = (ax.max(bx) + m, (ax + aw as i32).min(bx + bw as i32) - m);
+            let (y0, y1) = (ay.max(by) + m, (ay + ah as i32).min(by + bh as i32) - m);
+            assert!(x0 < x1 && y0 < y1);
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let va = a[((y - ay) as usize) * aw + (x - ax) as usize];
+                    let vb = b[((y - by) as usize) * bw + (x - bx) as usize];
+                    assert_eq!(va, vb, "k = {k} at ({x}, {y})");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn strips_summed_into_the_grid_give_the_whole_plane() {
+        let (w, h, o) = (37usize, 50usize, (-5, 3));
+        let p = plane_with(w, h, |x, y| ((x * 13 + y * 7) % 256) as u8);
+        for k in [2u32, 4, 6] {
+            let whole = downsample_plane(&p, w, h, o, k);
+            let mut sums = ReducedSums::covering(o, w, h, k);
+            for rows in [0usize, 9, 10, 23, 50].windows(2) {
+                let (r0, r1) = (rows[0], rows[1]);
+                let strip = &p[r0 * w..r1 * w];
+                sums.add(strip, w, r1 - r0, (o.0, o.1 + r0 as i32));
+            }
+            assert_eq!(sums.finish(), whole, "k = {k}");
+        }
     }
 }

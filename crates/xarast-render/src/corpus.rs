@@ -1989,7 +1989,10 @@ fn effect_cases() -> Vec<Case> {
             b.pop_layer();
         }),
         ("effect_feather_ceiling", |b| {
-            // 240 pt: a 120 px radius, clamped to 100 px.
+            // 240 pt: a 120 px radius, above the original's 100 px
+            // ceiling: computed on a grid of 2 px cells (a 60-cell radius)
+            // and resampled, so the fade is the full 120 px (XARA-T-0315;
+            // until then it was clamped to 100 px).
             b.push_effect(feather(240.0, Profile::IDENTITY));
             b.fill(
                 SceneNodeId(10),
