@@ -2,14 +2,15 @@
 id: XARA-T-0327
 type: task
 title: Shadow silhouette from rendered alpha (as the original casts it) and feather-around-shadow in SVG export
-status: in_progress
+status: done
 priority: low
 parent: XARA-US-0069
 author: mcp
 labels: [phase-13, live-effects, render, export]
 created: 2026-10-15T16:10:02Z
-updated: 2026-10-15T23:35:54Z
+updated: 2026-10-16T00:33:01Z
 started: 2026-10-15T23:35:54Z
+closed: 2026-10-16T00:33:01Z
 ---
 
 ## Description
