@@ -131,7 +131,7 @@ pub enum Action {
     /// puts it back under the same key, so undo and redo are exact and the
     /// canonical digest is restored with them.
     InsertBitmap {
-        /// The key, from [`DocumentResources::plan_bitmap`].
+        /// The key, from `DocumentResources::plan_bitmap`.
         id: BitmapId,
         /// The resource.
         res: Arc<BitmapResource>,
