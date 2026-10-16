@@ -22,7 +22,7 @@ use xarast_color::{Colour, ColourValue};
 use xarast_doc::fill::FillGeometry;
 use xarast_doc::{
     AttrValue, BevelParams, BlendParams, Command, ContourParams, EditError, LiveKind, LiveRole,
-    MouldParams, NodeId, NodeKind, ShadowParams, Tx,
+    MouldParams, NodeId, NodeKind, ShadowKind, ShadowParams, Tx,
 };
 use xarast_geom::{BiasGain, Mp, Point, Rect};
 
@@ -528,6 +528,42 @@ fn a_blend_end_blends_what_nested_contours_and_blends_draw() {
     assert_eq!(steps[0].len(), 3 * 5);
     let p = page(&s);
     assert!(p.walk.is_complete(), "{:?}", p.walk);
+}
+
+/// A shadow around a blend casts its steps too (XARA-T-0335): a wall
+/// shadow casts the rendered alpha of everything drawn inside it, steps
+/// included, and a glow grows around them.
+#[test]
+fn a_shadow_on_a_blend_casts_its_steps() {
+    for kind in [ShadowKind::Wall, ShadowKind::Glow] {
+        let (mut s, objs) = fixture(&[((100_000, 100_000), RED), ((400_000, 100_000), BLUE)]);
+        let bl = make(&mut s, Kind::Blend, objs[0], objs[1]);
+        live(
+            &mut s,
+            LiveEdit::Apply {
+                targets: vec![bl],
+                kind: LiveKind::Shadow(Box::new(ShadowParams {
+                    kind,
+                    offset: Point::raw(0, -60_000),
+                    darkness: 1.0,
+                    ..ShadowParams::default()
+                })),
+            },
+        );
+        let p = page(&s);
+        assert!(p.walk.is_complete(), "{:?}", p.walk);
+        // The middle step stands over x 200..300 pt, y 70..130 pt; the
+        // ends' shadows fall nowhere near x 250 pt.
+        let (x, y) = match kind {
+            ShadowKind::Wall => (250_000, 20_000),
+            _ => (250_000, 132_000),
+        };
+        let shade = p.at(x, y);
+        assert!(
+            shade[0] < 200 && shade[0] == shade[1] && shade[1] == shade[2],
+            "{kind:?}: the middle step's shadow: {shade:?}"
+        );
+    }
 }
 
 /// A contour around a mould (directly or in a group) contours the moulded
