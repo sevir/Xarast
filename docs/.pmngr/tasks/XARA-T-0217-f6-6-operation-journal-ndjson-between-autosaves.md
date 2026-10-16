@@ -2,12 +2,13 @@
 id: XARA-T-0217
 type: task
 title: F6.6 — Operation journal (NDJSON) between autosaves
-status: backlog
+status: in_progress
 parent: XARA-US-0026
 author: mcp
 labels: [phase-6, durability]
 created: 2026-09-23T19:55:07Z
-updated: 2026-09-23T19:55:07Z
+updated: 2026-10-16T06:19:59Z
+started: 2026-10-16T06:19:59Z
 ---
 
 ## Description

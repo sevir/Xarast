@@ -2,13 +2,14 @@
 id: XARA-T-0088
 type: task
 title: F6.8/F6.9 — xarast repair (local-header scan) and partial XML recovery
-status: in_progress
+status: done
 parent: XARA-US-0026
 author: mcp
 labels: [phase-6, xarast-format, durability]
 created: 2026-09-23T14:23:38Z
-updated: 2026-10-16T05:30:19Z
+updated: 2026-10-16T06:19:54Z
 started: 2026-10-16T05:30:19Z
+closed: 2026-10-16T06:19:54Z
 ---
 
 ## Description
