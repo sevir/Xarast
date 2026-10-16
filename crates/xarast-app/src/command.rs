@@ -462,6 +462,8 @@ impl AppCommand {
         // desktop program; Ctrl+Shift+C is Inkscape's "Object to Path" (tools.md).
         const CONVERT: &[KeyChord] = &[KeyChord::ctrl_shift('c')];
         const NONE: &[KeyChord] = &[];
+        // Not documented for the original; Ctrl+Shift+G is free.
+        const DELETE_ALL_GUIDES: &[KeyChord] = &[KeyChord::ctrl_shift('g')];
         // Edit and Arrange, `research/04 §4.2`, §4.3.
         const CUT: &[KeyChord] = &[KeyChord::ctrl('x')];
         const COPY: &[KeyChord] = &[KeyChord::ctrl('c')];
@@ -573,7 +575,7 @@ impl AppCommand {
             AppCommand::SnapToObjects => SNAP_OBJECTS,
             AppCommand::ShowGrid => SHOW_GRID,
             AppCommand::ShowGuides => SHOW_GUIDES,
-            AppCommand::DeleteAllGuides => NONE,
+            AppCommand::DeleteAllGuides => DELETE_ALL_GUIDES,
             AppCommand::ShowPane(p) => match p {
                 DockPane::ColourGallery => COLOURS,
                 DockPane::Layers => LAYERS,

@@ -1657,5 +1657,5 @@ isolated GNOME session on a private bus:
   (one undo step), Esc/Cancel nothing, and it closes if the guide vanishes.
   The position is the document coordinate: the original shows a
   page-relative ordinate, ours matches what the rulers show.
-- View › Delete all guides (`AppCommand::DeleteAllGuides`, no shortcut) is
+- View › Delete all guides (`AppCommand::DeleteAllGuides`, Ctrl+Shift+G: ours, the original documents none) is
   greyed out without guides and runs `GuideOp::DeleteAll` (one undo step).
