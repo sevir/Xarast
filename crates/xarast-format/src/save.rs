@@ -181,6 +181,11 @@ pub fn meta_xml(doc: &Document, stats: &Stats, generator: &str) -> String {
         }
         s.push_str("/>\n");
     }
+    if let Some(h) = m.export_hints.as_deref().filter(|h| !h.is_empty()) {
+        s.push_str("<xarast:export-hints>");
+        push_text_escaped(&mut s, h);
+        s.push_str("</xarast:export-hints>\n");
+    }
     let pages = doc
         .tree
         .preorder(doc.tree.root())

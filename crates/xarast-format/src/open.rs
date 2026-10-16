@@ -327,6 +327,8 @@ fn read_meta(bytes: &[u8], meta: &mut DocumentMeta, diags: &mut Vec<xarast_doc::
                     meta.modified = v;
                 }
             }
+        } else if e.is(NS_XARAST, "export-hints") {
+            meta.export_hints = Some(e.text()).filter(|t| !t.is_empty());
         } else if e.is(NS_XARAST, "origin") {
             let g = |n: &str| e.get(NS_XARAST, n).map(str::to_owned);
             meta.producer = g("producer");

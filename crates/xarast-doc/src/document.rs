@@ -31,6 +31,12 @@ pub struct DocumentMeta {
     pub producer_version: Option<String>,
     /// Its build.
     pub producer_build: Option<String>,
+    /// The last File › Export options used on this document, as the JSON
+    /// the application writes (T11.1.5). Opaque here: the document model
+    /// does not know the export crate. `None` for a document never
+    /// exported, and then nothing is written to `meta.xml`.
+    #[serde(default)]
+    pub export_hints: Option<String>,
 }
 
 /// What [`Document::dump`] prints.
