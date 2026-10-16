@@ -47,6 +47,9 @@ Memory note for the **render engine** (`crates/xarast-render`), Phase 4.
   generator shared by both backends, plus the three analytic ones.
   Graduated, three-/four-colour (`TranspSource::Mesh`, per pixel) and
   bitmap-sourced transparency feed the same families.
+  Every family × {flat, graduated, bitmap} has an exact golden, and the
+  grey weights have one definition, `xarast_color::RENDER_GREY_WEIGHTS`
+  (XARA-T-0347, "Transparency families").
 - **Cache and incremental redraw:** content-hash keys, √2 scale quantisation,
   cost-weighted LRU under a hard byte budget, an admission policy, dirty-rect
   culling and `scroll_surface` reprojection. `scene_damage` diffs two scenes
@@ -649,6 +652,119 @@ until this was wired.
 - **Moulds**: `mould_fill` moves the three corners (no fourth corner in
   the model: the affine part of a perspective). Follow-up if a corpus
   file needs it: a `persp` on procedural fills, as bitmaps have.
+
+## Transparency families (XARA-T-0347, phase 13 §I, 2026-10-16)
+
+Phase 13 §I asked for twelve families in the model, one LUT source, every
+source for every family, the grey weights, the selector and the file
+mappings. Most of it was already there; this is what the task found, what
+it closed and what it left open.
+
+- **What existed.** The renderer had all twelve `BlendFamily` values, one
+  table generator (`build_blend_lut`) that the CPU backend and the GPU
+  layer upload (`GpuConfig::weights` → `BlendLuts::build`) both call, and
+  `Transparency { family, source: Flat | Gradient | Mesh | Image }` with
+  ramps, profiles and level ramps on every source. The document model's
+  transparency is `TranspPaint = FillGeometry<Transparency>`, whose stops
+  carry the family (`TranspMode`). The gaps were: the model had eleven
+  families (no `Bevel`); the `.xarast` writer dropped the family of
+  bitmap, fractal and noise transparencies; a bitmap transparency without
+  a level pair could not hold a family at all; and the grey weights were
+  written out in four places.
+- **I1.** `TranspMode::Bevel = 34` and `TranspMode::ALL` (twelve).
+  `TranspPaint::family()` and `TranspPaint::source()`
+  (`xarast_doc::fill::TranspSource::{Flat, Gradient, Image}`; meshes are
+  Gradient, fractal and noise tiles are Image) name the two halves of the
+  phase's `Transparency { family, source }` on the existing type rather
+  than adding a parallel one. `SetTranspMode` on a bitmap without a level
+  pair now writes the implied pair (0 at black, 255 at white) with the new
+  family; before, the change was silently lost.
+- **I2.** One source: `xarast_color::RENDER_GREY_WEIGHTS`, read by
+  `LumaWeights::GREY_CONVERSION` (the default of `CpuConfig`, `GpuConfig`
+  and `LumaWeights`), the bevel table, the bitmap-transparency luminance
+  and the `.xarast` writer's transparency-mask colour matrix
+  (`mask_row`, which still produces the old bytes exactly). The **contone**
+  remap (`resample::remap_texel`, `LUMA_MATRIX` in the SVG writer and
+  `xarast-image` `photo::luma`) and the PNG grey export keep their own
+  BT.601 constants on purpose: they are image operations, not CDraw's grey
+  conversion, and they are not part of this hypothesis. The colour
+  model's `GREY_MODEL_WEIGHTS` is measured and different (`colour.md`).
+- **I4: the family × source goldens.** `corpus::transparency_family_cases()`:
+  12 families × {`flat` at 96, `gradient` a 4-stop linear ramp under
+  bias/gain (0.35, −0.25), `image` a tinted 16 × 16 grey ramp through a
+  4-stop level ramp under (−0.3, 0.4)}, 48 × 48, compared exactly by
+  `tests/golden_transparency_family.rs` against
+  `tests/golden/transparency_family/<family>_<source>.png` (36 PNGs,
+  148 KB). `every_family_and_every_source_draws_differently` asserts all
+  66 family pairs differ per source and all three sources differ per
+  family, except `None`, which draws nothing whatever its source. Like the
+  fill × blend matrix these are regression locks: the unverified
+  families are locked as they are, not judged.
+- **I5.** `fill_tool::transp_mode_choice`: the infobar offers the
+  original's ten (`TRANSP_MODES`, the order of `TranspInfoBarOp`'s menu in
+  `tools/filltool.cpp`) and *shows* any other family in force by appending
+  it as the selected entry (choosing it is a no-op). `None` shows as Mix.
+  Bevel is never offered: the original gives it only to a bevel's own
+  lighting fill (`Kernel/nodebev.cpp:434`).
+- **I6.** See `xar-import.md` ("Transparency type byte") and
+  `xarast-format.md` ("Transparency families"); `.xarast` round trip of all
+  twelve families on flat, linear multi-stop, three-point, bitmap and
+  fractal sources is `xarast-format/tests/transparency_families.rs`, with
+  a byte-identical second and third save.
+- **Corpus effect: none.** The corpus uses Mix, Stained Glass, Bleach,
+  Darken, Brightness and Hue; every bitmap, fractal and noise transparency
+  in it is Mix, and nothing has type byte 34. Exporting the 59 files to
+  SVG and PNG before and after the change gives byte-identical output
+  (122 files compared).
+
+### Grey-conversion weights (I3): unverified, and how to measure them
+
+`RENDER_GREY_WEIGHTS` is **BT.601 (0.299, 0.587, 0.114), unverified**.
+The original never calls `GColour_SetGreyConversionValues`, so CDraw's
+built-in defaults apply and they are in no header; the corpus previews
+cannot resolve them (see "Blend families against the original's
+previews"). Like XARA-T-0325 for the bevel tables, this needs the
+original running. The procedure, for whoever has an x86-64 VM with a
+2006-era Xara LX build:
+
+1. Make a document with a white rectangle, and over it a rectangle of
+   **flat** colour `c` with a **Darken** transparency at level 0. Darken at
+   t = 0 draws `d · Y(c) / 255` (`research/03 §2.7.2`), so over white the
+   result is `Y(c)` in every channel, with no ramp or antialiasing
+   involved.
+2. Repeat for a set of colours: the 255 pure reds `(r, 0, 0)`, greens and
+   blues, plus about 50 random colours as a check. One page of small
+   squares is enough; export a bitmap at 100 % with antialiasing off (or
+   sample square centres only).
+3. Each pure ramp gives one weight table directly (`Y(r, 0, 0)` against
+   `r`), which also tells whether CDraw's tables are linear (a single
+   weight) or not. Fit `Y = round(wr·r + wg·g + wb·b)` (or the `>> 24`
+   fixed-point form of `research/03 §2.7.2`) by least squares and check
+   the residual on the random colours: it must be 0 for every one, or the
+   model is wrong, not the weights.
+4. Commit the result as `RENDER_GREY_WEIGHTS` with the residual and the
+   procedure's date here, change
+   `blend_luts::the_luminance_weights_are_the_recorded_hypothesis`, and
+   re-bless the goldens of every luminance family (Darken, Lighten,
+   Brightness, Saturation, Luminosity, Hue) in all three matrices.
+
+Lighten (screen by `Y(s)`) at t = 0 over black is the same measurement
+from the other side, a cheap cross-check.
+
+### Open questions this task did not settle
+
+- **What `None` draws.** The renderer's `BlendFamily::None` draws nothing,
+  but the walker never produces it: a flat `None` transparency is no
+  transparency (opaque) and a graduated, mesh or procedural `None` is
+  drawn as Mix; a bitmap `None` is opaque. The original's reader keeps
+  byte 0 as is and maps it to `T_NONE` when rendering
+  (`wxOil/grndrgn.cpp:8846`), whose effect in CDraw is unknown. No corpus
+  file has one. `.xarast` writes a non-flat `None` as Mix and a flat one
+  as nothing, which is what the canvas draws (except the bitmap case).
+- **The flat and graduated variants** (type bytes 14, 15, 17, …) are
+  documented as illegal in the document (`Kernel/fillval.h:161-164`) and
+  read as Mix; the original would draw them as an off-by-one family
+  through `MapTranspTypeToGDraw`. Nothing writes them.
 
 ## Decisions taken (and why)
 
@@ -2143,7 +2259,10 @@ Corpus export check: 118 comparisons, 0 failures; `svg-check
    no floating-point accumulation cross a band boundary.
 4. **Exactly one blend-LUT generator**, `build_blend_lut`, shared by both
    backends. Two would drift, and the drift would be invisible until a user
-   saw it.
+   saw it. Likewise exactly one grey-conversion constant,
+   `xarast_color::RENDER_GREY_WEIGHTS`: never write 0.299/0.587/0.114 for
+   a blend family or a transparency again (contone and photo luminance are
+   separate, see "Transparency families").
 5. **Xara's transparency is 0 = opaque, 255 = fully transparent**, the inverse
    of ordinary alpha. Getting it backwards produces plausible wrong output.
 6. **`xarast-render` must not depend on `xarast-doc`, `winit` or `egui`**, and
@@ -2345,7 +2464,7 @@ Corpus export check: 118 comparisons, 0 failures; `svg-check
 | 2 | The WGSL compositing pass: paint evaluation, family dispatch, LUT sampling, ping-pong destination reads (R5.3, R5.4). **Deferred** by the GPU decision; re-open on its trigger | XARA-T-0051 |
 | 15 | ~~Present the canvas through `GpuTileCache` (shell/app wiring, capability ladder)~~. **Done 2026-09-23**; see "The tiles in the viewer" | done (XARA-T-0050) |
 | 16 | The iGPU `write_texture` cliff: 1080p 0.6 ms, 4K 24 ms | XARA-T-0052 |
-| 3 | Recover CDraw's luminance weights by least squares (R4.4) and extract the twelve tables via `GDraw::CalcTransparencyX` (R4.5) | needs an x86-64 VM (XARA-US-0018); the corpus previews cannot do it, see "Blend families against the original's previews" |
+| 3 | Recover CDraw's luminance weights by least squares (R4.4; the procedure is under "Grey-conversion weights (I3)") and extract the twelve tables via `GDraw::CalcTransparencyX` (R4.5) | needs an x86-64 VM (XARA-US-0018); the corpus previews cannot do it, see "Blend families against the original's previews" |
 | 4 | Verify Contrast, Bevel, Saturation, Luminosity, Hue and Lighten against those tables | after 3; no corpus file uses any of them |
 | 5 | Render the `.xar` corpus end to end and compare against the original at 25 %, 100 % and 400 % | our side done (`xarast-cli render --zoom`); the original cannot run here (closed CDraw, 2006 binaries), so XARA-T-0248 compares with the previews each `.xar` embeds and keeps the zoom comparison VM-gated |
 | 6 | Re-derive the cache admission threshold from corpus data | after 5 |

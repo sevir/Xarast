@@ -210,6 +210,12 @@ replays exactly. No UI yet (H7).
     (34) stays renderer-internal: the tool never offers it. A mesh
     transparency's mode is `c0.mode`, and it now renders in that family
     (it was always Mix; see `render.md`, "Meshes tile mirrored").
+17b. **`TranspMode` holds all twelve families** (XARA-T-0347,
+    2026-10-16): `Bevel = 34` was added so `.xar` byte 34 and
+    `.xarast` `xarast:blend="bevel"` keep it; the tool still never offers
+    it (it shows it when in force, `tools.md`). The renderer's grey
+    weights live here as `RENDER_GREY_WEIGHTS` (BT.601, unverified),
+    distinct from the measured `GREY_MODEL_WEIGHTS`.
 18. **`mutate_fill` follows the W8.2 table**: flat → gradient takes the
     bounding box (diagonal for linear, inscribed circle otherwise) and a
     caller-given far value (`desaturated` for colour, `clear_end` = 255 for

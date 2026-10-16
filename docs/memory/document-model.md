@@ -723,6 +723,21 @@ Two things Phase 3 was asked to check against the corpus, **now answered**
 - **`Tx::move_node` charges `size_of::<Action>()`**, not the subtree: a
   move retains nothing.
 
+## Transparency families in the model (XARA-T-0347, phase 13 I1, 2026-10-16)
+
+- The phase's `Transparency { family, source }` is the existing
+  `TranspPaint = FillGeometry<Transparency>`: the family is the
+  `TranspMode` its stops carry (now all twelve: `TranspMode::Bevel = 34`
+  added, `TranspMode::ALL`), the source is the geometry.
+  `TranspPaint::family()` (the first stop's mode; a bitmap without a level
+  pair is Mix) and `TranspPaint::source()` → `fill::TranspSource::{Flat,
+  Gradient, Image}` (meshes are Gradient, fractal/noise tiles Image) name
+  them. No parallel type: two representations would have to be kept in
+  step by every command.
+- **Fixed:** `SetTranspMode` on a bitmap transparency without a level
+  pair did nothing (there was no stop to hold the family). It now writes
+  the implied pair (0 at black, 255 at white) in the new family.
+
 ## Invariants that must not be broken
 
 The twelve from `research/02 §10.16`, each with a matching `Invariant` variant

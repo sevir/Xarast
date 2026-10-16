@@ -1149,6 +1149,26 @@ initial `fill-rule` is `nonzero`. As for the join (above):
   scales and draws raw grey (amurdove svg 1.24 → 20.64).
 - `xarast-format` depends on `xarast-image` for the generators.
 
+## Transparency families (XARA-T-0347, phase 13 I6, 2026-10-16)
+
+- **All twelve families round-trip** on flat, linear multi-stop under a
+  profile, three-point, bitmap and fractal sources, with a byte-identical
+  second and third save (`tests/transparency_families.rs`). `bevel` is
+  the new `xarast:blend` name (no CSS equivalent, `research/06 §6.5.2`).
+- **Fixed: bitmap, fractal and noise transparencies lost their family.**
+  The writer gave their `TranspOut` the default mode (Mix), so no
+  `xarast:blend` was written and the twin read back in Mix. The mode is
+  now the level pair's. No corpus file was affected (every such
+  transparency in it is Mix); the 59-file SVG/PNG export is
+  byte-identical before and after.
+- **`None` is normalised, not kept.** A flat `None` writes nothing (no
+  transparency); any other `None` writes as Mix and reads back as Mix —
+  what the original's `SetTranspType` does and what the canvas draws.
+  `xarast:blend="none"` is never written.
+- **The mask's grey weights** come from `xarast_color::RENDER_GREY_WEIGHTS`
+  (`paint::mask_row`), with the bytes unchanged; the contone
+  `LUMA_MATRIX` stays BT.601 on its own (see `render.md`).
+
 ## Decisions taken (and why)
 
 - **`zip` 8.6** (current stable major; 9.0 is pre-release), `MIT`, **every

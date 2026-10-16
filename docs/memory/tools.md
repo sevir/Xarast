@@ -1434,6 +1434,16 @@ drag).
     falls back to its box. Object snapping sees a mould only through
     this leaf.
 
+## Phase 13: the transparency type selector carries the family (XARA-T-0347, I5)
+
+`fill_tool::transp_mode_choice(mode)` builds the infobar choice: the ten
+offered modes in the original's menu order, plus, when the family in
+force is not one of them (Bevel), that family appended and selected, so
+all twelve are shown as they are. Choosing the appended entry is a no-op
+(the setter only maps indices into `TRANSP_MODES`). `None` shows as Mix.
+`transp_mode_label` is exhaustive over the twelve. Test:
+`tests/fill_tool.rs::the_transparency_selector_carries_all_twelve_families`.
+
 ## Provisional values (observe in the VM before trusting)
 
 - Segment grab = 4 + 3 device px; freehand chunk 96 samples; freehand

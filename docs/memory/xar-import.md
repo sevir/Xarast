@@ -1051,6 +1051,33 @@ generated tile (`render.md`, "Clouds and plasma").
   the record handler's `Write*`/`Read*` (`WritePreChildrenWeb` and the
   `Handle*Record` beside it) and a corpus histogram first.
 
+## Transparency type byte (XARA-T-0347, 2026-10-16)
+
+Verified against the original's **writer**, as the cap/join lesson
+demands. Every `TAG_*TRANSPARENTFILL` writer stores the in-memory
+`TranspType` unchanged as one byte (`Kernel/fillattr.cpp:6159`, `:7075`,
+`:8395`, `:9750`, `:10962`, `:12250`, `:13701`, `:15781`, `:17960`,
+`:18128`; the line transparency at `:8813`'s family), and the reader
+stores it back unchanged (`:21856`, `:21868`). The values are
+`Kernel/fillval.h:144-177` (comment at `:140-143`): 0 none, 1 Mix,
+2 Stained Glass, 3 Bleach, 10–12 reserved, then three per family from 13:
+Contrast 13, Saturation 16, Darken 19, Lighten 22, Brightness 25,
+Luminosity 28, Hue 31, Bevel 34. The transparency tool writes exactly
+1, 2, 3, 13, 16, …, 31 (`tools/filltool.cpp:9261-9314`, read back at
+`:7435-7495`) and its "None" entry sets 0, which `SetTranspType` turns
+into Mix (`Kernel/fillval.cpp:4145-4151`). Bevel (34) is set only on a
+bevel's own lighting fill (`Kernel/nodebev.cpp:434`), which is not saved
+as an attribute. Note the stale comment at `fillval.h:140` ("Bleach = 2
+and Stainedglass = 3"): the enum order, the tool and the renderer
+(`wxOil/grndrgn.cpp:8853-8858`) all make Stained Glass 2.
+
+`TranspMode::from_byte` already matched for eleven values; 34 now reads
+as `TranspMode::Bevel` (it read as Mix). The per-family "flat" and
+"graduated" bytes (14, 15, 17, …) and the reserved ones are documented as
+illegal in the document (`fillval.h:161-164`) and still read as Mix.
+Corpus: no file has 0 or 34 (`xarast-cli inspect --fills`: Stained Glass
+380, Bleach 71, Brightness 4, Hue 4, Darken 2, Mix otherwise).
+
 ## Dead ends (do not retry)
 
 - **Keeping a shadow node's fill as an attribute of the generated node.**

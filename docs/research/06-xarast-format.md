@@ -1305,17 +1305,18 @@ visibly different transparencies in a browser. It is a classic mistake.
 
 | `TranspType` | Value | SVG/CSS base | Fallback accuracy | Extension |
 |---|---|---|---|---|
+| `TT_NoTranspType` | 0 | none when flat; otherwise as `TT_Mix` | — | none: normalised to Mix, as the original's `SetTranspType` does (`Kernel/fillval.cpp:4145-4151`) |
 | `TT_Mix` | 1 | normal alpha (`opacity`) | **Exact** | — (default) |
 | `TT_StainGlass` | 2 | `style="mix-blend-mode:multiply"` | **Exact** | `xarast:blend="stained-glass"` |
 | `TT_Bleach` | 3 | `style="mix-blend-mode:screen"` | **Exact** | `xarast:blend="bleach"` |
-| `TT_DARKEN` | — | `mix-blend-mode:darken` | Exact | `xarast:blend="darken"` |
-| `TT_LIGHTEN` | — | `mix-blend-mode:lighten` | Exact | `xarast:blend="lighten"` |
-| `TT_SATURATION` | — | `mix-blend-mode:saturation` | Approximate (CSS HSL model vs Xara's HSV) | `xarast:blend="saturation"` |
-| `TT_LUMINOSITY` | — | `mix-blend-mode:luminosity` | Approximate | `xarast:blend="luminosity"` |
-| `TT_HUE` | — | `mix-blend-mode:hue` | Approximate | `xarast:blend="hue"` |
-| `TT_CONTRAST` | — | `<filter>` with `feComponentTransfer type="linear"` around the midpoint | Approximate | `xarast:blend="contrast" xarast:amount="…"` |
-| `TT_BRIGHTNESS` | — | `<filter>` with `feComponentTransfer type="linear" intercept` | Approximate | `xarast:blend="brightness"` |
-| `TT_BEVEL` | — | Resolved as part of the bevel (§6.8) | — | `xarast:blend="bevel"` |
+| `TT_DARKEN` | 19 | `mix-blend-mode:darken` | Exact | `xarast:blend="darken"` |
+| `TT_LIGHTEN` | 22 | `mix-blend-mode:lighten` | Exact | `xarast:blend="lighten"` |
+| `TT_SATURATION` | 16 | `mix-blend-mode:saturation` | Approximate (CSS HSL model vs Xara's HSV) | `xarast:blend="saturation"` |
+| `TT_LUMINOSITY` | 28 | `mix-blend-mode:luminosity` | Approximate | `xarast:blend="luminosity"` |
+| `TT_HUE` | 31 | `mix-blend-mode:hue` | Approximate | `xarast:blend="hue"` |
+| `TT_CONTRAST` | 13 | `<filter>` with `feComponentTransfer type="linear"` around the midpoint | Approximate | `xarast:blend="contrast" xarast:amount="…"` |
+| `TT_BRIGHTNESS` | 25 | `<filter>` with `feComponentTransfer type="linear" intercept` | Approximate | `xarast:blend="brightness"` |
+| `TT_BEVEL` | 34 | Resolved as part of the bevel (§6.8) | — | `xarast:blend="bevel"` |
 | Special additive | `T_SPECIAL_1` | `mix-blend-mode:plus-lighter` | Good | `xarast:blend="additive"` |
 | Special subtractive | `T_SPECIAL_2` | `mix-blend-mode:multiply` (approx.) | Poor | `xarast:blend="subtractive"` |
 | Lookup table | `T_SPECIAL_3` | `<filter>` with `feComponentTransfer type="table"` and the table included | Good | `xarast:blend="lut"` + `<xarast:lut>` |
