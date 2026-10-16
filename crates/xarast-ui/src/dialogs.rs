@@ -507,7 +507,7 @@ mod guide_tests {
     fn an_open_dialog_keeps_its_state_and_asks_for_nothing_until_ok() {
         let g = Guide::vertical(Mp::from_mm(10.0));
         let doc = DocumentView {
-            guides: vec![g.clone()],
+            guides: vec![g],
             ..Default::default()
         };
         let mut state = Some(GuideProperties::open(0, &g, doc.unit));
