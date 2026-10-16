@@ -133,7 +133,7 @@ pub struct NodeData {
 }
 
 /// Where a node is attached relative to an anchor.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Attach {
     /// Immediately before `anchor`, as its previous sibling.
     Prev,

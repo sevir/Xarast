@@ -32,12 +32,12 @@ use crate::tree::{Attach, NodeData, NodeFlags, NodeId, Tree};
 /// A cheap photograph of a document.
 #[derive(Clone, Debug)]
 pub struct Snapshot {
-    nodes: Arc<SecondaryMap<NodeId, NodeData>>,
-    foreign: Arc<SecondaryMap<NodeId, Arc<ForeignBaggage>>>,
-    root: NodeId,
-    resources: Arc<DocumentResources>,
-    defaults: DefaultAttrs,
-    meta: DocumentMeta,
+    pub(crate) nodes: Arc<SecondaryMap<NodeId, NodeData>>,
+    pub(crate) foreign: Arc<SecondaryMap<NodeId, Arc<ForeignBaggage>>>,
+    pub(crate) root: NodeId,
+    pub(crate) resources: Arc<DocumentResources>,
+    pub(crate) defaults: DefaultAttrs,
+    pub(crate) meta: DocumentMeta,
 }
 
 impl Snapshot {

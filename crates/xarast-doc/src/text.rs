@@ -10,7 +10,7 @@ use std::sync::Arc;
 use xarast_geom::{Matrix, Mp};
 
 /// How a story is laid out.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TextLayout {
     /// Free text anchored at a point.
     AtPoint,
@@ -43,7 +43,9 @@ pub enum TextLayout {
 ///
 /// Angles are radians in 16.16 fixed point, the file's `ANGLE`, so that the
 /// value survives a round trip bit for bit.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
 pub struct CharsTransform {
     /// A negative character scale: every character is reflected about its
     /// baseline, so the text hangs on the other side of the path.
@@ -86,7 +88,9 @@ impl CharsTransform {
 }
 
 /// Paragraph alignment.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default, Hash)]
+#[derive(
+    Copy, Clone, PartialEq, Eq, Debug, Default, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum Justification {
     /// Ragged right.
     #[default]
@@ -100,7 +104,7 @@ pub enum Justification {
 }
 
 /// Line spacing, either a ratio of the font size or an absolute distance.
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum LineSpacing {
     /// A multiple of the font size.
     Ratio(f32),
@@ -115,7 +119,7 @@ impl Default for LineSpacing {
 }
 
 /// Superscript and subscript.
-#[derive(Copy, Clone, PartialEq, Debug, Default)]
+#[derive(Copy, Clone, PartialEq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Script {
     /// Whether the script offset is applied at all.
     pub on: bool,
@@ -126,7 +130,7 @@ pub struct Script {
 }
 
 /// A text story: the root of a block of text.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TextStoryNode {
     /// The story's placement.
     pub transform: Matrix,
@@ -153,14 +157,14 @@ impl Default for TextStoryNode {
 ///
 /// Carries no metrics: those are Phase 9's derived cache, kept out of the
 /// arena so that a line is comparable and cheap.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct TextLineNode {
     /// A tab ruler that applies to this line, when the file carried one.
     pub ruler: Option<Arc<[TabStop]>>,
 }
 
 /// One tab stop.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub struct TabStop {
     /// Where the stop sits.
     pub position: Mp,
@@ -174,7 +178,9 @@ pub struct TabStop {
 /// Xarast's own attribute: the `.xar` format has no record for it, so it
 /// only ever comes from the text tool or a `.xarast` file. A list of them
 /// is kept sorted by tag with no tag twice ([`FeatureSetting::normalised`]).
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash, PartialOrd, Ord)]
+#[derive(
+    Copy, Clone, PartialEq, Eq, Debug, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct FeatureSetting {
     /// The four-byte feature tag, as in the font (`b"smcp"`).
     pub tag: [u8; 4],
@@ -217,7 +223,7 @@ impl FeatureSetting {
 ///
 /// Held inline in [`NodeKind`](crate::NodeKind) — eight bytes — because a text
 /// document is mostly these and they must not pay for a spread.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub enum TextItem {
     /// A character.
     Char(char),

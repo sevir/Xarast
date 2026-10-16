@@ -25,7 +25,7 @@ use xarast_geom::{BiasGain, Matrix, Point};
 use crate::resources::BitmapId;
 
 /// One intermediate stop of a ramp.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RampStop<S: Stop> {
     /// Position along the gradient, `0.0..=1.0`.
     pub pos: f32,
@@ -34,7 +34,9 @@ pub struct RampStop<S: Stop> {
 }
 
 /// Whether the ramp's parameter is used directly or eased.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default, Hash)]
+#[derive(
+    Copy, Clone, PartialEq, Eq, Debug, Default, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum RampMapping {
     /// The parameter is used as it is.
     #[default]
@@ -51,7 +53,9 @@ pub enum RampMapping {
 /// graduated fill clamps unless it is [`Tiling::RepeatExtra`], a three- or
 /// four-colour fill clamps only when it is [`Tiling::Simple`], and a bitmap
 /// or procedural fill takes the value at face value.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default, Hash)]
+#[derive(
+    Copy, Clone, PartialEq, Eq, Debug, Default, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum Tiling {
     /// Unset (value 0). Never read from a `.xar` file.
     #[default]
@@ -71,7 +75,7 @@ pub enum Tiling {
 
 /// The extra two corners that turn a gradient's parallelogram into a
 /// quadrilateral.
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Perspective {
     /// The third corner.
     pub p2: Point,
@@ -81,7 +85,7 @@ pub struct Perspective {
 
 /// The intermediate stops of a gradient, kept sorted by position, plus the
 /// profile and mapping that apply to the whole ramp.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Ramp<S: Stop> {
     stops: Vec<RampStop<S>>,
     /// The bias/gain profile applied to the gradient parameter.
@@ -180,7 +184,7 @@ impl<S: Stop> Ramp<S> {
 }
 
 /// Parameters shared by the fractal and noise fills.
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ProceduralParams {
     /// The random seed.
     pub seed: i32,
@@ -210,7 +214,7 @@ impl Default for ProceduralParams {
 }
 
 /// A fill, over whatever payload sits at its stops.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum FillGeometry<S: Stop> {
     /// A single value everywhere.
     Flat {

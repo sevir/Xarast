@@ -15,7 +15,7 @@ use crate::walk::WalkEvent;
 
 /// Everything a `.xarast` or `.xar` file says about a document that is not a
 /// node.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DocumentMeta {
     /// The title.
     pub title: Option<String>,

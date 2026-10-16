@@ -499,6 +499,12 @@ pub struct Tx<'d> {
     /// Set when an action's effect on spreads cannot be bounded cheaply; the
     /// commit then falls back to checking every spread in the document.
     rescan_all_spreads: bool,
+    /// What it did, for the operation journal ([`crate::journal`]), when
+    /// the bus is recording. `None` once something could not be recorded.
+    record: Option<Vec<crate::journal::Step>>,
+    /// Whether recording was asked for (and so `record == None` means a
+    /// loss rather than "not recording").
+    recording: bool,
 }
 
 impl<'d> Tx<'d> {
@@ -513,7 +519,18 @@ impl<'d> Tx<'d> {
             committed: false,
             touched_spreads: Vec::new(),
             rescan_all_spreads: false,
+            record: None,
+            recording: false,
         }
+    }
+
+    /// Opens a transaction that also records what it does, for the
+    /// operation journal.
+    pub(crate) fn begin_recording(doc: &'d mut Document) -> Tx<'d> {
+        let mut tx = Tx::begin(doc);
+        tx.record = Some(Vec::new());
+        tx.recording = true;
+        tx
     }
 
     /// The document, read only.
@@ -530,6 +547,15 @@ impl<'d> Tx<'d> {
 
     /// [`Tx::act`] with the retained cost given rather than estimated.
     fn act_costing(&mut self, action: Action, bytes: usize) -> Result<(), EditError> {
+        if let Some(record) = &mut self.record {
+            match crate::journal::act_of(&self.doc.tree, &action) {
+                Some(act) => record.push(crate::journal::Step::Act {
+                    bytes: bytes as u64,
+                    act,
+                }),
+                None => self.record = None,
+            }
+        }
         let inverse = action.inverse(self.doc);
         self.bytes += bytes;
         self.note_spreads_before(&action);
@@ -547,9 +573,38 @@ impl<'d> Tx<'d> {
     /// unreachable if the transaction rolls back or is undone — which is why
     /// it records no inverse. Attaching it does.
     pub fn create(&mut self, kind: NodeKind) -> Result<NodeId, EditError> {
+        if let Some(record) = &mut self.record {
+            let id = self.doc.tree.create(kind.clone());
+            let tag = self.doc.tree.get(id).map_or(0, |d| d.tag.0);
+            record.push(crate::journal::Step::Create { tag, kind });
+            self.created.push(id);
+            return Ok(id);
+        }
         let id = self.doc.tree.create(kind);
         self.created.push(id);
         Ok(id)
+    }
+
+    /// [`Tx::create`] under a given tag: journal replay, which must give a
+    /// node the tag its live original had.
+    pub(crate) fn create_tagged(
+        &mut self,
+        kind: NodeKind,
+        tag: crate::tree::Tag,
+    ) -> Result<NodeId, crate::journal::ReplayError> {
+        if tag.0 == 0 || self.doc.tree.by_tag(tag).is_some() {
+            return Err(crate::journal::ReplayError::TagInUse(tag.0));
+        }
+        let id = self.doc.tree.create(kind);
+        self.doc.tree.set_tag(id, tag);
+        self.created.push(id);
+        Ok(id)
+    }
+
+    /// [`Tx::act`] charging a given retained cost: journal replay, which
+    /// charges what the live transaction did.
+    pub(crate) fn act_charging(&mut self, action: Action, bytes: usize) -> Result<(), EditError> {
+        self.act_costing(action, bytes)
     }
 
     /// Links a node into the tree.
@@ -950,7 +1005,17 @@ impl<'d> Tx<'d> {
 
     /// Closes the transaction and hands it to the caller to record.
     #[must_use]
-    pub fn commit(mut self, label: &'static str) -> Transaction {
+    pub fn commit(self, label: &'static str) -> Transaction {
+        self.commit_recorded(label).0
+    }
+
+    /// [`Tx::commit`], also handing back what the transaction recorded:
+    /// `Some(steps)` when it was recording and lost nothing, `None`
+    /// otherwise. The second value says whether recording was asked for.
+    pub(crate) fn commit_recorded(
+        mut self,
+        label: &'static str,
+    ) -> (Transaction, Option<Vec<crate::journal::Step>>, bool) {
         // Repair "one spread, one active layer" once, here, rather than after
         // every individual operation.
         //
@@ -966,13 +1031,14 @@ impl<'d> Tx<'d> {
         let _ = self.keep_one_active_layer();
         keep_detached_roots(self.doc, &mut self.retained);
         self.committed = true;
-        Transaction {
+        let t = Transaction {
             label,
             inverses: std::mem::take(&mut self.inverses),
             retained: std::mem::take(&mut self.retained),
             bytes: self.bytes,
             coalesce: None,
-        }
+        };
+        (t, self.record.take(), self.recording)
     }
 
     /// Undoes everything applied so far and closes the transaction.
@@ -1088,10 +1154,28 @@ impl History {
 
     /// Records a transaction, merging it into the last one when their coalesce
     /// keys match.
-    pub fn commit(&mut self, doc: &mut Document, mut tx: Transaction) {
+    pub fn commit(&mut self, doc: &mut Document, tx: Transaction) {
+        let mergeable = self.would_merge(tx.coalesce);
+        self.commit_inner(doc, tx, mergeable);
+    }
+
+    /// Whether [`History::commit`] would merge a transaction with this key
+    /// into the last step.
+    #[must_use]
+    pub fn would_merge(&self, key: Option<CoalesceKey>) -> bool {
+        matches!((self.past.last(), key),
+            (Some(last), Some(key)) if last.coalesce == Some(key))
+    }
+
+    /// [`History::commit`] with the merge decided by the caller: journal
+    /// replay, which must merge exactly where the live history did. A merge
+    /// with no step to merge into records a step of its own.
+    pub(crate) fn commit_as(&mut self, doc: &mut Document, tx: Transaction, merge: bool) {
+        self.commit_inner(doc, tx, merge);
+    }
+
+    fn commit_inner(&mut self, doc: &mut Document, mut tx: Transaction, mergeable: bool) {
         self.drop_future(doc);
-        let mergeable = matches!((self.past.last(), tx.coalesce),
-            (Some(last), Some(key)) if last.coalesce == Some(key));
         self.bytes += tx.bytes;
         self.last_serial += 1;
         let serial = self.last_serial;
@@ -1393,6 +1477,8 @@ pub struct CommandBus {
     history: History,
     next_gesture: u64,
     open_gesture: Option<u64>,
+    /// The operation journal's recorder, while one runs.
+    journal: Option<crate::journal::Recorder>,
 }
 
 impl CommandBus {
@@ -1409,6 +1495,7 @@ impl CommandBus {
             history: History::with_budget(bytes),
             next_gesture: 0,
             open_gesture: None,
+            journal: None,
         }
     }
 
@@ -1422,12 +1509,23 @@ impl CommandBus {
         doc: &mut Document,
         cmd: &dyn Command,
     ) -> Result<&'static str, EditError> {
-        let mut tx = Tx::begin(doc);
+        let recording = match &mut self.journal {
+            Some(r) => {
+                r.sync_tables(doc);
+                r.live()
+            }
+            None => false,
+        };
+        let mut tx = if recording {
+            Tx::begin_recording(doc)
+        } else {
+            Tx::begin(doc)
+        };
         if let Err(e) = cmd.run(&mut tx) {
             tx.rollback();
             return Err(e);
         }
-        let mut transaction = tx.commit(cmd.label());
+        let (mut transaction, steps, _) = tx.commit_recorded(cmd.label());
         transaction.coalesce = cmd.coalesce_key().or_else(|| {
             self.open_gesture.map(|g| CoalesceKey {
                 gesture: g,
@@ -1435,7 +1533,30 @@ impl CommandBus {
             })
         });
         let label = transaction.label;
+        let key = transaction.coalesce;
+        let merged = self.history.would_merge(key);
         self.history.commit(doc, transaction);
+        if recording && let Some(r) = &mut self.journal {
+            match steps {
+                Some(steps) => {
+                    r.out.push(crate::journal::Op::Tx {
+                        label: label.to_owned(),
+                        key: key.map(|k| crate::journal::Key {
+                            gesture: k.gesture,
+                            kind: k.kind.to_owned(),
+                        }),
+                        merged,
+                        steps,
+                    });
+                    if !merged {
+                        r.past += 1;
+                    }
+                    r.future = 0;
+                    r.past = r.past.min(self.history.len());
+                }
+                None => r.barrier("a transaction named a node that does not exist"),
+            }
+        }
         Ok(label)
     }
 
@@ -1456,12 +1577,158 @@ impl CommandBus {
 
     /// Undoes the last step, returning its label.
     pub fn undo(&mut self, doc: &mut Document) -> Option<&'static str> {
-        self.history.undo(doc)
+        if self.history.can_undo()
+            && let Some(r) = self.recorder(doc)
+            && r.past == 0
+        {
+            r.barrier("an undo of a step older than the journal's base");
+        }
+        let label = self.history.undo(doc)?;
+        if let Some(r) = self.recorder(doc) {
+            r.out.push(crate::journal::Op::Undo);
+            r.past -= 1;
+            r.future += 1;
+        }
+        Some(label)
     }
 
     /// Redoes the last undone step, returning its label.
     pub fn redo(&mut self, doc: &mut Document) -> Option<&'static str> {
-        self.history.redo(doc)
+        if self.history.can_redo()
+            && let Some(r) = self.recorder(doc)
+            && r.future == 0
+        {
+            r.barrier("a redo of a step older than the journal's base");
+        }
+        let label = self.history.redo(doc)?;
+        if let Some(r) = self.recorder(doc) {
+            r.out.push(crate::journal::Op::Redo);
+            r.future -= 1;
+            r.past += 1;
+        }
+        Some(label)
+    }
+
+    /// The running, unsuspended recorder, with the resource tables synced.
+    fn recorder(&mut self, doc: &Document) -> Option<&mut crate::journal::Recorder> {
+        let r = self.journal.as_mut()?;
+        r.sync_tables(doc);
+        r.live().then_some(r)
+    }
+
+    /// [`History::hold_redo`], journalled.
+    pub fn hold_redo(&mut self, doc: &mut Document) {
+        self.history.hold_redo(doc);
+        if let Some(r) = self.recorder(doc) {
+            r.out.push(crate::journal::Op::HoldRedo);
+            r.held = r.future;
+            r.future = 0;
+        }
+    }
+
+    /// [`History::restore_held_redo`], journalled.
+    pub fn restore_held_redo(&mut self, doc: &mut Document) {
+        self.history.restore_held_redo(doc);
+        if let Some(r) = self.recorder(doc) {
+            r.out.push(crate::journal::Op::RestoreHeldRedo);
+            r.future = r.held;
+            r.held = 0;
+        }
+    }
+
+    /// [`History::release_held_redo`], journalled.
+    pub fn release_held_redo(&mut self, doc: &mut Document) {
+        self.history.release_held_redo(doc);
+        if let Some(r) = self.recorder(doc) {
+            r.out.push(crate::journal::Op::ReleaseHeldRedo);
+            r.held = 0;
+        }
+    }
+
+    /// [`History::discard_redo`], journalled.
+    pub fn discard_redo(&mut self, doc: &mut Document) {
+        self.history.discard_redo(doc);
+        if let Some(r) = self.recorder(doc) {
+            r.out.push(crate::journal::Op::DiscardRedo);
+            r.future = 0;
+        }
+    }
+
+    /// [`History::clear`], journalled.
+    pub fn clear_history(&mut self, doc: &mut Document) {
+        self.history.clear(doc);
+        if let Some(r) = self.recorder(doc) {
+            r.out.push(crate::journal::Op::ClearHistory);
+            r.past = 0;
+            r.future = 0;
+            r.held = 0;
+        }
+    }
+
+    // ── the operation journal (`crate::journal`) ────────────────────────
+
+    /// Starts recording a journal whose base is `doc` as it is now, or
+    /// restarts one at a new base (an autosave). Returns what was recorded
+    /// and not yet taken: it happened *before* this base, and belongs to
+    /// the journal of the previous one.
+    pub fn start_journal(&mut self, doc: &Document) -> Vec<crate::journal::Op> {
+        let pending = self.take_journal();
+        self.journal = Some(crate::journal::Recorder::new(doc));
+        pending
+    }
+
+    /// Stops recording. Returns what was recorded and not yet taken.
+    pub fn stop_journal(&mut self) -> Vec<crate::journal::Op> {
+        let pending = self.take_journal();
+        self.journal = None;
+        pending
+    }
+
+    /// Whether a journal is being recorded (suspended or not).
+    #[must_use]
+    pub fn journal_running(&self) -> bool {
+        self.journal.is_some()
+    }
+
+    /// Whether the journal hit something it cannot represent and records
+    /// nothing until [`CommandBus::start_journal`] gives it a new base.
+    #[must_use]
+    pub fn journal_suspended(&self) -> bool {
+        self.journal.as_ref().is_some_and(|r| r.suspended)
+    }
+
+    /// How many of the history's undo steps the journal's base would have
+    /// after a replay: the ones committed since the base and not undone.
+    /// Zero when no journal runs.
+    #[must_use]
+    pub fn journal_local_past(&self) -> usize {
+        self.journal.as_ref().map_or(0, |r| r.past)
+    }
+
+    /// The entries recorded since the last call, oldest first.
+    pub fn take_journal(&mut self) -> Vec<crate::journal::Op> {
+        self.journal
+            .as_mut()
+            .map(|r| std::mem::take(&mut r.out))
+            .unwrap_or_default()
+    }
+
+    /// Records a barrier and suspends the journal until the next base: for
+    /// what the caller knows the journal cannot hold (an entry it could not
+    /// write).
+    pub fn journal_barrier(&mut self, reason: &str) {
+        if let Some(r) = &mut self.journal {
+            r.barrier(reason);
+        }
+    }
+
+    /// Records the resource tables if they changed outside a transaction
+    /// since they were last recorded (the bitmap gallery deleting a bitmap).
+    /// Every journalled operation does this first on its own.
+    pub fn sync_journal(&mut self, doc: &Document) {
+        if let Some(r) = &mut self.journal {
+            r.sync_tables(doc);
+        }
     }
 
     /// What Edit › Undo would undo ("Move", "Delete").

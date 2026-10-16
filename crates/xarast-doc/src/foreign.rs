@@ -38,7 +38,7 @@ use std::sync::Arc;
 use crate::digest::{Canon, CanonicalHasher};
 
 /// One attribute the reader did not understand.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct ForeignAttr {
     /// The namespace URI; empty for an unprefixed (no-namespace) attribute,
     /// which is how an unknown standard SVG attribute arrives.
@@ -54,7 +54,7 @@ pub struct ForeignAttr {
 }
 
 /// What a [`ForeignChild`] fragment is.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ForeignChildKind {
     /// An element from a foreign namespace, or an unknown `xarast:` element.
     Element,
@@ -68,7 +68,7 @@ pub enum ForeignChildKind {
 }
 
 /// One child fragment the reader did not understand.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct ForeignChild {
     /// How many **known** child elements precede it in the serialised
     /// document, where "known" means an element that stands for one of this
@@ -89,6 +89,7 @@ pub struct ForeignChild {
 bitflags::bitflags! {
     /// The edit marks of `research/06 §8.5`.
     #[derive(Copy, Clone, Default, PartialEq, Eq, Debug, Hash)]
+    #[derive(serde::Serialize, serde::Deserialize)]
     pub struct ForeignMarks: u8 {
         /// An orthogonal attribute of the node was edited (moved, recoloured):
         /// the baggage was kept but may no longer describe the node.
@@ -102,7 +103,7 @@ bitflags::bitflags! {
 }
 
 /// Everything unknown one node carries.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct ForeignBaggage {
     /// Unknown attributes, in the order they were read.
     pub attrs: Vec<ForeignAttr>,

@@ -11,14 +11,14 @@ use std::sync::Arc;
 use xarast_geom::{Mp, Point, Rect};
 
 /// The root node's own payload.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct DocumentNode {
     /// Whether the document has a multi-chapter structure.
     pub multi_chapter: bool,
 }
 
 /// Animation properties of a spread, from the GIF animation records.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct AnimProps {
     /// Frame delay in centiseconds.
     pub delay: u32,
@@ -29,7 +29,7 @@ pub struct AnimProps {
 }
 
 /// A spread: one or two pages plus the pasteboard around them.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SpreadNode {
     /// The rectangle enclosing every page of the spread.
     pub page_size: Rect,
@@ -78,7 +78,7 @@ impl SpreadNode {
 }
 
 /// A page within a spread.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct PageNode {
     /// The page rectangle in document coordinates.
     pub rect: Rect,
@@ -87,7 +87,9 @@ pub struct PageNode {
 }
 
 /// Whether a grid is rectangular or isometric.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default, Hash)]
+#[derive(
+    Copy, Clone, PartialEq, Eq, Debug, Default, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum GridKind {
     /// A rectangular grid.
     #[default]
@@ -97,7 +99,7 @@ pub enum GridKind {
 }
 
 /// A grid.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GridNode {
     /// Rectangular or isometric.
     pub kind: GridKind,
@@ -124,7 +126,7 @@ impl Default for GridNode {
 }
 
 /// The frame properties a layer carries when it is an animation frame.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct FrameProps {
     /// Frame delay in centiseconds.
     pub delay: u32,
@@ -137,7 +139,7 @@ pub struct FrameProps {
 /// A layer.
 ///
 /// The flags come straight from `TAG_LAYERDETAILS` (`research/01 §4.3`).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LayerNode {
     /// The layer's name.
     pub name: Arc<str>,

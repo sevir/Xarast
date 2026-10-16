@@ -45,7 +45,7 @@ use crate::kind::{BitmapNode, NodeKind};
 use crate::tree::NodeId;
 
 /// A rectangle in master pixels: `x`, `y` from the top-left corner.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct PixelRect {
     /// Left column.
     pub x: u32,
@@ -76,7 +76,9 @@ impl PixelRect {
 /// A lossless reorientation: first mirrored left to right when `flip`,
 /// then turned `turns` quarter turns clockwise. The eight values are the
 /// eight orientations of a rectangle.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
 pub struct PhotoOrient {
     /// Quarter turns clockwise, `0..=3`.
     pub turns: u8,
@@ -153,7 +155,7 @@ impl PhotoOrient {
 }
 
 /// The channel a levels operation applies to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum LevelsChannel {
     /// Red, green and blue alike (applied after the single channels).
     All,
@@ -194,7 +196,7 @@ impl LevelsChannel {
 /// input range `in_lo..=in_hi` is stretched onto `out_lo..=out_hi`, and
 /// what is outside it clips (the original's `SetInputRange` /
 /// `SetOutputRange` pair).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Levels {
     /// Which channel.
     pub channel: LevelsChannel,
@@ -217,7 +219,7 @@ impl Levels {
 }
 
 /// One non-destructive operation.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum PhotoOp {
     /// Keep a rectangle of the master (master pixels).
     Crop(PixelRect),
@@ -351,7 +353,7 @@ impl PhotoOp {
 }
 
 /// A chain of operations on a placed bitmap. Empty: the master as it is.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct PhotoOps {
     /// The operations, in order.
     pub ops: Vec<PhotoOp>,

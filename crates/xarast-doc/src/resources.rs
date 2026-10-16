@@ -31,7 +31,7 @@ slotmap::new_key_type! {
 }
 
 /// A reference from the tree into a resource table.
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 pub enum ResourceRef {
     /// A palette colour.
     Colour(xarast_color::ColourId),
@@ -50,7 +50,7 @@ pub enum ResourceRef {
 /// The model never draws with it or interprets it: the application lays
 /// the document's text out with these faces only where the machine lacks
 /// the face itself (`docs/memory/text.md`, "Embedded fonts on read").
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct EmbeddedFont {
     /// The family the face was drawn as (its `@font-face` `font-family`).
     pub family: Arc<str>,
@@ -59,11 +59,14 @@ pub struct EmbeddedFont {
     /// Whether the rule declares an italic (or oblique) style.
     pub italic: bool,
     /// The file as stored: WOFF2, or a plain OpenType file.
+    #[serde(with = "crate::journal::blob")]
     pub data: Arc<[u8]>,
 }
 
 /// How a bitmap's pixels are laid out.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash, Default)]
+#[derive(
+    Copy, Clone, PartialEq, Eq, Debug, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
 pub struct BitmapInfo {
     /// Width in pixels.
     pub width: u32,
@@ -80,9 +83,10 @@ pub struct BitmapInfo {
 /// A bitmap's decoded pixels, plus its palette when it has one.
 ///
 /// Decoding is `xarast-image`'s job; this crate only carries the bytes.
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct BitmapData {
     /// The pixels, row-major, top row first.
+    #[serde(with = "crate::journal::blob")]
     pub pixels: Arc<[u8]>,
     /// The palette, for indexed bitmaps.
     pub palette: Arc<[xarast_color::Rgba8]>,
@@ -91,6 +95,7 @@ pub struct BitmapData {
 /// The container format encoded bytes arrived in.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 #[repr(u8)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub enum ImageFormat {
     /// PNG.
     Png,
@@ -109,11 +114,12 @@ pub enum ImageFormat {
 /// Keeping them is a fidelity requirement, not an optimisation: re-encoding an
 /// embedded JPEG on save loses quality on every round trip. If the bytes are
 /// here, the writer emits them verbatim.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct OriginalEncoded {
     /// The container format.
     pub format: ImageFormat,
     /// The bytes, exactly as they arrived.
+    #[serde(with = "crate::journal::blob")]
     pub bytes: Arc<[u8]>,
 }
 
@@ -121,7 +127,7 @@ pub struct OriginalEncoded {
 ///
 /// Not serialised: regenerated instead. Its cache key is the parameters
 /// themselves.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ProceduralSource {
     /// The generator's parameters.
     pub params: crate::fill::ProceduralParams,
@@ -151,7 +157,7 @@ impl ProceduralSource {
 pub const PROCEDURAL_GENERATOR: &str = "xarast-procedural/0";
 
 /// One bitmap in the document.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct BitmapResource {
     /// The name shown in the bitmap gallery.
     pub name: Arc<str>,
@@ -210,6 +216,10 @@ pub struct DocumentResources {
     bitmap_by_hash: HashMap<[u8; 32], BitmapId>,
     /// Faces carried for display, in the order first seen.
     fonts: Vec<EmbeddedFont>,
+    /// Bumped by every change to the bitmap, dash, arrow and font tables
+    /// that does not go through a transaction (an insertion, a sweep), so
+    /// that the operation journal can tell when to record them.
+    tables_rev: u64,
 }
 
 impl DocumentResources {
@@ -230,7 +240,42 @@ impl DocumentResources {
         }
         let id = self.bitmaps.insert(res);
         self.bitmap_by_hash.insert(hash, id);
+        self.tables_rev += 1;
         id
+    }
+
+    /// Changes whenever the bitmap, dash, arrow or font table changes
+    /// outside a transaction. The colour table is not covered: it changes
+    /// only through [`crate::Action::SetPalette`].
+    #[must_use]
+    pub fn tables_rev(&self) -> u64 {
+        self.tables_rev
+    }
+
+    /// The tables [`DocumentResources::tables_rev`] covers, cloned (every
+    /// payload is behind an `Arc`).
+    pub(crate) fn tables(&self) -> crate::journal::Tables {
+        crate::journal::Tables {
+            bitmaps: self.bitmaps.clone(),
+            dashes: self.dashes.clone(),
+            arrows: self.arrows.clone(),
+            fonts: self.fonts.clone(),
+        }
+    }
+
+    /// Replaces the tables [`DocumentResources::tables_rev`] covers, keys
+    /// and all, rebuilding the deduplication index.
+    pub(crate) fn set_tables(&mut self, t: crate::journal::Tables) {
+        self.bitmap_by_hash = t
+            .bitmaps
+            .iter()
+            .map(|(id, r)| (r.content_hash(), id))
+            .collect();
+        self.bitmaps = t.bitmaps;
+        self.dashes = t.dashes;
+        self.arrows = t.arrows;
+        self.fonts = t.fonts;
+        self.tables_rev += 1;
     }
 
     /// Looks a bitmap up.
@@ -265,6 +310,7 @@ impl DocumentResources {
 
     /// Inserts a dash pattern.
     pub fn insert_dash(&mut self, d: xarast_geom::DashPattern) -> DashId {
+        self.tables_rev += 1;
         self.dashes.insert(d)
     }
 
@@ -282,6 +328,7 @@ impl DocumentResources {
 
     /// Inserts an arrowhead.
     pub fn insert_arrow(&mut self, a: ArrowSpec) -> ArrowId {
+        self.tables_rev += 1;
         self.arrows.insert(a)
     }
 
@@ -308,6 +355,7 @@ impl DocumentResources {
             return false;
         }
         self.fonts.push(font);
+        self.tables_rev += 1;
         true
     }
 
@@ -350,7 +398,11 @@ impl DocumentResources {
         self.bitmaps.retain(|id, _| keep.contains(&id));
         self.bitmap_by_hash
             .retain(|_, id| self.bitmaps.contains_key(*id));
-        before - self.bitmaps.len()
+        let gone = before - self.bitmaps.len();
+        if gone > 0 {
+            self.tables_rev += 1;
+        }
+        gone
     }
 }
 

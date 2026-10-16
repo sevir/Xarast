@@ -64,6 +64,7 @@ pub mod fill_edit;
 pub mod fill_mutate;
 pub mod foreign;
 pub mod history;
+pub mod journal;
 pub mod kind;
 pub mod live;
 pub mod mould;

@@ -202,7 +202,19 @@ pub const ALL_ATTR_SLOTS: [AttrSlot; ATTR_SLOT_COUNT] = [
 ];
 
 /// Rendering quality, as the format's `TAG_QUALITY` gives it.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default, Hash, PartialOrd, Ord)]
+#[derive(
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    Debug,
+    Default,
+    Hash,
+    PartialOrd,
+    Ord,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub enum Quality {
     /// Outlines only.
     Outline,
@@ -217,7 +229,7 @@ pub enum Quality {
 
 /// An attribute that can be applied several times to the same node, and so
 /// occupies no slot.
-#[derive(Clone, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, PartialEq, Eq, Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub struct MultiAttr {
     /// The key.
     pub key: Arc<str>,
@@ -226,7 +238,7 @@ pub struct MultiAttr {
 }
 
 /// The value of an attribute: one enum in place of about ninety classes.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum AttrValue {
     /// The colour the outline is painted with.
     StrokeColour(Paint),
@@ -594,7 +606,7 @@ pub fn slot_name(s: AttrSlot) -> &'static str {
 }
 
 /// The attribute node's payload.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AttrNode {
     /// The value.
     pub value: AttrValue,

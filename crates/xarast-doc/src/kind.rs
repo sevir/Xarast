@@ -29,7 +29,7 @@ use crate::text::{TextItem, TextLineNode, TextStoryNode};
 /// What a node is.
 ///
 /// Large variants are `Box`ed so that `NodeData` stays within a cache line.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum NodeKind {
     /// The root of every document.
     Document(Box<DocumentNode>),
@@ -216,7 +216,7 @@ impl NodeKind {
 }
 
 /// A free-form path.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PathNode {
     /// The geometry. Copy-on-write: cloning the node does not copy the path.
     pub data: Arc<Path>,
@@ -244,7 +244,7 @@ impl PathNode {
 }
 
 /// Whether a [`ShapeNode`] is a rectangle or an ellipse.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ShapeKind {
     /// A rectangle, possibly sheared and rotated.
     Rect,
@@ -254,7 +254,7 @@ pub enum ShapeKind {
 
 /// A rectangle or ellipse, held as a parallelogram exactly as the format does:
 /// an origin and two edge vectors, so that rotation and shear are exact.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ShapeNode {
     /// Rectangle or ellipse.
     pub shape: ShapeKind,
@@ -272,7 +272,7 @@ pub struct ShapeNode {
 /// generates the drawable path from them (`research/01 §4.7.1`). `path` caches
 /// that outline in document coordinates. Bounds, the walker and the renderer
 /// all use it, so it must never hold anything else, such as an edge template.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct QuickShape {
     /// Number of sides or points.
     pub sides: u32,
@@ -341,7 +341,7 @@ impl QuickShape {
 }
 
 /// A placed bitmap: a parallelogram plus the resource it shows.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BitmapNode {
     /// The resource.
     pub image: BitmapId,
@@ -358,7 +358,7 @@ pub struct BitmapNode {
 }
 
 /// A guideline on a guide layer.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GuidelineNode {
     /// Horizontal, rather than vertical.
     pub horizontal: bool,
@@ -369,7 +369,7 @@ pub struct GuidelineNode {
 }
 
 /// A group.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct GroupNode {
     /// The name shown in the object gallery.
     pub name: Option<Arc<str>>,
@@ -382,7 +382,9 @@ pub struct GroupNode {
 }
 
 /// How a [`ClipViewNode`] clips.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default, Hash)]
+#[derive(
+    Copy, Clone, PartialEq, Eq, Debug, Default, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum ClipViewMode {
     /// Keep what is inside the clipping path.
     #[default]
@@ -392,7 +394,9 @@ pub enum ClipViewMode {
 }
 
 /// A clipping container. The first child is the clipping path.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default, Hash)]
+#[derive(
+    Copy, Clone, PartialEq, Eq, Debug, Default, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct ClipViewNode {
     /// Which side is kept.
     pub mode: ClipViewMode,
@@ -402,16 +406,17 @@ pub struct ClipViewNode {
 ///
 /// Kept verbatim so that a `.xarast` round trip preserves it. Never rendered,
 /// never interpreted.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct OpaqueNode {
     /// The producer's own tag for the record.
     pub tag: u32,
     /// The bytes, exactly as they arrived.
+    #[serde(with = "crate::journal::blob")]
     pub payload: Arc<[u8]>,
 }
 
 /// An arrowhead or arrow tail.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ArrowSpec {
     /// A named or predefined arrow, when the file used a reference.
     pub name: Option<Arc<str>>,
@@ -424,7 +429,7 @@ pub struct ArrowSpec {
 }
 
 /// Identification of a typeface. Glyph data is never embedded in `.xar`.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct TypefaceRef {
     /// The full name, for example `"Arial Bold"`.
     pub full_name: Arc<str>,
@@ -435,7 +440,7 @@ pub struct TypefaceRef {
 }
 
 /// A named stroke shape: the "stroke type" attribute.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct StrokeDef {
     /// The stroke's name.
     pub name: Arc<str>,
@@ -444,14 +449,14 @@ pub struct StrokeDef {
 }
 
 /// A variable-width profile along a stroke.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct WidthProfile {
     /// Samples of the half-width, in order along the stroke.
     pub samples: Arc<[f32]>,
 }
 
 /// A reference to a brush definition.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct BrushRef {
     /// The brush's name.
     pub name: Arc<str>,

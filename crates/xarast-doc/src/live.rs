@@ -19,7 +19,7 @@ use crate::text::Justification;
 use crate::tree::{NodeId, Tree};
 
 /// What part a node plays in a live object.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub enum LiveRole {
     /// The node the user sees and selects.
     Controller,
@@ -41,7 +41,9 @@ impl LiveRole {
 }
 
 /// How stale a generated subtree is.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default, Hash)]
+#[derive(
+    Copy, Clone, PartialEq, Eq, Debug, Default, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum RegenState {
     /// The derived result is current.
     #[default]
@@ -53,7 +55,7 @@ pub enum RegenState {
 }
 
 /// A live object node.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LiveNode {
     /// Controller, source or generated.
     pub role: LiveRole,
@@ -66,7 +68,7 @@ pub struct LiveNode {
 }
 
 /// Which live object, and its parameters.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum LiveKind {
     /// A blend between two or more objects.
     Blend(Box<BlendParams>),
@@ -129,7 +131,7 @@ pub const MAX_BLEND_STEPS: u32 = 999;
 /// after it with [`blenders`](Self::blenders)`[k]` (defaults when there are
 /// fewer entries). The steps themselves are never nodes
 /// (`crate::blend`).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BlendParams {
     /// Number of intermediate steps per pair (at most [`MAX_BLEND_STEPS`]).
     pub steps: u32,
@@ -191,7 +193,7 @@ impl BlendParams {
 }
 
 /// One pair of a blend: how its two ends correspond.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BlenderParams {
     /// The point index the start object's outline starts at (an end point
     /// of its only subpath, counted in the path's points); `None` picks
@@ -219,7 +221,7 @@ pub const MAX_CONTOUR_RINGS: usize = 256;
 /// and the rings between blend from those to the first object's
 /// (`crate::contour`). The flattening tolerance is derived from the
 /// source's size, as the original derives it, so it is not kept either.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ContourParams {
     /// Number of steps between the outline and the last ring: the original
     /// draws `steps + 1` rings ([`rings`](Self::rings)).
@@ -307,7 +309,7 @@ impl ContourParams {
 }
 
 /// Which sort of shadow.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ShadowKind {
     /// Cast on a wall behind the object.
     Wall,
@@ -322,7 +324,7 @@ pub enum ShadowKind {
 ///
 /// Every field is kept whatever the kind, as the original keeps them: a
 /// wall shadow switched to a floor shadow finds its floor settings again.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ShadowParams {
     /// Wall, floor or glow.
     pub kind: ShadowKind,
@@ -464,7 +466,7 @@ pub use xarast_geom::bevel::BevelType;
 ///
 /// The renderer computes the lit faces at the resolution shown, so the
 /// generated node stays empty, as a shadow's does.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BevelParams {
     /// The bevel's style (its cross-section).
     pub bevel_type: BevelType,
@@ -641,7 +643,7 @@ pub use xarast_geom::mould::MouldKind;
 /// stands for the source subtree's own bounds, as the original computes
 /// them when a file has no bounds record. `threshold` is the refitting
 /// tolerance in millipoints (zero never splits a curve).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum MouldParams {
     /// A four-sided envelope, one cubic per side.
     Envelope {
@@ -811,7 +813,7 @@ impl MouldParams {
 }
 
 /// Parameters of a brush stroke.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BrushParams {
     /// The brush definition's name.
     pub brush: Arc<str>,
@@ -822,11 +824,12 @@ pub struct BrushParams {
 }
 
 /// Parameters of a plug-in effect, kept opaque until Phase 13.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EffectParams {
     /// The effect's identifier.
     pub id: Arc<str>,
     /// The effect's serialised settings, kept verbatim.
+    #[serde(with = "crate::journal::blob")]
     pub settings: Arc<[u8]>,
     /// Whether the effect is locked to the object.
     pub locked: bool,

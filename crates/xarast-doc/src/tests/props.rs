@@ -151,7 +151,7 @@ proptest! {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum Edit {
+pub(crate) enum Edit {
     Add(u8),
     Delete(u8),
     Nudge(u8, i16, i16),
@@ -172,7 +172,7 @@ enum Edit {
     Photo(u8, u8),
 }
 
-fn edit_strategy() -> impl Strategy<Value = Edit> {
+pub(crate) fn edit_strategy() -> impl Strategy<Value = Edit> {
     prop_oneof![
         (0u8..64).prop_map(Edit::Add),
         (0u8..64).prop_map(Edit::Delete),
@@ -190,7 +190,7 @@ fn edit_strategy() -> impl Strategy<Value = Edit> {
 }
 
 #[derive(Debug)]
-struct EditCommand(Edit, Vec<NodeId>);
+pub(crate) struct EditCommand(pub(crate) Edit, pub(crate) Vec<NodeId>);
 
 impl Command for EditCommand {
     fn label(&self) -> &'static str {
@@ -351,7 +351,7 @@ impl Command for EditCommand {
 }
 
 /// [`fixture`] plus one bitmap resource for [`Edit::AddBitmap`] to place.
-fn edit_fixture() -> crate::tests::Fixture {
+pub(crate) fn edit_fixture() -> crate::tests::Fixture {
     let mut f = fixture();
     f.doc
         .resources
