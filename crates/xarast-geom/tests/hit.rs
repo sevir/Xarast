@@ -1,8 +1,9 @@
 //! `hit_fill` and `hit_stroke` against a brute-force reference.
 //!
-//! The reference samples the pick disc densely and asks `kurbo`'s exact
-//! winding number of each sample against the curves themselves — for a
-//! stroke, against the outline `stroke_to_path` builds for the renderer.
+//! The reference samples the pick disc densely and asks the winding number
+//! of each sample against the region flattened a twentieth of a millipoint
+//! fine (see `polyline` for why not against the curves) — for a stroke,
+//! against the outline `stroke_to_path` builds for the renderer.
 //! Near a boundary both sides are entitled to differ by the flattening
 //! tolerance, so samples and picks that close to one are skipped.
 
@@ -58,16 +59,35 @@ fn any_matrix() -> impl Strategy<Value = Matrix> {
     ]
 }
 
-/// The winding number of `q` against a doc-space `kurbo` path, as the rule
-/// sees it in object space.
+/// How finely the reference region is flattened before its winding numbers
+/// are counted, in millipoints: far below the 1 mp the exact fill check and
+/// the 2 mp floor of the slack the disc checks keep from a boundary.
+const REFERENCE_FLATTENING: f64 = 0.05;
+
+/// A doc-space reference region as a polyline, for [`covered`].
+///
+/// `kurbo`'s winding number against a cubic solves the cubic's `y`
+/// polynomial in closed form, and when the leading coefficient is rounding
+/// noise (an integer cubic whose `y` is really quadratic, put through a
+/// non-uniform scale) that solve returns a root that is not on the curve, so
+/// a crossing is counted on the wrong side of the point (XARA-T-0344).
+/// Against straight lines the winding number is exact.
+fn polyline(bez: &BezPath) -> BezPath {
+    let mut out = BezPath::new();
+    kurbo::flatten(bez.iter(), REFERENCE_FLATTENING, |el| out.push(el));
+    out
+}
+
+/// The winding number of `q` against a doc-space region flattened by
+/// [`polyline`], as the rule sees it in object space.
 ///
 /// The query is nudged by a hundred-thousandth of a millipoint: `kurbo`
 /// casts its ray the other way and counts a vertex lying exactly on it by
 /// its own convention, so a point level with a vertex of a degenerate
 /// (zero-area) subpath can come out as inside. Every check here stays well
 /// away from any boundary, so the nudge cannot change a legitimate answer.
-fn covered(bez: &BezPath, flip: bool, rule: FillRule, q: kurbo::Point) -> bool {
-    let w = bez.winding(q + kurbo::Vec2::new(1.3e-5, 1.7e-5));
+fn covered(flat: &BezPath, flip: bool, rule: FillRule, q: kurbo::Point) -> bool {
+    let w = flat.winding(q + kurbo::Vec2::new(1.3e-5, 1.7e-5));
     rule.covers(if flip { -w } else { w })
 }
 
@@ -154,10 +174,11 @@ fn check(
     r: f64,
 ) -> Result<(), TestCaseError> {
     let slack = (r * 0.125).max(0.25) + 2.0;
+    let flat = polyline(bez);
     // Soundness of a miss: no sample well inside the region lies in the disc.
     if !got {
         for q in disc_samples(p, r) {
-            if covered(bez, flip, rule, q) && boundary_distance(bez, q) > slack {
+            if covered(&flat, flip, rule, q) && boundary_distance(bez, q) > slack {
                 return Err(TestCaseError::fail(format!(
                     "missed: {q:?} is inside, within {r} of {p:?}"
                 )));
@@ -165,7 +186,7 @@ fn check(
         }
     }
     // Soundness of a hit: the pick is inside, or near enough a boundary.
-    if got && !covered(bez, flip, rule, p) {
+    if got && !covered(&flat, flip, rule, p) {
         let d = boundary_distance(bez, p);
         prop_assert!(
             d <= r + slack,
@@ -196,7 +217,7 @@ proptest! {
         if r == 0.0 {
             // Exact containment, away from the boundary.
             if boundary_distance(&bez, pk) > 1.0 {
-                prop_assert_eq!(got, covered(&bez, flip, rule, pk));
+                prop_assert_eq!(got, covered(&polyline(&bez), flip, rule, pk));
             }
         } else {
             check(got, &bez, flip, rule, pk, r)?;
@@ -331,5 +352,38 @@ fn regression_mitre_limit_one_self_overlapping_cubic() {
     );
     let outline = stroke_to_path(&path, &style, Tolerance(0.25)).expect("a real width");
     let bez = closed(&outline.to_bez_path());
+    check(got, &bez, false, FillRule::NonZero, p.to_kurbo(), r).unwrap();
+}
+
+/// XARA-T-0344: the hit-test was right and the reference was wrong. One
+/// side of the outline is a cubic whose `y` polynomial is quadratic up to
+/// rounding noise after the scale, and `kurbo`'s closed-form solve put the
+/// crossing at a root off the curve, counting a sample 2 160 mp from the
+/// centreline of a 1 552 mp stroke as inside.
+#[test]
+fn regression_non_uniform_scale_bevelled_line_and_cubic() {
+    let mut b = Path::builder();
+    b.move_to(Point::raw(0, 0));
+    b.line_to(Point::raw(-5991, 3190));
+    b.cubic_to(
+        Point::raw(4469, 9806),
+        Point::raw(-7932, 6379),
+        Point::raw(655, -6977),
+    );
+    let path = b.build();
+    let m = Matrix::scale(1.807_664_068_797_062_9, 1.786_847_274_961_134_6);
+    let style = StrokeStyle {
+        width: Mp::new(1552),
+        cap_start: Cap::Butt,
+        cap_end: Cap::Butt,
+        join: Join::Mitre,
+        mitre_limit: 1.0,
+        dash: None,
+    };
+    let p = Point::raw(-8482, 10824);
+    let r = 1_572.579_287_380_517;
+    let got = hit_stroke_transformed(&path, m, &style, p, HitTolerance::new(r, 0.0));
+    let outline = stroke_to_path(&path, &style, Tolerance(0.25)).expect("a real width");
+    let bez = closed(&(m.to_affine() * outline.to_bez_path()));
     check(got, &bez, false, FillRule::NonZero, p.to_kurbo(), r).unwrap();
 }

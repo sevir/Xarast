@@ -2,3 +2,4 @@
 # automatically read and these particular cases re-run before any
 # novel cases are generated.
 cc 1534a3f812d777f48d27fb7a81a0a515ebff48165181784fa3fb619fe16e76ca # shrinks to the stroke accuracy scaled with the pick radius (XARA-T-0191)
+cc 602a5bdc784787e86428d20c392ac915f0862f5008312703d2c5ab27b9ad9d3a # shrinks to a reference winding number counted against a near-quadratic cubic (XARA-T-0344)
