@@ -63,12 +63,11 @@ pub fn validate_dir_name(name: &str) -> Result<(), NameError> {
     }
 }
 
-/// Validates raw name bytes read from a ZIP header. `decoded` is the name as
-/// the ZIP layer decoded it (UTF-8 when the EFS flag is set, CP437
-/// otherwise); for a non-ASCII name the two agree only when the flag is set.
-pub fn validate_raw_name(raw: &[u8], decoded: &str) -> Result<(), NameError> {
+/// Validates raw name bytes read from a ZIP header. `utf8_flag` is the
+/// header's EFS flag (general-purpose bit 11); a non-ASCII name must carry it.
+pub fn validate_raw_name(raw: &[u8], utf8_flag: bool) -> Result<(), NameError> {
     let name = std::str::from_utf8(raw).map_err(|_| NameError::NotUtf8)?;
-    if name != decoded {
+    if !utf8_flag && !name.is_ascii() {
         return Err(NameError::MissingUtf8Flag);
     }
     validate_dir_name(name)
@@ -210,17 +209,14 @@ mod tests {
 
     #[test]
     fn raw_names() {
-        assert_eq!(validate_raw_name(b"meta.xml", "meta.xml"), Ok(()));
+        assert_eq!(validate_raw_name(b"meta.xml", false), Ok(()));
+        assert_eq!(validate_raw_name(b"\xff", true), Err(NameError::NotUtf8));
+        // "é" as UTF-8 in a header that does not set the EFS flag.
         assert_eq!(
-            validate_raw_name(b"\xff", "\u{a0}"),
-            Err(NameError::NotUtf8)
-        );
-        // "é" as UTF-8 decoded as CP437 by a reader that saw no EFS flag.
-        assert_eq!(
-            validate_raw_name("é".as_bytes(), "├⌐"),
+            validate_raw_name("é".as_bytes(), false),
             Err(NameError::MissingUtf8Flag)
         );
-        assert_eq!(validate_raw_name("é".as_bytes(), "é"), Ok(()));
+        assert_eq!(validate_raw_name("é".as_bytes(), true), Ok(()));
     }
 
     #[test]

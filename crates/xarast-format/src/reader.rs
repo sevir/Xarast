@@ -32,6 +32,9 @@ use crate::{
     Profile, THUMBNAIL_ENTRY, Version, zip_method_id,
 };
 
+/// General-purpose bit 11 of a ZIP header: the name is UTF-8.
+const EFS_FLAG: u16 = 1 << 11;
+
 /// One ZIP entry, as the central directory declares it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntryInfo {
@@ -97,7 +100,11 @@ impl<R: Read + Seek> XarastReader<R> {
         for index in 0..zip.len() {
             let f = zip.by_index_raw(index)?;
             let lossy = String::from_utf8_lossy(f.name_raw()).into_owned();
-            validate_raw_name(f.name_raw(), f.name()).map_err(|reason| ReadError::BadName {
+            // `zip` 9 decodes any valid UTF-8 name as UTF-8 whether or not the
+            // EFS flag (general-purpose bit 11) is set, so the flag is read
+            // straight from the header.
+            let utf8_flag = f.flags().as_u16() & EFS_FLAG != 0;
+            validate_raw_name(f.name_raw(), utf8_flag).map_err(|reason| ReadError::BadName {
                 name: lossy.clone(),
                 reason,
             })?;

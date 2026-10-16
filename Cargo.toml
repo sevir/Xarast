@@ -57,8 +57,9 @@ flate2 = { version = "1.1", default-features = false, features = ["zlib-rs", "ru
 sha2 = "0.10"
 
 # ── Native `.xarast` format ──────────────────────────────────────────────────
-# The ZIP container. 8.x is the current stable major (9.0 is still a
-# pre-release). Every default feature is off: the container only ever writes
+# The ZIP container. 9.0.3 is the first release of the 8.x/9.x line that is not
+# yanked (every 8.x and 9.0.0-9.0.2 are). Every default feature is off: the
+# container only ever writes
 # STORED and DEFLATE (`research/06 §4.2`), and AES, bzip2, lzma, xz, ppmd and
 # deflate64 would only widen the attack surface of the reader. `zopfli` is
 # left out too: far too slow for an interactive save. `MIT`.
@@ -67,7 +68,7 @@ sha2 = "0.10"
 # the `flate2` line above (`zlib-rs`), never through `zip`'s
 # `deflate-flate2-zlib-rs` feature: the backend is a workspace decision, and
 # the golden test in `xarast-format/tests/container.rs` fails if it moves.
-zip = { version = "8.6", default-features = false, features = ["deflate-flate2"] }
+zip = { version = "9.0.3", default-features = false, features = ["deflate-flate2"] }
 # The manifest (and, from W3/W4, the SVG profile). 0.41 because it is the
 # version already in the graph; `research/06 §13.2` explains why it and not
 # a tree parser. `MIT`.
