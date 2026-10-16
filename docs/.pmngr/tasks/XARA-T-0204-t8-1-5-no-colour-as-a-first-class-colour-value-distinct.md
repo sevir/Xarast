@@ -2,13 +2,14 @@
 id: XARA-T-0204
 type: task
 title: T8.1.5 — "No colour" as a first-class Colour value, distinct from transparent black
-status: in_progress
+status: done
 parent: XARA-US-0037
 author: mcp
 labels: [phase-8, color]
 created: 2026-09-23T19:53:06Z
-updated: 2026-10-16T06:42:49Z
+updated: 2026-10-16T12:06:51Z
 started: 2026-10-16T06:42:49Z
+closed: 2026-10-16T12:06:51Z
 ---
 
 ## Description

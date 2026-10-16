@@ -2,13 +2,14 @@
 id: XARA-T-0203
 type: task
 title: T8.1.4 (walker) — Resolve Colour::Indexed through PaletteResolver and key caches on the palette epoch
-status: in_progress
+status: done
 parent: XARA-US-0037
 author: mcp
 labels: [phase-8, app, render]
 created: 2026-09-23T19:53:06Z
-updated: 2026-10-16T06:42:49Z
+updated: 2026-10-16T12:06:51Z
 started: 2026-10-16T06:42:49Z
+closed: 2026-10-16T12:06:51Z
 ---
 
 ## Description
