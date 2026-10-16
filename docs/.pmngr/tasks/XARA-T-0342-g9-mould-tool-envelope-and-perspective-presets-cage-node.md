@@ -2,14 +2,15 @@
 id: XARA-T-0342
 type: task
 title: "G9 — Mould tool: envelope and perspective presets, cage node handles, vanishing point, copy/paste mould, detach/remove, undo"
-status: in_progress
+status: done
 priority: high
 parent: XARA-US-0071
 author: mcp
 labels: [phase-13, live-effects, tools, ui, app]
 created: 2026-10-16T00:08:30Z
-updated: 2026-10-16T00:08:30Z
+updated: 2026-10-16T00:50:15Z
 started: 2026-10-16T00:08:30Z
+closed: 2026-10-16T00:50:15Z
 ---
 
 ## Description
