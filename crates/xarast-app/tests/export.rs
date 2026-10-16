@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use xarast_app::export::{ExportProgress, ExportWorker};
-use xarast_app::export_dialog::{AreaChoice, BackgroundChoice, ExportDialogOp, ExportPhase, SizingEdit};
+use xarast_app::export_dialog::{
+    AreaChoice, BackgroundChoice, ExportDialogOp, ExportPhase, SizingEdit,
+};
 use xarast_app::{AppState, DocumentId, Intent, PlatformRequest, Session};
 use xarast_doc::synth::{SynthSpec, synthetic_document};
 use xarast_io::{ExportError, ExportRequest, FormatId, FormatOptions, NoProgress, Registry, Stage};
@@ -327,7 +329,10 @@ fn the_options_of_an_export_travel_with_the_saved_document() {
     let op = |app: &mut AppState, op| app.apply(Intent::ExportDialog(op)).unwrap();
     app.apply(Intent::ShowExportDialog).unwrap();
     op(&mut app, ExportDialogOp::SetArea(AreaChoice::Page));
-    op(&mut app, ExportDialogOp::SetBleed(xarast_geom::Mp::from_pt(6.0)));
+    op(
+        &mut app,
+        ExportDialogOp::SetBleed(xarast_geom::Mp::from_pt(6.0)),
+    );
     op(&mut app, ExportDialogOp::Sizing(SizingEdit::Dpi(120.0)));
     // Choosing nothing remembers nothing.
     op(&mut app, ExportDialogOp::Export);
