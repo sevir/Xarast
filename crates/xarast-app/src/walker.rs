@@ -410,6 +410,8 @@ impl SceneWalker {
         self.attr_cache.clear();
         self.attr_epoch = Epoch::default();
         self.text_fonts = None;
+        // Regeneration keys are per tree (`xarast_doc::LiveCache`).
+        self.live.clear();
         // Substitutions are kept: they are a history the UI reports once,
         // not a cache.
         self.stories.clear();
@@ -828,6 +830,9 @@ impl SceneWalker {
         {
             self.text_fonts = None;
             self.stories.clear();
+            // Moulded text is curves laid out with those fonts, and a
+            // mould's key does not name the fonts: regenerate them all.
+            self.live.clear();
         }
         self.register_images(doc);
         if self.derived_epoch != doc.epoch {

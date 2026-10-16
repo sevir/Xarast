@@ -667,3 +667,84 @@ fn the_pairs_the_original_refuses_are_refused() {
     assert!(mould_refusal(&s.doc, objs[0]).is_some());
     assert!(mould_refusal(&s.doc, m).is_none(), "a mould may be moulded");
 }
+
+/// Mean absolute difference per channel between two renders.
+fn mean_diff(a: &Page, b: &Page) -> f64 {
+    let (a, b) = (a.surface.data(), b.surface.data());
+    assert_eq!(a.len(), b.len());
+    let sum: u64 = a
+        .iter()
+        .zip(b)
+        .map(|(x, y)| u64::from(x.abs_diff(*y)))
+        .sum();
+    sum as f64 / a.len() as f64
+}
+
+fn controllers(s: &Session) -> usize {
+    s.doc
+        .tree
+        .preorder(s.doc.tree.root())
+        .filter(|n| controller_kind(s, *n).is_some())
+        .count()
+}
+
+type Build = fn(&mut Session, &[NodeId]) -> NodeId;
+
+/// "Convert to editable shapes" (phase 13 A9) turns a mould, a contour, an
+/// inset path, a blend, and a shadow on a blend on a mould into plain
+/// shapes that draw as the live objects did, in one undoable step; a
+/// shadow stays live.
+#[test]
+fn converting_live_objects_to_shapes_keeps_how_they_look() {
+    let cases: [(&str, Build, usize); 5] = [
+        ("mould", |s, o| make(s, Kind::Mould, o[0], o[0]), 0),
+        ("contour", |s, o| make(s, Kind::Contour, o[0], o[0]), 0),
+        (
+            "inset path",
+            |s, o| {
+                live(
+                    s,
+                    LiveEdit::Apply {
+                        targets: vec![o[0]],
+                        kind: LiveKind::Contour(Box::new(ContourParams {
+                            width: Mp::from_f64_round(8_000.0),
+                            outer: false,
+                            inset: true,
+                            steps: 0,
+                            ..ContourParams::default()
+                        })),
+                    },
+                );
+                top(s, o[0])
+            },
+            0,
+        ),
+        ("blend", |s, o| make(s, Kind::Blend, o[0], o[1]), 0),
+        (
+            "shadow on a blend on a mould",
+            |s, o| {
+                let m = make(s, Kind::Mould, o[0], o[0]);
+                let b = make(s, Kind::Blend, m, o[1]);
+                make(s, Kind::Shadow, b, b)
+            },
+            1,
+        ),
+    ];
+    for (name, build, left) in cases {
+        let (mut s, objs) = fixture(&[((100_000, 100_000), RED), ((350_000, 100_000), BLUE)]);
+        let n = build(&mut s, &objs);
+        let before_digest = s.doc.canonical_digest();
+        let before = page(&s);
+        s.convert_to_shapes(xarast_app::convert::ConvertCommand::new(vec![n]))
+            .expect("converts");
+        assert_ne!(s.doc.canonical_digest(), before_digest, "{name}: converted");
+        assert_eq!(controllers(&s), left, "{name}: what stays live");
+        s.doc.validate().assert_clean();
+        let after = page(&s);
+        let d = mean_diff(&before, &after);
+        assert!(d < 0.5, "{name}: draws as before (mean |d| {d})");
+        assert!(after.inked() > 500, "{name}: draws");
+        assert_eq!(s.undo(), Some("Convert to Editable Shapes"), "{name}");
+        assert_eq!(s.doc.canonical_digest(), before_digest, "{name}: undo");
+    }
+}

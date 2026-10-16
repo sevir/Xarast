@@ -740,6 +740,190 @@ fn mould(tx: &mut Tx<'_>, targets: &[NodeId], kind: &LiveKind) -> Result<(), Edi
     Ok(())
 }
 
+/// Whether "Convert to editable shapes" turns controller `c` into plain
+/// shapes: a mould, a contour or a blend. A shadow or a bevel is left live
+/// (the original rasterises them into a bitmap-filled path,
+/// `Kernel/nodeshad.cpp:1101-1220`, `Kernel/nodebev.cpp:2149-2498`; Xarast
+/// has no such conversion yet), its objects converted inside it.
+#[must_use]
+pub fn becomes_shapes(doc: &Document, c: NodeId) -> bool {
+    controller(doc, c).is_some_and(|l| {
+        matches!(
+            l.kind,
+            LiveKind::Mould(_) | LiveKind::Contour(_) | LiveKind::Blend(_)
+        )
+    })
+}
+
+/// A plain path standing at `anchor`/`how`, drawn as `desired` says
+/// (attribute children for what it would not inherit there).
+fn plain_path(
+    tx: &mut Tx<'_>,
+    path: &xarast_geom::Path,
+    filled: bool,
+    stroked: bool,
+    desired: &ResolvedAttrs,
+    group: NodeId,
+) -> Result<(), EditError> {
+    let p = tx.create(NodeKind::Path(Box::new(xarast_doc::PathNode {
+        data: std::sync::Arc::new(path.clone()),
+        filled,
+        stroked,
+    })))?;
+    tx.attach(p, group, Attach::LastChild)?;
+    let now = inherited_batch(tx.doc(), &[p])
+        .remove(&p)
+        .ok_or(EditError::WrongKind(p))?;
+    materialise(tx, p, desired, &now, &no_remap)
+}
+
+/// `values` applied over `base`.
+fn overlaid(doc: &Document, base: &ResolvedAttrs, values: &[AttrValue]) -> ResolvedAttrs {
+    let mut stack = xarast_doc::attr::AttrStack::with_defaults(&doc.defaults);
+    for s in xarast_doc::attr::ALL_ATTR_SLOTS {
+        stack.push(std::sync::Arc::new(base.get(s).clone()));
+    }
+    for v in values {
+        stack.push(std::sync::Arc::new(v.clone()));
+    }
+    stack.snapshot()
+}
+
+/// What a controller's group is made of, worked out before the tree
+/// changes.
+enum Part {
+    /// An object, moved into the group.
+    Object(NodeId),
+    /// A generated outline: path, filled, stroked, how it is drawn.
+    Shape(xarast_geom::Path, bool, bool, ResolvedAttrs),
+}
+
+/// "Convert to editable shapes" of a mould, contour or blend controller
+/// (phase 13 A9, `BecomeA`): a plain group in its place, as the original
+/// replaces each with a group (`Kernel/nodemold.cpp:859-985`,
+/// `Kernel/ncntrcnt.cpp:550-600`, `Kernel/nodeblnd.cpp:502-620`), holding
+/// exactly what it drew: a mould's moulded copy; a contour's rings and its
+/// objects (an inset path's rings only); a blend's objects with each
+/// pair's steps between them (live objects inside a blend stay live, as
+/// the original keeps controllers there). The controller's own attributes
+/// go onto the group. Fills a mould made perspective stay perspective
+/// (the original strips them, `RemovePerspectiveFills`; Xarast can say
+/// them, so the result looks as the live object did). Returns the group;
+/// `None` for anything else.
+///
+/// # Errors
+///
+/// Whatever the transaction refuses.
+pub(crate) fn become_shapes(
+    tx: &mut Tx<'_>,
+    c: NodeId,
+    text: &mut xarast_doc::mould::TextOutlines<'_>,
+) -> Result<Option<NodeId>, EditError> {
+    let doc = tx.doc();
+    if !becomes_shapes(doc, c) {
+        return Ok(None);
+    }
+    let Some(kind) = controller(doc, c).map(|l| l.kind.clone()) else {
+        return Ok(None);
+    };
+    let parts = xarast_doc::live::parts(&doc.tree, c).ok_or(EditError::WrongKind(c))?;
+    let shape =
+        |g: &xarast_doc::regen::GeneratedShape, base: &ResolvedAttrs, extra: &[AttrValue]| {
+            let mut values = g.attrs.to_vec();
+            values.extend_from_slice(extra);
+            Part::Shape(
+                (*g.path).clone(),
+                g.filled,
+                g.stroked,
+                overlaid(doc, base, &values),
+            )
+        };
+    let mut plan: Vec<Part> = Vec::new();
+    match &kind {
+        LiveKind::Mould(_) => {
+            let base = xarast_doc::attr::resolve_uncached(&doc.tree, c, &doc.defaults);
+            for g in xarast_doc::mould::generate_with(doc, c, text).unwrap_or_default() {
+                if !g.path.is_empty() {
+                    plan.push(shape(&g, &base, &[]));
+                }
+            }
+        }
+        LiveKind::Contour(p) => {
+            let rings = xarast_doc::contour::generate(doc, c).unwrap_or_default();
+            for child in doc.tree.children(c) {
+                if Some(child) == parts.generated {
+                    let base = xarast_doc::attr::resolve_uncached(&doc.tree, child, &doc.defaults);
+                    // As the walker draws rings: negative winding.
+                    let rule = [AttrValue::WindingRule(xarast_geom::FillRule::Negative)];
+                    for g in rings.iter().filter(|g| !g.path.is_empty()) {
+                        plan.push(Part::Shape(
+                            (*g.path).clone(),
+                            true,
+                            true,
+                            overlaid(
+                                doc,
+                                &base,
+                                &g.attrs.iter().chain(&rule).cloned().collect::<Vec<_>>(),
+                            ),
+                        ));
+                    }
+                } else if child == parts.source && !p.inset {
+                    plan.extend(objects_in(doc, child).into_iter().map(Part::Object));
+                }
+            }
+        }
+        LiveKind::Blend(_) => {
+            let groups = xarast_doc::blend::generate(doc, c).unwrap_or_default();
+            let blenders = xarast_doc::blend::blenders(&doc.tree, parts.source);
+            for child in doc.tree.children(parts.source) {
+                if let Some(k) = blenders.iter().position(|(g, _, _)| *g == child) {
+                    let base = xarast_doc::attr::resolve_uncached(&doc.tree, child, &doc.defaults);
+                    for g in groups.get(k).into_iter().flatten() {
+                        if !g.path.is_empty() {
+                            plan.push(shape(g, &base, &[]));
+                        }
+                    }
+                } else if doc.tree.kind(child).is_some_and(|k| k.is_ink())
+                    && !is_generated(doc, child)
+                {
+                    plan.push(Part::Object(child));
+                }
+            }
+        }
+        _ => return Ok(None),
+    }
+    let objects: Vec<NodeId> = plan
+        .iter()
+        .filter_map(|p| match p {
+            Part::Object(n) => Some(*n),
+            Part::Shape(..) => None,
+        })
+        .collect();
+    let was = inherited_batch(doc, &objects);
+    let own: Vec<AttrValue> = doc
+        .tree
+        .children(c)
+        .filter_map(|a| match doc.tree.kind(a) {
+            Some(NodeKind::Attr(a)) => Some(a.value.clone()),
+            _ => None,
+        })
+        .collect();
+    let g = tx.create(NodeKind::Group(Box::<xarast_doc::GroupNode>::default()))?;
+    tx.attach(g, c, Attach::Next)?;
+    for v in own {
+        let a = tx.create(NodeKind::Attr(Box::new(AttrNode::new(v))))?;
+        tx.attach(a, g, Attach::LastChild)?;
+    }
+    for part in plan {
+        match part {
+            Part::Object(n) => relocate(tx, n, g, Attach::LastChild, &was)?,
+            Part::Shape(path, f, s, desired) => plain_path(tx, &path, f, s, &desired, g)?,
+        }
+    }
+    tx.delete(c)?;
+    Ok(Some(g))
+}
+
 /// The parameters of a mould controller.
 #[must_use]
 pub fn mould_params(doc: &Document, c: NodeId) -> Option<&xarast_doc::MouldParams> {

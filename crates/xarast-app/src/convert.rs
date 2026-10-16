@@ -9,6 +9,9 @@
 //!   per attribute run that keeps the story's text
 //!   ([`xarast_doc::convert_story_to_shapes`]). A story with nothing to
 //!   draw (only spaces, or no font at all) is left alone.
+//! * A **mould, contour or blend** becomes a plain group of what it drew
+//!   (phase 13 A9, `crate::live_edit::become_shapes`); a shadow or a bevel
+//!   stays live, its objects converted.
 //! * A selected **group** (or any container) converts everything
 //!   convertible inside it, as the original's command does.
 //!
@@ -95,7 +98,7 @@ fn targets<'a>(
             matches!(
                 doc.tree.kind(n),
                 Some(NodeKind::Shape(_) | NodeKind::QuickShape(_) | NodeKind::TextStory(_))
-            )
+            ) || crate::live_edit::becomes_shapes(doc, n)
         })
 }
 
@@ -131,6 +134,26 @@ pub(crate) fn convert_nodes(
                 out.push((n, group));
             }
             _ => {}
+        }
+    }
+    // Live controllers (phase 13 A9), deepest first, so that an outer one
+    // converts what an inner one has become (it looks the same).
+    let mut controllers: Vec<NodeId> = nodes
+        .iter()
+        .flat_map(|&n| tx.doc().tree.preorder(n).collect::<Vec<_>>())
+        .filter(|&n| crate::live_edit::becomes_shapes(tx.doc(), n))
+        .collect();
+    controllers.dedup();
+    for c in controllers.into_iter().rev() {
+        let doc = tx.doc();
+        if !doc.tree.is_reachable(c) || xarast_doc::live::in_generated(&doc.tree, c) {
+            continue;
+        }
+        let mut text = |doc: &xarast_doc::Document, story: NodeId| {
+            crate::text::story_outlines(fonts, doc, story).map(|(runs, _)| runs)
+        };
+        if let Some(g) = crate::live_edit::become_shapes(tx, c, &mut text)? {
+            out.push((c, g));
         }
     }
     Ok(out)
