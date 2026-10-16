@@ -288,6 +288,24 @@ impl PenTool {
         None
     }
 
+    /// A point the pointer produced, snapped by the session's switches
+    /// (`ToolCtx::snap_point`) unless it is on a point the tool treats
+    /// as a target: the first node of the path being continued (a click
+    /// there closes it) or an open end of a selected path (a click there
+    /// picks it up). Those must keep matching the raw pointer.
+    fn snapped(&self, cx: &mut ToolCtx<'_>, at: DocPoint) -> DocPoint {
+        let on_first = target(cx.doc, cx.edit).is_some_and(|t| {
+            t.first()
+                .and_then(|f| t.nodes.path.node(f))
+                .is_some_and(|f| cx.grabs(f.at, at))
+        });
+        if on_first || self.pick_end(cx, at).is_some() {
+            at
+        } else {
+            cx.snap_point(at)
+        }
+    }
+
     /// Finishes the path: forgets the start point and deselects the end.
     fn finish(&mut self, cx: &mut ToolCtx<'_>) -> bool {
         let had_start = self.start.take().is_some();
@@ -348,7 +366,7 @@ impl Tool for PenTool {
     fn on_gesture(&mut self, ev: &GestureEvent, cx: &mut ToolCtx<'_>) {
         match ev {
             GestureEvent::Hover { at } => {
-                self.hover = Some(*at);
+                self.hover = Some(self.snapped(cx, *at));
                 if self.start.is_some() || target(cx.doc, cx.edit).is_some() {
                     cx.requests.overlay_changed = true;
                 }
@@ -359,10 +377,12 @@ impl Tool for PenTool {
                     self.finish(cx);
                     return;
                 }
-                self.place(cx, *at, None);
+                let at = self.snapped(cx, *at);
+                self.place(cx, at, None);
             }
             GestureEvent::DragStart { from, .. } => {
-                self.drag = Some((*from, *from));
+                let from = self.snapped(cx, *from);
+                self.drag = Some((from, from));
                 cx.requests.overlay_changed = true;
             }
             GestureEvent::DragUpdate { to, .. } => {
@@ -371,7 +391,8 @@ impl Tool for PenTool {
                     if cx.modifiers.constrain {
                         v = constrain_45(v);
                     }
-                    *h = *from + v;
+                    // The original snaps the dragged handle too.
+                    *h = cx.snap_point(*from + v);
                     cx.requests.overlay_changed = true;
                 }
             }

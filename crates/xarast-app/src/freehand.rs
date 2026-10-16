@@ -200,7 +200,7 @@ impl Tool for FreehandTool {
                     tol: tolerance(self.smoothing, cx.viewport),
                     ..Stroke::default()
                 };
-                s.push(Self::to_k(*from));
+                s.push(Self::to_k(cx.snap_point(*from)));
                 self.stroke = Some(s);
             }
             GestureEvent::DragUpdate { to, .. } => {

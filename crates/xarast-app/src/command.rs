@@ -253,6 +253,8 @@ pub enum AppCommand {
     ShowGrid,
     /// View › Show guides.
     ShowGuides,
+    /// View › Delete all guides (one undo step).
+    DeleteAllGuides,
     /// Window › a pane: show it, re-docking it when the layout lacks it,
     /// and bring it to the front (`F9` colours, `F10` layers, `F11`
     /// bitmaps, as in the original's galleries, `research/04 §4.7`).
@@ -265,7 +267,7 @@ pub const ZOOM_STEP: f64 = std::f64::consts::SQRT_2;
 impl AppCommand {
     /// Every command, in menu order, then the tools in palette order.
     /// Tools reserved for later phases are not here: they have no key yet.
-    pub const ALL: [AppCommand; 66] = [
+    pub const ALL: [AppCommand; 67] = [
         AppCommand::Open,
         AppCommand::Import,
         AppCommand::Export,
@@ -296,6 +298,7 @@ impl AppCommand {
         AppCommand::SnapToObjects,
         AppCommand::ShowGrid,
         AppCommand::ShowGuides,
+        AppCommand::DeleteAllGuides,
         AppCommand::Cancel,
         AppCommand::ZoomIn,
         AppCommand::ZoomOut,
@@ -373,6 +376,7 @@ impl AppCommand {
             AppCommand::SnapToObjects => "Snap to objects",
             AppCommand::ShowGrid => "Show grid",
             AppCommand::ShowGuides => "Show guides",
+            AppCommand::DeleteAllGuides => "Delete all guides",
             AppCommand::ShowPane(p) => p.label(),
         }
     }
@@ -569,6 +573,7 @@ impl AppCommand {
             AppCommand::SnapToObjects => SNAP_OBJECTS,
             AppCommand::ShowGrid => SHOW_GRID,
             AppCommand::ShowGuides => SHOW_GUIDES,
+            AppCommand::DeleteAllGuides => NONE,
             AppCommand::ShowPane(p) => match p {
                 DockPane::ColourGallery => COLOURS,
                 DockPane::Layers => LAYERS,
@@ -644,6 +649,7 @@ impl AppCommand {
             AppCommand::SnapToObjects => Intent::ToggleSnap(SnapKind::Object),
             AppCommand::ShowGrid => Intent::ToggleGrid,
             AppCommand::ShowGuides => Intent::ToggleGuides,
+            AppCommand::DeleteAllGuides => Intent::Guides(crate::snap::GuideOp::DeleteAll),
             AppCommand::ShowPane(p) => Intent::ShowDialog(Dialog::Pane(p)),
         }
     }

@@ -226,6 +226,8 @@ enum NodeDrag {
         base: Vec<(NodeId, EditPath, Vec<NodeRef>)>,
         current: Vec<(NodeId, EditPath)>,
         from: DocPoint,
+        /// Where the pressed node sat: the point that snaps.
+        anchor: DocPoint,
     },
     /// Moving one handle.
     Handle {
@@ -551,6 +553,11 @@ impl ShapeEditorTool {
                 // Pressing an unselected node selects it (alone, or added
                 // with Adjust) and drags the selection it makes.
                 let pressed_selected = paths.iter().any(|e| e.id == id && e.selected.contains(&n));
+                let anchor = paths
+                    .iter()
+                    .find(|e| e.id == id)
+                    .and_then(|e| e.nodes.path.node(n))
+                    .map_or(from, |nd| nd.at);
                 let mut base = Vec::new();
                 let mut points = Vec::new();
                 for e in &paths {
@@ -572,6 +579,7 @@ impl ShapeEditorTool {
                     current: base.iter().map(|(i, p, _)| (*i, p.clone())).collect(),
                     base,
                     from,
+                    anchor,
                 }
             }
             Some(Grab::Segment(id, seg, t)) => {
@@ -598,11 +606,15 @@ impl ShapeEditorTool {
                 base,
                 current,
                 from,
+                anchor,
             }) => {
                 let mut by = to - *from;
                 if m.constrain {
                     by = constrain_45(by);
                 }
+                // The original snaps the moved point after constraining
+                // it; the pressed node is the one that lands on a line.
+                by = cx.snap_point(*anchor + by) - *anchor;
                 *current = base
                     .iter()
                     .map(|(id, p, sel)| {
@@ -630,6 +642,7 @@ impl ShapeEditorTool {
                 if m.constrain {
                     v = constrain_45(v);
                 }
+                v = cx.snap_point(at + v) - at;
                 let mut p = base.clone();
                 p.move_control(*node, *side, at + v, true);
                 *current = p;
@@ -648,6 +661,7 @@ impl ShapeEditorTool {
                 let grabbed = start.to_kurbo();
                 let p0 = kurbo::ParamCurve::eval(&grabbed, *t);
                 let from = DocPoint::from_f64_round(p0.x, p0.y);
+                let to = cx.snap_point(to);
                 *current = reshape(base, *seg, *t, to - from);
                 cx.preview.hidden = vec![*id];
             }
