@@ -2,14 +2,15 @@
 id: XARA-T-0348
 type: task
 title: "Phase 13 conformance: golden coverage per parameter, effect perf budgets, offset proptest at 10k, i18n and keyboard-only checks"
-status: in_progress
+status: done
 priority: medium
 parent: XARA-US-0072
 author: mcp
 labels: [phase-13, render, perf, tests]
 created: 2026-10-16T02:49:08Z
-updated: 2026-10-16T02:49:08Z
+updated: 2026-10-16T03:21:34Z
 started: 2026-10-16T02:49:08Z
+closed: 2026-10-16T03:21:34Z
 ---
 
 ## Description
