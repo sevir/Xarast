@@ -76,6 +76,8 @@ pub mod convert;
 pub mod crash;
 pub mod decoded;
 pub mod edit;
+pub mod export;
+pub mod export_dialog;
 pub mod fill_handles;
 pub mod fill_tool;
 pub mod fonts;

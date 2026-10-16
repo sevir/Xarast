@@ -168,6 +168,8 @@ pub enum AppCommand {
     /// File › Import…: ask the platform for image files to place in the
     /// document (phase 10, T10.7.4).
     Import,
+    /// File › Export…: the export dialog (phase 11 T11.1.8).
+    Export,
     /// File › Save: write the active document to its `.xarast`, asking
     /// for a name the first time.
     Save,
@@ -249,9 +251,10 @@ pub const ZOOM_STEP: f64 = std::f64::consts::SQRT_2;
 impl AppCommand {
     /// Every command, in menu order, then the tools in palette order.
     /// Tools reserved for later phases are not here: they have no key yet.
-    pub const ALL: [AppCommand; 65] = [
+    pub const ALL: [AppCommand; 66] = [
         AppCommand::Open,
         AppCommand::Import,
+        AppCommand::Export,
         AppCommand::Save,
         AppCommand::SaveAs,
         AppCommand::Close,
@@ -323,6 +326,7 @@ impl AppCommand {
         match self {
             AppCommand::Open => "Open…",
             AppCommand::Import => "Import…",
+            AppCommand::Export => "Export…",
             AppCommand::Save => "Save",
             AppCommand::SaveAs => "Save As…",
             AppCommand::Close => "Close",
@@ -380,6 +384,8 @@ impl AppCommand {
         // The original's Ctrl+I is its image slicer (`research/04 §4.8`),
         // which may come later; Ctrl+Shift+I leaves it free.
         const IMPORT: &[KeyChord] = &[KeyChord::ctrl_shift('i')];
+        // The original's (`research/04 §4.2`).
+        const EXPORT: &[KeyChord] = &[KeyChord::ctrl_shift('e')];
         const SAVE: &[KeyChord] = &[KeyChord::ctrl('s')];
         const SAVE_AS: &[KeyChord] = &[KeyChord::ctrl_shift('s')];
         const CLOSE: &[KeyChord] = &[KeyChord::ctrl('w')];
@@ -466,6 +472,7 @@ impl AppCommand {
         match self {
             AppCommand::Open => OPEN,
             AppCommand::Import => IMPORT,
+            AppCommand::Export => EXPORT,
             AppCommand::Save => SAVE,
             AppCommand::SaveAs => SAVE_AS,
             AppCommand::Close => CLOSE,
@@ -573,6 +580,7 @@ impl AppCommand {
         match self {
             AppCommand::Open => Intent::ShowOpenDialog,
             AppCommand::Import => Intent::ShowImportDialog,
+            AppCommand::Export => Intent::ShowExportDialog,
             AppCommand::Save => Intent::Save,
             AppCommand::SaveAs => Intent::SaveAs,
             AppCommand::Close => Intent::CloseDocument,
@@ -646,6 +654,12 @@ mod tests {
         assert_eq!(
             AppCommand::Import.intent(DevicePoint::new(0.0, 0.0)),
             Intent::ShowImportDialog
+        );
+        assert_eq!(key(AppCommand::Export), "Ctrl+Shift+E");
+        assert!(AppCommand::Export.needs_document());
+        assert_eq!(
+            AppCommand::Export.intent(DevicePoint::new(0.0, 0.0)),
+            Intent::ShowExportDialog
         );
         assert_eq!(key(AppCommand::ConvertToShapes), "Ctrl+Shift+C");
         assert_eq!(

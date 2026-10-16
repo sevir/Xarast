@@ -340,6 +340,18 @@ pub enum Intent {
     SaveDialogClosed,
     /// The answer to the question [`crate::AppState::prompt`] is asking.
     AnswerPrompt(crate::prompt::PromptAnswer),
+    /// File › Export…: open the export dialog for the active document.
+    ShowExportDialog,
+    /// An operation of the export dialog
+    /// ([`crate::export_dialog::ExportDialogOp`]).
+    ExportDialog(crate::export_dialog::ExportDialogOp),
+    /// The name the export file chooser came back with
+    /// ([`PlatformRequest::ShowExportFileDialog`]). A missing or foreign
+    /// extension gets the format's.
+    ExportTo(std::path::PathBuf),
+    /// The export file chooser was dismissed or failed: the dialog goes
+    /// back to its fields.
+    ExportFileDialogClosed,
 }
 
 /// Something only the platform layer can do, queued by
@@ -363,6 +375,20 @@ pub enum PlatformRequest {
         file_name: String,
         /// Where to start, when the document has a directory.
         directory: Option<std::path::PathBuf>,
+    },
+    /// Show a file chooser for an export's destination. The answer comes
+    /// back as [`Intent::ExportTo`], or [`Intent::ExportFileDialogClosed`].
+    ShowExportFileDialog {
+        /// The dialog title ("Export").
+        title: String,
+        /// The file name to offer, with the format's extension.
+        file_name: String,
+        /// Where to start, when the document has a directory.
+        directory: Option<std::path::PathBuf>,
+        /// The filter's name ("PNG (*.png)").
+        filter: String,
+        /// The extensions the format answers to, without the dot.
+        extensions: Vec<&'static str>,
     },
     /// Put this text on the system clipboard: a copy's SVG flavour.
     SetClipboardText(String),

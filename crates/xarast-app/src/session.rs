@@ -287,13 +287,7 @@ impl Session {
     #[must_use]
     pub fn adopt(id: DocumentId, doc: Document, path: Option<PathBuf>) -> Session {
         let edit = EditState::for_document(&doc);
-        let mut viewport = Viewport::new(DeviceSize::new(1024, 768));
-        viewport.fit_bounds_to(&doc);
-        viewport.zoom_to(
-            crate::viewport::ZoomTarget::Page,
-            &doc,
-            xarast_geom::Rect::EMPTY,
-        );
+        let viewport = initial_viewport(&doc);
         let size = viewport.size();
         let decoded_images = crate::decoded::DecodedImages::new();
         Session {
@@ -753,6 +747,13 @@ impl Session {
     #[must_use]
     pub fn scene_walker(&self) -> SceneWalker {
         SceneWalker::new().with_decoded_images(self.decoded_images.clone())
+    }
+
+    /// The font service this session's walker lays text out with, when it
+    /// was given one; `None` means the process's
+    /// ([`crate::fonts::shared`]).
+    pub(crate) fn walker_fonts(&self) -> Option<Arc<crate::fonts::FontService>> {
+        self.walker.base_fonts().cloned()
     }
 
     /// Packages the current scene and view as a frame for the render
@@ -1679,7 +1680,11 @@ impl Session {
             | Intent::SaveAs
             | Intent::SaveTo(_)
             | Intent::SaveDialogClosed
-            | Intent::AnswerPrompt(_) => {}
+            | Intent::AnswerPrompt(_)
+            | Intent::ShowExportDialog
+            | Intent::ExportDialog(_)
+            | Intent::ExportTo(_)
+            | Intent::ExportFileDialogClosed => {}
         }
         Ok(self.finish_apply(changed))
     }
@@ -2020,6 +2025,22 @@ pub fn build_scene(session: &Session, dirty: Option<DeviceRect>) -> BuiltScene {
         view: session.view_params(),
         stats,
     }
+}
+
+/// The view a session over `doc` starts with: a 1024 × 768 window
+/// fitted to the document and zoomed to its page. Export walks with this
+/// view rather than the session's, so that what a file holds never
+/// depends on where the user has scrolled or zoomed.
+#[must_use]
+pub fn initial_viewport(doc: &Document) -> Viewport {
+    let mut viewport = Viewport::new(DeviceSize::new(1024, 768));
+    viewport.fit_bounds_to(doc);
+    viewport.zoom_to(
+        crate::viewport::ZoomTarget::Page,
+        doc,
+        xarast_geom::Rect::EMPTY,
+    );
+    viewport
 }
 
 /// A scene together with everything needed to render it.

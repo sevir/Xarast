@@ -281,6 +281,10 @@ pub struct AppState {
     thumbnails: crate::bitmap_gallery::Thumbnails,
     /// Each document's bitmap-gallery entries, rebuilt when it changes.
     gallery: HashMap<DocumentId, crate::bitmap_gallery::EntryCache>,
+    /// The export dialog, while it is open (phase 11 T11.1.8).
+    export: Option<crate::export_dialog::ExportDialog>,
+    /// Runs exports off this thread.
+    exporter: crate::export::ExportWorker,
 }
 
 /// A background import and where its image goes.
@@ -638,7 +642,156 @@ impl AppState {
         let (a, b) = (std::sync::Arc::clone(&wake), std::sync::Arc::clone(&wake));
         self.imports.set_waker(Box::new(move || a()));
         self.thumbnails.set_waker(Box::new(move || b()));
+        let c = std::sync::Arc::clone(&wake);
+        self.exporter.set_waker(Box::new(move || c()));
         self.saver.set_waker(Box::new(move || wake()));
+    }
+
+    /// What the export dialog shows, while it is open.
+    #[must_use]
+    pub fn export_dialog_view(&self) -> Option<crate::export_dialog::ExportDialogView> {
+        let d = self.export.as_ref()?;
+        let mut v = d.view();
+        if let (crate::export_dialog::ExportPhase::Running { stage, fraction }, Some(p)) =
+            (&mut v.phase, self.exporter.progress())
+        {
+            (*stage, *fraction) = p;
+        }
+        Some(v)
+    }
+
+    /// Whether an export is running.
+    #[must_use]
+    pub fn exporting(&self) -> bool {
+        self.exporter.busy()
+    }
+
+    /// File › Export…: opens the dialog over the active document.
+    fn open_export_dialog(&mut self) -> Changed {
+        let Some(s) = self.active() else {
+            return Changed::empty();
+        };
+        if self.export.is_some() {
+            return Changed::empty();
+        }
+        self.export = Some(crate::export_dialog::ExportDialog::open(
+            s,
+            self.exporter.registry(),
+        ));
+        Changed::UI
+    }
+
+    fn export_dialog_op(&mut self, op: crate::export_dialog::ExportDialogOp) -> Changed {
+        use crate::export_dialog::{ExportDialogOp, ExportPhase};
+        let Some(d) = self.export.as_mut() else {
+            return Changed::empty();
+        };
+        match op {
+            ExportDialogOp::Export => {
+                if !d.view().can_export {
+                    return Changed::empty();
+                }
+                d.phase = ExportPhase::Choosing;
+                let format = d.format();
+                let extensions = self
+                    .exporter
+                    .registry()
+                    .get(format)
+                    .map_or_else(Vec::new, |e| e.extensions().to_vec());
+                let filter = format!(
+                    "{} ({})",
+                    format.name(),
+                    extensions
+                        .iter()
+                        .map(|e| format!("*.{e}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                self.requests.push(PlatformRequest::ShowExportFileDialog {
+                    title: "Export".to_owned(),
+                    file_name: d.file_name(),
+                    directory: d.directory().map(Path::to_path_buf),
+                    filter,
+                    extensions,
+                });
+            }
+            ExportDialogOp::Cancel if self.exporter.busy() => {
+                self.exporter.cancel();
+            }
+            ExportDialogOp::Cancel | ExportDialogOp::Close => {
+                // Closing while an export runs stops it: no file.
+                self.exporter.cancel();
+                self.export = None;
+            }
+            op => d.apply(op),
+        }
+        Changed::UI
+    }
+
+    /// Starts the export the dialog describes, writing to `path`.
+    fn start_export(&mut self, path: &Path) -> Changed {
+        use crate::export_dialog::ExportPhase;
+        let Some(d) = self.export.as_mut() else {
+            return Changed::empty();
+        };
+        if self.exporter.busy() {
+            return Changed::empty();
+        }
+        let request = d.request(path);
+        let job = match self.docs.get(d.doc) {
+            Some(s) => s.export_job(request),
+            None => Err(xarast_io::ExportError::Area(
+                "the document was closed".to_owned(),
+            )),
+        };
+        match job {
+            Ok(job) => {
+                d.phase = ExportPhase::Running {
+                    stage: xarast_io::Stage::Scene,
+                    fraction: 0.0,
+                };
+                self.exporter.start(job);
+            }
+            Err(e) => {
+                d.phase = ExportPhase::Failed {
+                    message: e.to_string(),
+                };
+            }
+        }
+        Changed::UI
+    }
+
+    /// Takes the export that has ended, if one has, into the dialog and
+    /// the status bar. Never blocks.
+    pub fn poll_exports(&mut self) -> Changed {
+        match self.exporter.poll() {
+            Some(o) => self.finish_export(o),
+            None => Changed::empty(),
+        }
+    }
+
+    /// Blocks until the running export ends, then takes it. For tests.
+    pub fn wait_exports(&mut self) -> Changed {
+        match self.exporter.wait() {
+            Some(o) => self.finish_export(o),
+            None => Changed::empty(),
+        }
+    }
+
+    fn finish_export(&mut self, o: crate::export::ExportOutcome) -> Changed {
+        let name = o
+            .destination
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        self.notice = Some(match &o.result {
+            Ok(_) => format!("Exported {name}"),
+            Err(xarast_io::ExportError::Cancelled) => "Export cancelled".to_owned(),
+            Err(e) => format!("Could not export {name}: {e}"),
+        });
+        if let Some(d) = &mut self.export {
+            d.finish(o.destination, o.result);
+        }
+        Changed::UI
     }
 
     /// Takes the requests the platform layer owes, oldest first.
@@ -912,6 +1065,16 @@ impl AppState {
                 Ok(Changed::UI)
             }
             Intent::AnswerPrompt(answer) => Ok(self.answer(answer)),
+            Intent::ShowExportDialog => Ok(self.open_export_dialog()),
+            Intent::ExportDialog(op) => Ok(self.export_dialog_op(op)),
+            Intent::ExportTo(path) => Ok(self.start_export(&path)),
+            Intent::ExportFileDialogClosed => Ok(match &mut self.export {
+                Some(d) if d.phase == crate::export_dialog::ExportPhase::Choosing => {
+                    d.phase = crate::export_dialog::ExportPhase::Editing;
+                    Changed::UI
+                }
+                _ => Changed::empty(),
+            }),
             intent => match self.active_mut() {
                 Some(s) => s.apply(intent),
                 None => Ok(Changed::empty()),
