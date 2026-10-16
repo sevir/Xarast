@@ -86,13 +86,17 @@ pub fn generate_with(
     let params = params.unwrap_or(own);
     let p = parts(tree, controller)?;
     let start = resolve_uncached(tree, p.generated.unwrap_or(controller), &doc.defaults);
-    let inks = ink_nodes(tree, p.source);
-    let end = inks
-        .first()
-        .map(|&n| resolve_uncached(tree, n, &doc.defaults));
+    // What the source draws: a nested mould as its moulded copy (J4).
+    let inks = inks(doc, p.source);
+    let end = inks.first().map(|i| i.attrs(doc));
     let sources: Vec<Path> = inks
         .iter()
-        .map(|&n| silhouette(doc, n, params.include_line_widths))
+        .map(|i| match i {
+            Ink::Node(n) => silhouette(doc, *n, params.include_line_widths),
+            Ink::Moulded(g) => {
+                silhouette_of(doc, &g.path, &i.attrs(doc), params.include_line_widths)
+            }
+        })
         .filter(|s| !s.is_empty())
         .collect();
     let join = params
@@ -163,6 +167,79 @@ pub fn ring_ratio(params: &ContourParams, k: usize, n: usize) -> f64 {
     }
 }
 
+/// One object a generator reads from a subtree as it is drawn.
+#[derive(Clone, Debug)]
+pub enum Ink {
+    /// An ink node of the subtree.
+    Node(NodeId),
+    /// A shape of a nested mould's copy, which carries every slot it is
+    /// drawn with.
+    Moulded(GeneratedShape),
+}
+
+impl Ink {
+    /// The attributes it is drawn with.
+    #[must_use]
+    pub fn attrs(&self, doc: &Document) -> ResolvedAttrs {
+        match self {
+            Ink::Node(n) => resolve_uncached(&doc.tree, *n, &doc.defaults),
+            Ink::Moulded(g) => resolved_from(doc, &g.attrs),
+        }
+    }
+}
+
+/// The attributes in force once `values` are applied over the document's
+/// defaults.
+#[must_use]
+pub fn resolved_from(doc: &Document, values: &[AttrValue]) -> ResolvedAttrs {
+    let mut stack = crate::attr::AttrStack::with_defaults(&doc.defaults);
+    for v in values {
+        stack.push(Arc::new(v.clone()));
+    }
+    stack.snapshot()
+}
+
+/// The objects under `root` as a contour or a blend reads them (phase 13
+/// J4): every ink node in document order, a **mould controller anywhere
+/// below** as its moulded copy (what the original's path conversion of a
+/// mould passes back is its moulder's paths, `Kernel/nodemold.cpp:
+/// 997-1015`), and nothing any other nested live object generated. Text is
+/// left out (its outlines are laid out by the application).
+#[must_use]
+pub fn inks(doc: &Document, root: NodeId) -> Vec<Ink> {
+    let tree = &doc.tree;
+    let mut out = Vec::new();
+    let mut skip_under: Option<NodeId> = None;
+    for n in tree.preorder(root) {
+        if let Some(s) = skip_under {
+            if tree.is_ancestor(s, n) {
+                continue;
+            }
+            skip_under = None;
+        }
+        match tree.kind(n) {
+            Some(NodeKind::Live(l))
+                if l.role == LiveRole::Controller && matches!(l.kind, LiveKind::Mould(_)) =>
+            {
+                skip_under = Some(n);
+                out.extend(
+                    crate::mould::generate(doc, n)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|g| !g.path.is_empty())
+                        .map(Ink::Moulded),
+                );
+            }
+            Some(NodeKind::Live(l)) if l.role == LiveRole::Generated => skip_under = Some(n),
+            Some(NodeKind::Path(_) | NodeKind::Shape(_) | NodeKind::QuickShape(_)) => {
+                out.push(Ink::Node(n));
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// The objects a contour contours: every ink node under `source`, in
 /// document order, leaving out anything a nested live object generated.
 #[must_use]
@@ -197,6 +274,18 @@ pub fn silhouette(doc: &Document, node: NodeId, include_line_widths: bool) -> Pa
         return Path::new();
     };
     let attrs = resolve_uncached(&doc.tree, node, &doc.defaults);
+    silhouette_of(doc, &path, &attrs, include_line_widths)
+}
+
+/// [`silhouette`] of an outline drawn with `attrs` (a shape of a nested
+/// mould's copy, which is no node).
+#[must_use]
+pub fn silhouette_of(
+    doc: &Document,
+    path: &Path,
+    attrs: &ResolvedAttrs,
+    include_line_widths: bool,
+) -> Path {
     let tol = Tolerance::BOOLEAN;
     // The region as drawn: negative and positive fill non-zero
     // (`FillRule::as_drawn`).
@@ -204,12 +293,12 @@ pub fn silhouette(doc: &Document, node: NodeId, include_line_widths: bool) -> Pa
         AttrValue::WindingRule(r) => r.as_drawn(),
         _ => FillRule::EvenOdd,
     };
-    let (closed, open) = split_closed(&path);
+    let (closed, open) = split_closed(path);
     let mut pieces: Vec<Path> = Vec::new();
     if !closed.is_empty() {
         pieces.push(self_union(&closed, rule, tol));
     }
-    let stroke = visible_stroke(doc, &attrs);
+    let stroke = visible_stroke(doc, attrs);
     if let Some(style) = &stroke {
         if !open.is_empty()
             && let Ok(o) = stroke_to_path(&open, style, tol)

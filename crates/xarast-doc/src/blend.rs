@@ -37,7 +37,7 @@ use xarast_geom::blend::{Correspondence, Outline, correspond, pair_up};
 use xarast_geom::{BiasGain, Path};
 
 use crate::attr::{ALL_ATTR_SLOTS, AttrSlot, AttrValue, ResolvedAttrs, resolve_uncached};
-use crate::contour::{blend_paint, geometry, ink_nodes, lerp_mp, visible};
+use crate::contour::{Ink, blend_paint, geometry, inks, lerp_mp, visible};
 use crate::document::Document;
 use crate::fill::{FillGeometry, Paint};
 use crate::kind::NodeKind;
@@ -171,25 +171,21 @@ fn end_of(
         stroked: Vec::new(),
         pieces: Vec::new(),
     };
-    // An end that is a mould is its moulded copy, as drawn (XARA-T-0334).
-    let moulded: Vec<(Path, Vec<AttrValue>, bool, bool)> = match tree.kind(node) {
-        Some(NodeKind::Live(l))
-            if l.role == LiveRole::Controller && matches!(l.kind, LiveKind::Mould(_)) =>
-        {
-            crate::mould::generate(doc, node)
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|g| !g.path.is_empty())
-                .map(|g| {
+    // A mould in the end, at its top or anywhere below, is its moulded
+    // copy, as drawn (XARA-T-0334, XARA-T-0337); a moved preview does not
+    // move it.
+    let moulded: Vec<(Path, Vec<AttrValue>, bool, bool)> = inks(doc, node)
+        .into_iter()
+        .filter_map(|ink| {
+            let n = match ink {
+                Ink::Moulded(g) => {
                     let mut a = g.attrs.to_vec();
                     canonical(doc, &mut a, g.filled, g.stroked);
-                    ((*g.path).clone(), a, g.filled, g.stroked)
-                })
-                .collect()
-        }
-        _ => ink_nodes(tree, node)
-            .into_iter()
-            .filter_map(|n| {
+                    return Some(((*g.path).clone(), a, g.filled, g.stroked));
+                }
+                Ink::Node(n) => n,
+            };
+            {
                 let path = geometry(doc, n)?;
                 let (f, s) = match tree.kind(n) {
                     Some(NodeKind::Path(p)) => (p.filled, p.stroked),
@@ -210,9 +206,9 @@ fn end_of(
                     _ => path,
                 };
                 Some((path, attrs, f, s))
-            })
-            .collect(),
-    };
+            }
+        })
+        .collect();
     for (path, attrs, f, s) in moulded {
         let object = end.attrs.len();
         end.attrs.push(attrs);

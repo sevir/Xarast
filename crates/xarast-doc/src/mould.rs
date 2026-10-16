@@ -33,20 +33,27 @@
 //!   by its three corners under an envelope.
 //! * A nested live object's generated output (a contour's rings, a blend's
 //!   steps, an inner mould's copy) is moulded where its generated node
-//!   stands; pixel effects inside a mould (shadow, bevel, feather) are not
-//!   moulded.
+//!   stands.
+//! * Pixel effects inside a mould follow the original's conversion of its
+//!   source to paths (`Kernel/noderend.cpp:4465-4490`, phase 13 J4,
+//!   XARA-T-0337): a **shadow** passes back nothing but its objects
+//!   (`Kernel/nodeshad.cpp:1058-1248`: only a replacing conversion builds a
+//!   path), so it is not in the copy; a **bevel** passes back its band as a
+//!   flat filled path, unlit (`Kernel/nodebev.cpp:2499-2528`); a
+//!   **feather** is an attribute applied to each path, so each shape from a
+//!   feathered object (or from inside a feathered group) carries it.
 
 use std::sync::Arc;
 
 use xarast_color::{Colour, ColourValue, Stop};
 use xarast_geom::mould::MouldGeometry;
-use xarast_geom::{FillRule, Path, Point, Rect};
+use xarast_geom::{BiasGain, BoolOp, FillRule, Join, Mp, Path, Point, Rect, boolean, contour};
 
-use crate::attr::{ALL_ATTR_SLOTS, AttrValue, ResolvedAttrs, resolve_uncached};
+use crate::attr::{ALL_ATTR_SLOTS, AttrSlot, AttrValue, ResolvedAttrs, resolve_uncached};
 use crate::document::Document;
 use crate::fill::{FillGeometry, Perspective, Tiling};
 use crate::kind::NodeKind;
-use crate::live::{LiveKind, LiveRole, MouldKind, MouldParams, parts};
+use crate::live::{BevelParams, LiveKind, LiveRole, MouldKind, MouldParams, parts};
 use crate::regen::{GeneratedShape, LiveOutput};
 use crate::text_convert::OutlineRun;
 use crate::tree::{NodeId, Tree};
@@ -104,18 +111,41 @@ pub fn generate_preview(
     let g = params.geometry(source);
     let threshold = f64::from(params.threshold());
     let mut out: Vec<GeneratedShape> = Vec::new();
-    let mut push =
-        |path: &Path, attrs: &ResolvedAttrs, over: &[AttrValue], fill: bool, stroke: bool| {
-            let moulded = xarast_geom::mould::mould_path(&*g, path, threshold);
-            out.push(GeneratedShape {
-                path: Arc::new(moulded),
-                attrs: Arc::from(moulded_attrs(&*g, attrs, over, fill, stroke)),
-                filled: fill,
-                stroked: stroke,
-            });
-        };
+    // `at`: the node the shape comes from, whose feather it carries.
+    let mut push = |at: NodeId,
+                    path: &Path,
+                    attrs: &ResolvedAttrs,
+                    over: &[AttrValue],
+                    fill: bool,
+                    stroke: bool| {
+        let moulded = xarast_geom::mould::mould_path(&*g, path, threshold);
+        let mut over = over.to_vec();
+        // A shape of a nested copy keeps the feather it carries.
+        if !over
+            .iter()
+            .any(|a| matches!(a, AttrValue::Feather { size, .. } if size.raw() > 0))
+        {
+            over.push(feather_inside(tree, at, p.source));
+        }
+        out.push(GeneratedShape {
+            path: Arc::new(moulded),
+            attrs: Arc::from(moulded_attrs(&*g, attrs, &over, fill, stroke)),
+            filled: fill,
+            stroked: stroke,
+        });
+    };
+    // Inner bevels' bands, drawn over their objects once the walk leaves
+    // the bevel controller.
+    let mut bands: Vec<(NodeId, Band)> = Vec::new();
     let mut skip_under: Option<NodeId> = None;
     for n in tree.preorder(p.source) {
+        while let Some((c, _)) = bands.last()
+            && !tree.is_ancestor(*c, n)
+        {
+            if let Some((c, b)) = bands.pop() {
+                push(c, &b.path, &b.base, &b.over, true, false);
+            }
+        }
         if let Some(s) = skip_under {
             if tree.is_ancestor(s, n) {
                 continue;
@@ -132,6 +162,18 @@ pub fn generate_preview(
                     let Some(c) = tree.links(n).parent else {
                         continue;
                     };
+                    // A bevel's band, flat (`bevel_band`): an outer one
+                    // beneath its objects, an inner one over them.
+                    if let LiveKind::Bevel(bp) = &inner.kind {
+                        if let Some(b) = bevel_band(doc, c, n, bp) {
+                            if bp.outer {
+                                push(c, &b.path, &b.base, &b.over, true, false);
+                            } else {
+                                bands.push((c, b));
+                            }
+                        }
+                        continue;
+                    }
                     let shapes = match &inner.kind {
                         LiveKind::Mould(_) => generate_with(doc, c, text),
                         LiveKind::Contour(_) => match crate::regen::regenerate(doc, c, 0.0) {
@@ -167,7 +209,7 @@ pub fn generate_preview(
                             // As the walker draws rings.
                             over.push(AttrValue::WindingRule(FillRule::Negative));
                         }
-                        push(&s.path, &base, &over, s.filled, s.stroked);
+                        push(n, &s.path, &base, &over, s.filled, s.stroked);
                     }
                 }
                 // An inner mould's source is drawn through it, an inset
@@ -185,6 +227,7 @@ pub fn generate_preview(
                 for run in text(doc, n).unwrap_or_default() {
                     // Glyphs fill non-zero, whatever is in force.
                     push(
+                        n,
                         &run.path,
                         &run.attrs,
                         &[AttrValue::WindingRule(FillRule::NonZero)],
@@ -195,12 +238,12 @@ pub fn generate_preview(
             }
             NodeKind::Path(pn) => {
                 let attrs = resolve_uncached(tree, n, &doc.defaults);
-                push(&pn.data, &attrs, &[], pn.filled, pn.stroked);
+                push(n, &pn.data, &attrs, &[], pn.filled, pn.stroked);
             }
             NodeKind::Shape(_) | NodeKind::QuickShape(_) => {
                 if let Some(path) = crate::contour::geometry(doc, n) {
                     let attrs = resolve_uncached(tree, n, &doc.defaults);
-                    push(&path, &attrs, &[], true, true);
+                    push(n, &path, &attrs, &[], true, true);
                 }
             }
             NodeKind::Bitmap(b) => {
@@ -225,12 +268,141 @@ pub fn generate_preview(
                 });
                 // The image once, not tiled past its edges.
                 let mapping = AttrValue::FillMapping(Tiling::Simple);
-                push(&pb.build(), &attrs, &[fill, mapping], true, false);
+                push(n, &pb.build(), &attrs, &[fill, mapping], true, false);
             }
             _ => {}
         }
     }
+    while let Some((c, b)) = bands.pop() {
+        push(c, &b.path, &b.base, &b.over, true, false);
+    }
     Some(out)
+}
+
+/// A bevel's band as a moulded copy carries it: a flat, unstroked path.
+struct Band {
+    path: Path,
+    base: ResolvedAttrs,
+    over: Vec<AttrValue>,
+}
+
+/// The band of the bevel `controller` (its generated node `generated`) as
+/// the original passes it to a mould: the bevel node's own ink path, the
+/// band outside the objects (outer) or inside them (inner), filled with
+/// what is applied to it, its line colour "no colour"
+/// (`Kernel/nodebev.cpp:2499-2528`), and **no lighting** (the lighting is a
+/// bitmap the conversion does not pass back). The band is painted in the
+/// bevel's own colour, else its first object's fill, as the bevel node
+/// carries it (`BevelParams::paint`, `tools/opbevel.cpp:1318-1341`).
+fn bevel_band(
+    doc: &Document,
+    controller: NodeId,
+    generated: NodeId,
+    params: &BevelParams,
+) -> Option<Band> {
+    let tree = &doc.tree;
+    if params.indent.raw() <= 0 {
+        return None;
+    }
+    let source = parts(tree, controller)?.source;
+    let sources: Vec<Path> = crate::contour::inks(doc, source)
+        .iter()
+        .map(|i| match i {
+            crate::contour::Ink::Node(n) => crate::contour::silhouette(doc, *n, false),
+            crate::contour::Ink::Moulded(g) => {
+                crate::contour::silhouette_of(doc, &g.path, &i.attrs(doc), false)
+            }
+        })
+        .filter(|s| !s.is_empty())
+        .collect();
+    if sources.is_empty() {
+        return None;
+    }
+    let base = resolve_uncached(tree, generated, &doc.defaults);
+    let join = match base.get(AttrSlot::JoinType) {
+        AttrValue::JoinType(j) => *j,
+        _ => Join::Bevel,
+    };
+    let bounds = sources
+        .iter()
+        .map(Path::bounds)
+        .reduce(Rect::union)
+        .unwrap_or(Rect::EMPTY);
+    let tol = contour::contour_tolerance(bounds);
+    let steps = contour::steps(
+        &sources,
+        params.outer,
+        &[f64::from(params.indent.raw())],
+        join,
+        contour::CONTOUR_MITRE_LIMIT,
+        tol,
+    );
+    let edge = steps.steps.first()?;
+    let path = if params.outer {
+        boolean(
+            edge,
+            &steps.source,
+            BoolOp::Difference,
+            FillRule::NonZero,
+            tol,
+        )
+    } else {
+        boolean(
+            &steps.source,
+            edge,
+            BoolOp::Difference,
+            FillRule::NonZero,
+            tol,
+        )
+    };
+    if path.is_empty() {
+        return None;
+    }
+    let fill = match &params.colour {
+        Some(c) => FillGeometry::Flat { value: c.clone() },
+        None => crate::live::first_fill(tree, controller, &doc.defaults)?,
+    };
+    Some(Band {
+        path,
+        base,
+        over: vec![
+            AttrValue::Fill(fill),
+            AttrValue::WindingRule(FillRule::NonZero),
+        ],
+    })
+}
+
+/// The feather a shape of a moulded copy carries: the nearest feather
+/// attribute on the object it comes from or on a node holding it **inside
+/// the mould's source** (the original passes every path back with the
+/// attributes applied to it, a feather among them, and does not factor a
+/// feather out, `Kernel/noderend.cpp:4509-4545`, `Kernel/fthrattr.cpp:
+/// 1772-1779`), else none. A feather on the mould or above it feathers the
+/// whole mould where the walker meets it, not each shape again.
+fn feather_inside(tree: &Tree, at: NodeId, source: NodeId) -> AttrValue {
+    let none = AttrValue::Feather {
+        size: Mp::ZERO,
+        profile: BiasGain::IDENTITY,
+    };
+    if !tree.is_ancestor(source, at) && at != source {
+        return none;
+    }
+    let mut n = Some(at);
+    while let Some(node) = n {
+        for c in tree.children(node) {
+            if let Some(NodeKind::Attr(a)) = tree.kind(c)
+                && let AttrValue::Feather { size, .. } = &a.value
+                && size.raw() > 0
+            {
+                return a.value.clone();
+            }
+        }
+        if node == source {
+            break;
+        }
+        n = tree.links(node).parent;
+    }
+    none
 }
 
 /// The rectangle a mould maps from: its own, or its source subtree's

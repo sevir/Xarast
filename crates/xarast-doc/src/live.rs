@@ -567,7 +567,7 @@ impl BevelParams {
 }
 
 /// The fill a live controller's source's first object is drawn with.
-fn first_fill(
+pub(crate) fn first_fill(
     tree: &Tree,
     controller: NodeId,
     defaults: &crate::attr::DefaultAttrs,
