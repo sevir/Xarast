@@ -831,37 +831,83 @@ the `live-source`:
   `a_bevel_reads_back_exactly_and_saves_to_the_same_bytes` (all fifteen
   styles) and the corpus round trip.
 - **Baked** (`svg/effect.rs` `bevel`, `xarast:filter="bevel"`, dropped by
-  the reader like the feather's and shadow's): the silhouette (grown by
-  a disc for an outer bevel) blurred by σ = indent/2 into a height field,
-  `feDiffuseLighting` with `surfaceScale` = 0.25 × indent and
-  `feDistantLight azimuth = 180 − angle` (y-down frame; the light sits
-  opposite its stored travel) and `elevation = tilt`, then `arithmetic`
-  `k1 = contrast / sin(tilt)`, `k2 = 1 − contrast` (unchanged where flat)
-  over `SourceGraphic` (inner) or a flood of the colour composited under
-  the object (outer). research/06's `feSpecularLighting` chain was not
-  used: a diffuse ratio is what the renderer computes. `feDiffuseLighting`
-  differentiates per filter pixel, so the slope depends on resolution;
-  the scale was tuned at 72 dpi (`export.md`). A controller that also
-  owns a feather stays unbaked (`Stats::bevels_unbaked`).
-- **The bake is still resolution-dependent (XARA-T-0326, not done).**
-  `kernelUnitLength` would fix `feDiffuseLighting`'s step in user units,
-  but Chromium and resvg ignore it, so it is no fix. What would work
-  everywhere, sketched and not built: take the slope as a difference of
-  the height field offset along the light in user units: `feColorMatrix`
-  the blurred alpha into an opaque grey `h`, `feOffset` it by ±δ (δ ≈
-  indent/4) towards and away from the light (two inputs `h⁺`, `h⁻`, the
-  second inverted to `1 − h⁻` by another matrix), `feComposite
-  arithmetic k2 = k3 = 0.5, k4 = 0` gives `D = ½ + ½(h⁺ − h⁻)` with alpha
-  1 (no clamp), then `arithmetic k1 = 2G, k2 = 1 − G` over the paint
-  gives `paint · (1 + G(2D − 1))`, G ∝ contrast · cot(elevation) / δ.
-  Every length is a user unit, so it scales with the drawing. It needs
-  re-tuning against the corpus export at two resolutions (`export.md`'s
-  comparison at 72 and e.g. 288 dpi), which is why it was left.
-- **The bake ignores the renderer's newer bevel rules** (XARA-T-0326):
-  joins (the band's corners are the blur's, i.e. round) and the inner
-  band painted in the first object's flat fill (the bake lights the
-  object's own colours). No corpus file shows the second; the first
-  changes testimp1's frame.
+  the reader like the feather's and shadow's). **Rewritten in XARA-T-0328
+  (2026-10-16): every length is a user unit**, so the filter draws the
+  same at any export resolution. The first version (XARA-T-0322) lit a
+  blurred height field with `feDiffuseLighting`, which differentiates per
+  *filter pixel*: the slope, and so the lighting, changed with the dpi
+  (tuned at 72). `kernelUnitLength` would fix that and is ignored by
+  Chromium and resvg. The chain now:
+  1. the silhouette (grown by the join's structuring element for an outer
+     bevel, below) blurred by σ = 0.5 × indent, moved into opaque grey and
+     mapped through a 65-entry `feComponentTransfer` table that inverts the
+     Gaussian's cumulative function (the edge is the blur's one half, the
+     far end of the ramp two σ in): a **linear ramp** across the band, so a
+     straight edge has the same slope everywhere in it, as the renderer's
+     faces do, and plateaus either side;
+  2. that field `h` moved by ±δ along the light (two `feOffset`, one
+     inverted by `feColorMatrix`), `D = ½ + ½ (h⁻ − h⁺)` by an `arithmetic`
+     composite (alpha 1, no clamp): ½ on a plateau, above it facing the
+     light. δ = 0.3 × indent, **rounded to whole user units plus a tenth**:
+     resvg truncates `feOffset` to whole device pixels
+     (`filter/mod.rs`, `dx as i32`), so a fraction lost up to a pixel and a
+     bare whole number sat on the edge of the truncation (a page scaled
+     0.9999 lost one; at 72 dpi that was a 20 % weaker light). The rounded
+     vector is also what the table's range is computed from;
+  3. two `feComponentTransfer` tables over `D` (`light_tables`) hold the
+     **renderer's own shading** of a chamfer of slope 0.8 (the renderer's
+     `xarast_geom::bevel::shade`: Lambert against the flat plane, `1`
+     facing the light, `-1` away): the dark side's multiplier
+     `1 − contrast² |v|` and the share of white to screen in,
+     `contrast · v`. The renderer's Bevel family lightens *towards white*
+     and darkens by multiplying (`blend.rs`), so the bake is a multiply
+     then `arithmetic k1=-1 k2=1 k3=1` (a screen) on an **opaque** paint
+     (an `feColorMatrix` forcing alpha 1 on the object, or an opaque flood),
+     cut to the object's alpha afterwards: a product with alpha < 1 would
+     scale the alpha too and cancel itself in the unpremultiplied colour
+     (the first attempt, which lit nothing on antialiased edges);
+  4. a band mask (`feComponentTransfer` on `h`, 0 on both plateaus)
+     restores the flat plane outside the band: a face turned across the
+     light darkens a little by the table, and so did the whole interior.
+  The paint is the object's own colours (inner), a flood of the bevel's
+  colour cut by the grown silhouette and merged under the object (outer),
+  or, for an inner bevel whose band is painted flat (`BevelParams::
+  flat_paint`, the renderer's `paint_inner`), that colour times its
+  opacity (the colour's alpha times the first object's flat mix
+  transparency, `flat_paint_opacity`) over the object where the band mask
+  is set. A controller that also owns a feather stays unbaked
+  (`Stats::bevels_unbaked`).
+- **Tuning (XARA-T-0328)**, `export.md` has the numbers: σ, δ and the
+  slope swept on a synthetic six-shape document and on the corpus at 72 and
+  144 dpi; the corpus liked δ 0.25–0.3, σ 0.5, slope 0.6–1.0 (Groucho2
+  5.64–5.72 at 72 dpi against 6.81 before), the synthetic document δ 0.4,
+  σ 0.4. The chosen 0.3 / 0.5 / 0.8 is within 0.1 of the best of each.
+  **Dead ends**: (a) scaling the Lambert ratio (`1 + c (L/sin − 1)`) as
+  one multiplier: the renderer lightens toward white (a 0.4 lighten on
+  orange is +10/+50/+90, not ×1.4) and the multiplier over-brightened by
+  2×; (b) the table's value at `D = ½` is not the flat plane for a face
+  turned across the light (it reads darker), so a mask is needed; (c)
+  trusting `feOffset` with fractional units: see 2.
+- **What still differs from the renderer** (measured on a synthetic
+  document, face colours within ~8/255 of the renderer at 72 and 144 dpi,
+  the lit top face of a 12 pt chamfer is (240,180,120) in the renderer and (240,184,128) at 72 dpi, (239,177,115) at 144 in the bake):
+  the cross-section is a chamfer whatever the style (the S-curve, ruffle and
+  point styles' slopes vary; the bake is the `Flat` section's shading),
+  *shading* at corners is the blur's (round isolines) even when the
+  *silhouette* follows the join, `D` is quantised to 8 bits, and thin objects (narrower than ~4 σ) lose their plateau.
+- **Joins in the bake (XARA-T-0328)**: an outer band's silhouette is grown
+  by one structuring element per filter, so it can follow the join only
+  where the element matches the edges' directions. For a **rectilinear
+  source** (`Emitter::source_is_rectilinear`: every segment of every path,
+  quick shape or axis-aligned rectangle under the source is horizontal or
+  vertical) a mitre is a **square** (one `feMorphology`, exact) and a
+  bevelled join the union of 12 rectangles under the diamond
+  `|x| + |y| ≤ indent` (exact corner cut, edges grow by the indent); the
+  round join, and any source with curves, diagonals, ellipses or text, keeps
+  the four-rectangle disc (a square would grow a diagonal edge by √2
+  indents, a diamond by 1/√2). testimp1's frame is the corpus case (a mitre
+  on a rectangle): svg 0.59 → **0.56** at 72 dpi, 0.32 → **0.28** at 144.
+  The mitre limit and the inner band's corners are not modelled.
 - **`research/06 §6.8.2` now lists the fifteen-name vocabulary**, the
   attributes as written, and that the join is the applied
   `stroke-linejoin`, not a bevel attribute (XARA-T-0326).

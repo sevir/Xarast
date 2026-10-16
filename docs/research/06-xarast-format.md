@@ -1615,14 +1615,21 @@ has those names (`frame` is the ridge). A reader **MUST** keep an unknown
 name rather than drop the bevel, and a writer **MUST NOT** emit one.
 
 Baking (`xarast:filter="bevel"`, dropped on reading): the silhouette
-(grown by a disc of the indent for an outer bevel) blurred by σ = indent/2
-into a height field, `feDiffuseLighting` with `feDistantLight
-azimuth = 180 − light-angle` and `elevation = light-elevation`, and an
-`arithmetic` composite applying the lit-to-flat ratio, scaled by the
-contrast, to `SourceGraphic` (inner) or to a flood of the colour
-composited beneath the object (outer). It approximates: the cross-section
-is the blur's whatever the style, and `feDiffuseLighting` differentiates
-per filter pixel, so the lit slope depends on the output resolution.
+(grown for an outer bevel by a disc of the indent, or, for a source of
+horizontal and vertical segments, by a square for a mitre join and by the
+diamond `|x| + |y| ≤ indent` for a bevelled one) blurred by σ = indent/2
+into a height field, mapped to a linear ramp across the band, its slope
+along the light read as a difference of the field moved a fixed fraction of
+the indent towards and away from the light, and the paint lit from that
+slope as the renderer lights it (a multiply on the dark side, a screen with
+white on the light side, scaled by the contrast), over `SourceGraphic`
+(inner, or the flat paint of the band when it has one) or a flood of the
+colour beneath the object (outer). **Every length is a user unit** and no
+primitive works per filter pixel: `feDiffuseLighting` does, so a bake built
+on it lights differently at every export resolution, and its
+`kernelUnitLength` is ignored by Chromium and resvg (XARA-T-0328). It
+approximates: the cross-section is a chamfer whatever the style and
+shading at corners is the blur's.
 
 #### 6.8.3 Contour (`TAG_CONTOURCONTROLLER` 4066, `TAG_CONTOUR` 4067)
 

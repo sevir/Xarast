@@ -1891,12 +1891,62 @@ controller's own feather) and needs only the silhouette:
   content's own colours are lit, which matches the original's non-flat
   bevel node (the fill under a `TT_BEVEL` transparency) for one object.
   The first object's transparency, also copied onto the bevel node, is
-  not applied. Corpus: no change (Groucho2's inner bevels are bitmap
+  applied since XARA-T-0328 (below). Corpus: no change (Groucho2's inner bevels are bitmap
   filled). Golden `effect_bevel_smooth_inner_painted`.
 - **Corpus effect**: Groucho2 at 100 % byte-identical; at 300 % and
   testimp1 changed: testimp1's frame-like outer bevel now has mitred
   corners (a picture frame) instead of round ones. Not re-scored against
   the previews (the T-0322 scratch registration is not in the tree).
+
+### Bevel leftovers (XARA-T-0328, 2026-10-16)
+
+- **A painted inner band takes its object's transparency.** The original's
+  bevel node copies the first object's fill *and* its transparency
+  (`tools/opbevel.cpp:1318-1341`, `AttrTranspFillGeometry`).
+  `BevelParams::flat_paint_opacity` is that object's flat **mix**
+  transparency as an opacity (`255 − level`); the walker's `bevel_of` folds
+  it into the painted colour's alpha (`BevelEffect::colour.a`, which the
+  band already multiplied), and the SVG bake into the band mask's opacity.
+  Any other mode (stained glass, bleach, ...), a gradient transparency and
+  no transparency leave the band opaque, as before: those need the bevel
+  node composited through its own transparency, and no file has one.
+  Tests: `walker::tests::a_painted_inner_band_is_as_transparent_as_the_
+  object_it_copies`, `svg_read::a_painted_inner_band_takes_its_object_s_
+  flat_transparency`. Not applied to an *unpainted* inner band (the
+  content's own colours are lit, and the content already carries its
+  transparency).
+- **Inner bands' concave corners still round: documented, not changed.**
+  What exactly differs: `BevelEffect::apply` forces `Join::Round` for an
+  inner band, so the corner finder (`Corners::find`, which looks for
+  *convex* corners of the silhouette, where an outer band's strips leave a
+  wedge) never runs for it. At a *convex* corner of the object an inner
+  band is mitred by construction (the two strips cross), whatever the join,
+  so the join is moot there. At a *concave* corner the original
+  turns the band's inner edge with the join (a mitre reaches up to ten
+  widths into the content, a bevel cuts it); we draw the distance
+  transform's arc. The visible difference is the corner's wedge: a
+  quarter-disc against a point (mitre) or a chord (bevel, the original's
+  *default*, `BevelledJoin`) of a band-width radius, at most 0.29 widths
+  deep for the bevelled join and 0.41 for a 90° mitre. Doing it
+  needs a concave-corner finder (the same normals analysis on the inverted
+  coverage, with the face directions of the *inner* band) and, for a mitre,
+  a search window up to ten widths deep over the content (estimates: days
+  of work, and a search ~20 times wider at `MAX_BEVEL_PX`). Not worth it
+  yet: all 19 corpus inner bevels (Groucho2's frame bands) carry the
+  default bevelled join, where the difference is the 0.29-width sliver of a
+  chord against an arc at each concave corner.
+- **Corners from 2–8 px of outline** (the "very small shapes still round"
+  item): unchanged, same reasoning; text-sized bevels are a few pixels wide
+  anyway.
+- **The damage property pushes bevels** (`tests/properties.rs`,
+  `Step::PushBevel`): inner and outer, mitre/bevel/round joins, flat and
+  round sections, painted inner bands, a band of 0.5–10 pt, restyled by the
+  `Restyle` edit. Mutation-checked: dividing `reach_px` by four for a bevel
+  fails `repainting_the_damage_gives_the_new_frame` and its warm-cache twin
+  within the 2 000 cases.
+- **The SVG bake is resolution independent and follows the join and the
+  inner paint** — see `xarast-format.md`, "Bevels". testimp1 svg 0.69 →
+  0.56 (72 dpi) and 0.36 → 0.28 (144), Groucho2 6.81 → 5.72 and 4.89 → 3.94.
 
 ### Nested effects in a silhouette pass (XARA-T-0321, phase 13, 2026-10-15)
 
@@ -2323,8 +2373,8 @@ Corpus export check: 118 comparisons, 0 failures; `svg-check
 | 32 | ~~Bevel cost~~. **Done (XARA-T-0326)**: the feature transform is ~6× cheaper and uses 17 instead of 49 bytes a pixel; no lighting cache (it would only serve colour edits). What is left of the first frame is the bevelled content's two offscreen passes | done |
 | 33 | ~~A shadow's own silhouette ignores transparency~~. **Done 2026-10-16 (XARA-T-0327)**: a wall or floor shadow casts its content's rendered alpha, as the original does; a glow keeps the opaque pass (its 0xFE threshold); no golden moved, Groucho2 matches its preview better; see "Shadows from rendered alpha" | done |
 | 34 | SVG: a feather around a shadow reads `SourceAlpha` (the shadow as drawn), not the outline rule. **Partly done 2026-10-16 (XARA-T-0327)**: a wall or glow controller that owns a feather is one filter cut from the outlines (synthetic document: 2.69 → 0.68). Left: a floor controller's feather (its shadow is a derived copy) and a feather on a group around a shadow controller; no corpus file has either (`export.md`, "Shadows in SVG") | XARA-US-0069 |
-| 35 | Bevels the renderer still does differently: an inner band's concave corners always round (a mitre there needs a reach of ten widths inside the content); corners are found in the silhouette, so a mitre's point and a cut's position are as good as a line fit over 2–8 px (corners under ~16 px of edge on a side, e.g. small text, round); the bevel node's own transparency copy is not applied to a painted inner band | XARA-US-0069 |
-| 36 | The SVG bevel bake is resolution-dependent (`feDiffuseLighting` differentiates per filter pixel); a user-space chain is sketched in `xarast-format.md`, "Bevels" | XARA-US-0069 |
+| 35 | Bevels the renderer still does differently: an inner band's concave corners always round (a mitre there needs a reach of ten widths inside the content; analysed in "Bevel leftovers", XARA-T-0328); corners are found in the silhouette, so a mitre's point and a cut's position are as good as a line fit over 2–8 px (corners under ~16 px of edge on a side, e.g. small text, round). The painted inner band's transparency copy is applied since XARA-T-0328 (flat mix only) | XARA-US-0069 |
+| 36 | ~~The SVG bevel bake is resolution-dependent~~. **Done 2026-10-16 (XARA-T-0328)**: a user-unit chain (ramped height field, offset difference, the renderer's own shading), the outer join on rectilinear sources, the inner flat paint; `xarast-format.md`, "Bevels". Left in the bake: non-rectilinear mitre/bevel joins round, corner shading is the blur's, the cross-section is a chamfer's | done |
 | 24 | ~~`RampMapping::Sin` ignored; `ClipViewMode::Outside` dropped~~. **Done 2026-09-24**: `RampEase` (above) and the walker's outside clip (`app-core.md` decision 34); the renderer still clips only to a path's inside, on purpose | done (XARA-US-0017) |
 | 12 | ~~Reconcile `wgpu` versions~~. **Decided 2026-09-23**: no `vello` in the product until it targets the workspace's `wgpu` (two `wgpu`s cost +4.08 MiB and 46 crates, and cannot share a device); the spike keeps building against `vello::wgpu` behind `spike-gpu` | done (XARA-US-0011) |
 
