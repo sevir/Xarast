@@ -2,14 +2,15 @@
 id: XARA-T-0192
 type: task
 title: "Wire File › Export to xarast-io: ExportSource for Session and the export dialog"
-status: in_progress
+status: done
 priority: medium
 parent: XARA-US-0056
 author: mcp
 labels: [phase-11, app, ui, io]
 created: 2026-09-23T19:49:04Z
-updated: 2026-10-16T03:21:34Z
+updated: 2026-10-16T05:30:05Z
 started: 2026-10-16T03:21:34Z
+closed: 2026-10-16T05:30:05Z
 ---
 
 ## Description
