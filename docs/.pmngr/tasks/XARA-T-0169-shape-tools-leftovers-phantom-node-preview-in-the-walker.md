@@ -2,13 +2,14 @@
 id: XARA-T-0169
 type: task
 title: "Shape tools leftovers: phantom-node preview in the walker, Ctrl+Shift radius mode, T5.5 convert to shapes, VM observation of radius under scale (K8)"
-status: in_progress
+status: done
 parent: XARA-US-0033
 author: mcp
 labels: [phase-7, tools]
 created: 2026-09-23T18:11:06Z
-updated: 2026-10-16T08:40:54Z
+updated: 2026-10-16T09:13:40Z
 started: 2026-10-16T08:40:54Z
+closed: 2026-10-16T09:13:40Z
 ---
 
 ## Description
