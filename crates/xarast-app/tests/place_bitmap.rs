@@ -217,12 +217,26 @@ fn pasting_a_fragment_with_a_bitmap_is_digest_exact_on_undo() {
     })
     .unwrap();
     app.apply(Intent::Copy).unwrap();
+    let svg = app
+        .take_requests()
+        .into_iter()
+        .find_map(|r| match r {
+            xarast_app::PlatformRequest::SetClipboardText(t) => Some(t),
+            _ => None,
+        })
+        .expect("a clipboard write");
     // Undo the placement: the document no longer holds the picture, the
     // clipboard fragment does.
     app.apply(Intent::Undo).unwrap();
     let bare = s(&app).doc.canonical_digest();
     assert_eq!(s(&app).doc.resources.counts().0, 0);
-    app.apply(Intent::Paste { in_place: true }).unwrap();
+    // The shell answers the clipboard read with our own text: the internal
+    // fragment, bitmaps and all, is pasted.
+    app.apply(Intent::PasteText {
+        text: Some(svg),
+        in_place: true,
+    })
+    .unwrap();
     let pasted = s(&app).doc.canonical_digest();
     assert_eq!(s(&app).doc.resources.counts().0, 1);
     app.apply(Intent::Undo).unwrap();
