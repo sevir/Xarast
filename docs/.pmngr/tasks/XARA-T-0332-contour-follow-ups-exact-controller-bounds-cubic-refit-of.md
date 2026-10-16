@@ -2,13 +2,14 @@
 id: XARA-T-0332
 type: task
 title: "Contour follow-ups: exact controller bounds, cubic refit of rings, text sources, nested live output, inset source in SVG"
-status: backlog
+status: in_progress
 priority: medium
 parent: XARA-US-0070
 author: mcp
 labels: [phase-13, live-effects, geom, format]
 created: 2026-10-15T20:53:05Z
-updated: 2026-10-15T20:53:05Z
+updated: 2026-10-16T11:09:22Z
+started: 2026-10-16T11:09:22Z
 ---
 
 ## Description

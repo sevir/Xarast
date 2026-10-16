@@ -2,14 +2,15 @@
 id: XARA-T-0350
 type: task
 title: "Export dialog follow-ups: CLI-only options, remembered options per document (T11.1.5), preview, proxy level by output dpi, live portal check"
-status: in_progress
+status: done
 priority: medium
 parent: XARA-US-0056
 author: mcp
 labels: [phase-11, ui, io]
 created: 2026-10-16T05:30:05Z
-updated: 2026-10-16T10:29:47Z
+updated: 2026-10-16T11:09:22Z
 started: 2026-10-16T10:29:47Z
+closed: 2026-10-16T11:09:22Z
 ---
 
 ## Description
