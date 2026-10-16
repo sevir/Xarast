@@ -24,7 +24,10 @@
 //!   filled, stroked when either is stroked.
 //! * Colours blend in RGB (fade) or HSV (rainbow, alternate rainbow);
 //!   "no colour" blends as white unless both ends have none
-//!   (`Kernel/doccolor.cpp:1040-1060`). An attribute that cannot be
+//!   (`Kernel/doccolor.cpp:1040-1060`). Fills of different kinds blend
+//!   too: the start's kind (a flat start takes the end's), colours and
+//!   points blended, a point one end lacks moved with the objects
+//!   (`contour::blend_fill`). Any other attribute that cannot be
 //!   blended is the start's up to half way and the end's after
 //!   (`Kernel/nodeattr.cpp:958-981`).
 //!
@@ -37,7 +40,7 @@ use xarast_geom::blend::{Correspondence, Outline, correspond, pair_up};
 use xarast_geom::{BiasGain, Path};
 
 use crate::attr::{ALL_ATTR_SLOTS, AttrSlot, AttrValue, ResolvedAttrs, resolve_uncached};
-use crate::contour::{Ink, blend_paint, drawn_inks, geometry, lerp_mp, visible};
+use crate::contour::{Ink, blend_fill, drawn_inks, geometry, lerp_mp, visible};
 use crate::document::Document;
 use crate::fill::{FillGeometry, Paint};
 use crate::kind::NodeKind;
@@ -86,6 +89,9 @@ struct End {
     attrs: Vec<Vec<AttrValue>>,
     filled: Vec<bool>,
     stroked: Vec<bool>,
+    /// Each object's bounding-box centre (what a fill point the other
+    /// end lacks moves with).
+    centres: Vec<(f64, f64)>,
     pieces: Vec<Piece>,
 }
 
@@ -192,6 +198,7 @@ fn end_of(
         attrs: Vec::new(),
         filled: Vec::new(),
         stroked: Vec::new(),
+        centres: Vec::new(),
         pieces: Vec::new(),
     };
     // What a preview moves: an object it moves blends from where it is
@@ -256,6 +263,11 @@ fn end_of(
         end.attrs.push(attrs);
         end.filled.push(f);
         end.stroked.push(s);
+        let bx = path.bounds();
+        end.centres.push((
+            (bx.lo.x.to_f64() + bx.hi.x.to_f64()) / 2.0,
+            (bx.lo.y.to_f64() + bx.hi.y.to_f64()) / 2.0,
+        ));
         for (sub, outline) in Outline::subpaths(&path).into_iter().enumerate() {
             end.pieces.push(Piece {
                 object,
@@ -365,7 +377,18 @@ fn shape(
 ) -> GeneratedShape {
     let (oa, ob) = (a.pieces[i].object, b.pieces[j].object);
     let (filled, stroked) = (a.filled[oa] || b.filled[ob], a.stroked[oa] || b.stroked[ob]);
-    let mut attrs = step_attrs(doc, &a.attrs[oa], &b.attrs[ob], r, params.colour_effect);
+    let offset = (
+        b.centres[ob].0 - a.centres[oa].0,
+        b.centres[ob].1 - a.centres[oa].1,
+    );
+    let mut attrs = step_attrs(
+        doc,
+        &a.attrs[oa],
+        &b.attrs[ob],
+        r,
+        params.colour_effect,
+        offset,
+    );
     canonical(doc, &mut attrs, filled, stroked);
     GeneratedShape {
         path: Arc::new(path),
@@ -388,7 +411,9 @@ fn append(first: &Path, more: &Path) -> Path {
 /// and `end`. All of them, as the original renders a whole blended
 /// attribute map: what is in force where the step is drawn must not
 /// change it (a `.xarast` reload moves a blend's own attributes onto its
-/// objects, and the steps must come out the same).
+/// objects, and the steps must come out the same). `offset` is how far
+/// the end object's bounding-box centre lies from the start's: a fill
+/// control point one end lacks moves with it (`contour::blend_fill`).
 #[must_use]
 pub fn step_attrs(
     doc: &Document,
@@ -396,13 +421,14 @@ pub fn step_attrs(
     end: &[AttrValue],
     r: StepRatios,
     effect: Option<FillEffect>,
+    offset: (f64, f64),
 ) -> Vec<AttrValue> {
     let mut out = Vec::with_capacity(ALL_ATTR_SLOTS.len());
     for (slot, (x, y)) in ALL_ATTR_SLOTS.into_iter().zip(start.iter().zip(end)) {
         let v = if x == y {
             x.clone()
         } else {
-            blend_value(doc, slot, x, y, r, effect)
+            blend_value(doc, slot, x, y, r, effect, offset)
         };
         out.push(v);
     }
@@ -492,7 +518,8 @@ fn canonical(doc: &Document, out: &mut [AttrValue], filled: bool, stroked: bool)
     }
 }
 
-/// Blends one slot's two values; anything that does not blend is the
+/// Blends one slot's two values; fills of any two kinds blend
+/// (`contour::blend_fill`); anything else that does not blend is the
 /// start's up to half way and the end's after.
 fn blend_value(
     doc: &Document,
@@ -501,13 +528,16 @@ fn blend_value(
     y: &AttrValue,
     r: StepRatios,
     effect: Option<FillEffect>,
+    offset: (f64, f64),
 ) -> AttrValue {
     let pick = |t: f64| if t <= 0.5 { x.clone() } else { y.clone() };
     match (x, y) {
-        (AttrValue::Fill(a), AttrValue::Fill(b)) => colour_paint(doc, a, b, r.inverted, effect)
-            .map_or_else(|| pick(r.inverted), AttrValue::Fill),
+        (AttrValue::Fill(a), AttrValue::Fill(b)) => {
+            colour_paint(doc, a, b, r.inverted, effect, offset)
+                .map_or_else(|| pick(r.inverted), AttrValue::Fill)
+        }
         (AttrValue::StrokeColour(a), AttrValue::StrokeColour(b)) => {
-            colour_paint(doc, a, b, r.attr, effect)
+            colour_paint(doc, a, b, r.attr, effect, offset)
                 .map_or_else(|| pick(r.attr), AttrValue::StrokeColour)
         }
         (AttrValue::TranspFill(a), AttrValue::TranspFill(b)) => {
@@ -516,11 +546,10 @@ fn blend_value(
             } else {
                 r.object
             };
-            blend_paint(a, b, t, FillEffect::Fade).map_or_else(|| pick(t), AttrValue::TranspFill)
+            AttrValue::TranspFill(blend_fill(a, b, t, FillEffect::Fade, offset))
         }
         (AttrValue::StrokeTransp(a), AttrValue::StrokeTransp(b)) => {
-            blend_paint(a, b, r.attr, FillEffect::Fade)
-                .map_or_else(|| pick(r.attr), AttrValue::StrokeTransp)
+            AttrValue::StrokeTransp(blend_fill(a, b, r.attr, FillEffect::Fade, offset))
         }
         (AttrValue::LineWidth(a), AttrValue::LineWidth(b)) => {
             AttrValue::LineWidth(lerp_mp(*a, *b, clamp01(r.inverted)))
@@ -550,6 +579,7 @@ fn colour_paint(
     b: &Paint,
     t: f64,
     effect: Option<FillEffect>,
+    offset: (f64, f64),
 ) -> Option<Paint> {
     let effect = effect?;
     let t = clamp01(t);
@@ -567,7 +597,7 @@ fn colour_paint(
     if !visible(doc, a) && !visible(doc, b) {
         return Some(a.clone());
     }
-    blend_paint(&direct(a), &direct(b), t, effect)
+    Some(blend_fill(&direct(a), &direct(b), t, effect, offset))
 }
 
 #[cfg(test)]

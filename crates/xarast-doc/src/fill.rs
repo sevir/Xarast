@@ -545,71 +545,81 @@ impl<S: Stop> FillGeometry<S> {
     /// This is what makes a gradient follow the object it fills when the
     /// object is transformed.
     pub fn transform(&mut self, m: Matrix) {
-        let go = |p: &mut Point| *p = m.transform_point(*p);
+        self.for_each_point_mut(&mut |p| *p = m.transform_point(*p));
+    }
+
+    /// Visits every control point mutably, in
+    /// [`control_points`](Self::control_points) order.
+    pub fn for_each_point_mut(&mut self, f: &mut dyn FnMut(&mut Point)) {
+        let persp = |q: &mut Option<Perspective>, f: &mut dyn FnMut(&mut Point)| {
+            if let Some(q) = q {
+                f(&mut q.p2);
+                f(&mut q.p3);
+            }
+        };
         match self {
             FillGeometry::Flat { .. } => {}
-            FillGeometry::Fractal {
-                origin,
-                axis_x,
-                axis_y,
-                ..
-            }
-            | FillGeometry::Noise {
-                origin,
-                axis_x,
-                axis_y,
-                ..
-            } => {
-                go(origin);
-                go(axis_x);
-                go(axis_y);
-            }
             FillGeometry::Linear {
-                start, end, persp, ..
+                start,
+                end,
+                persp: q,
+                ..
             } => {
-                go(start);
-                go(end);
-                transform_persp(persp, m);
+                f(start);
+                f(end);
+                persp(q, f);
             }
             FillGeometry::Radial {
                 centre,
                 major,
                 minor,
-                persp,
+                persp: q,
                 ..
             } => {
-                go(centre);
-                go(major);
-                go(minor);
-                transform_persp(persp, m);
+                f(centre);
+                f(major);
+                f(minor);
+                persp(q, f);
             }
             FillGeometry::Conical {
                 centre, zero_dir, ..
             } => {
-                go(centre);
-                go(zero_dir);
+                f(centre);
+                f(zero_dir);
             }
             FillGeometry::Diamond {
                 centre,
                 corner1,
                 corner2,
-                persp,
+                persp: q,
                 ..
             } => {
-                go(centre);
-                go(corner1);
-                go(corner2);
-                transform_persp(persp, m);
+                f(centre);
+                f(corner1);
+                f(corner2);
+                persp(q, f);
             }
             FillGeometry::ThreeColour {
                 origin,
                 axis1,
                 axis2,
                 ..
+            }
+            | FillGeometry::Fractal {
+                origin,
+                axis_x: axis1,
+                axis_y: axis2,
+                ..
+            }
+            | FillGeometry::Noise {
+                origin,
+                axis_x: axis1,
+                axis_y: axis2,
+                ..
             } => {
-                go(origin);
-                go(axis1);
-                go(axis2);
+                f(origin);
+                f(axis1);
+                f(axis2);
             }
             FillGeometry::FourColour {
                 origin,
@@ -618,22 +628,22 @@ impl<S: Stop> FillGeometry<S> {
                 axis3,
                 ..
             } => {
-                go(origin);
-                go(axis1);
-                go(axis2);
-                go(axis3);
+                f(origin);
+                f(axis1);
+                f(axis2);
+                f(axis3);
             }
             FillGeometry::Bitmap {
                 origin,
                 axis_x,
                 axis_y,
-                persp,
+                persp: q,
                 ..
             } => {
-                go(origin);
-                go(axis_x);
-                go(axis_y);
-                transform_persp(persp, m);
+                f(origin);
+                f(axis_x);
+                f(axis_y);
+                persp(q, f);
             }
         }
     }
@@ -711,13 +721,6 @@ fn push_persp(v: &mut smallvec::SmallVec<[Point; 4]>, persp: &Option<Perspective
     if let Some(p) = persp {
         v.push(p.p2);
         v.push(p.p3);
-    }
-}
-
-fn transform_persp(persp: &mut Option<Perspective>, m: Matrix) {
-    if let Some(p) = persp {
-        p.p2 = m.transform_point(p.p2);
-        p.p3 = m.transform_point(p.p3);
     }
 }
 

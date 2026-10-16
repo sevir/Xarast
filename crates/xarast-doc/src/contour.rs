@@ -916,6 +916,252 @@ fn promote<S: Stop>(p: &FillGeometry<S>, like: &FillGeometry<S>) -> FillGeometry
     g
 }
 
+/// Blends two fills the way the original blends any two fills
+/// (XARA-T-0335; `FillGeometryAttribute::Blend`, `FlatFillAttribute::Blend`,
+/// `Kernel/fillval.cpp:9351-9680`): what [`blend_paint`] blends stays as it
+/// is (same family, equal stop counts); anything else takes **the start's
+/// type** (a flat start takes the end's), its colours blended with the
+/// other's in order (start with start, end with end or else the other's
+/// start), its control points blended with the other's where it has the
+/// same one, and **moved with the objects** where it has none
+/// (`BlendControlPoints`, `Kernel/fillval.cpp:10031-10125`: by the shift
+/// of the two objects' bounding-box centres times the ratio; `offset` is
+/// that shift, end minus start). Ramps with different stop counts blend
+/// over the union of their positions, each side sampled there
+/// (`FillRamp::Blend`, `Kernel/fillramp.cpp:520-900`). A fill profile is
+/// blended when either side has one.
+pub(crate) fn blend_fill<S: Stop>(
+    a: &FillGeometry<S>,
+    b: &FillGeometry<S>,
+    t: f64,
+    effect: FillEffect,
+    offset: (f64, f64),
+) -> FillGeometry<S> {
+    let t = if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) };
+    let (fa, fb) = (
+        matches!(a, FillGeometry::Flat { .. }),
+        matches!(b, FillGeometry::Flat { .. }),
+    );
+    let alike = (fa && fb) || (!fa && !fb && a.discriminant() == b.discriminant());
+    if alike && let Some(g) = blend_paint(a, b, t, effect) {
+        return g;
+    }
+    let tf = t as f32;
+    let shift = |p: &mut Point, k: f64| {
+        *p = Point::new(
+            Mp::from_f64_round(p.x.to_f64() + offset.0 * k),
+            Mp::from_f64_round(p.y.to_f64() + offset.1 * k),
+        );
+    };
+    if let FillGeometry::Flat { value } = a {
+        // The end's type, its points where the start object stands at
+        // first, every colour from the start's.
+        let mut out = b.clone();
+        out.for_each_point_mut(&mut |p| shift(p, t - 1.0));
+        out.for_each_value_mut(&mut |v| *v = value.lerp(v, tf, effect));
+        return out;
+    }
+    let mut out = a.clone();
+    // Points: by role (start, end, end2) across types; the rest only
+    // within a family.
+    let theirs = b.control_points();
+    let (ra, rb) = (point_roles(a), point_roles(b));
+    let same = a.discriminant() == b.discriminant();
+    let mut i = 0;
+    out.for_each_point_mut(&mut |p| {
+        let paired = if same { theirs.len() } else { ra.min(rb) };
+        match theirs.get(i) {
+            Some(q) if i < paired => *p = lerp_pt(*p, *q, t),
+            _ => shift(p, t),
+        }
+        i += 1;
+    });
+    // Colours: start with start, end with end (else the other's start),
+    // the rest with theirs (else the other's last).
+    let ends_b = ends(b);
+    if !ends_b.is_empty() {
+        let mut i = 0;
+        for_each_end_mut(&mut out, &mut |v| {
+            let other = ends_b
+                .get(i)
+                .or_else(|| ends_b.get(1).filter(|_| i >= 2))
+                .or_else(|| ends_b.last())
+                .copied();
+            if let Some(o) = other {
+                *v = v.lerp(o, tf, effect);
+            }
+            i += 1;
+        });
+    }
+    // Ramps.
+    let ramp_a = ramp_of(a);
+    if let Some(ra) = ramp_a {
+        let (af, at) = first_last(a);
+        let new = match (b, ramp_of(b)) {
+            (FillGeometry::Flat { value }, _) => {
+                let mut r = Ramp::new();
+                for s in ra.stops() {
+                    r.insert(RampStop {
+                        pos: s.pos,
+                        value: s.value.lerp(value, tf, effect),
+                    });
+                }
+                r.mapping = ra.mapping;
+                Some(r)
+            }
+            (_, Some(rb)) if rb.stops().len() == ra.stops().len() => lerp_ramp(ra, rb, t, effect),
+            _ => {
+                let (bf, bt) = first_last(b);
+                let empty = Ramp::new();
+                let rb = ramp_of(b).unwrap_or(&empty);
+                match (af, at, bf, bt) {
+                    (Some(af), Some(at), Some(bf), Some(bt)) => {
+                        let mut pos: Vec<f32> =
+                            ra.stops().iter().chain(rb.stops()).map(|s| s.pos).collect();
+                        pos.sort_by(f32::total_cmp);
+                        pos.dedup_by(|x, y| (*x - *y).abs() <= 1e-6);
+                        let mut r = Ramp::new();
+                        for p in pos {
+                            let x = raw_sample(af, ra, at, p, effect);
+                            let y = raw_sample(bf, rb, bt, p, effect);
+                            r.insert(RampStop {
+                                pos: p,
+                                value: x.lerp(&y, tf, effect),
+                            });
+                        }
+                        r.profile = ra.profile;
+                        r.mapping = ra.mapping;
+                        Some(r)
+                    }
+                    _ => None,
+                }
+            }
+        };
+        if let (Some(mut new), Some(slot)) = (new, ramp_mut(&mut out)) {
+            new.profile = slot.profile;
+            *slot = new;
+        }
+    }
+    let (pa, pb) = (a.profile(), b.profile());
+    if pa != BiasGain::IDENTITY || pb != BiasGain::IDENTITY {
+        out.set_profile(BiasGain::new(
+            lerp_f(pa.bias, pb.bias, t),
+            lerp_f(pa.gain, pb.gain, t),
+        ));
+    }
+    out
+}
+
+/// How many of a fill's control points are the original's start, end
+/// and second end (the rest are perspective corners or a fourth axis).
+fn point_roles<S: Stop>(g: &FillGeometry<S>) -> usize {
+    match g {
+        FillGeometry::Flat { .. } => 0,
+        FillGeometry::Linear { .. } | FillGeometry::Conical { .. } => 2,
+        _ => 3,
+    }
+}
+
+/// A fill's end values in the original's order (start, end, end2, end3),
+/// without ramp stops.
+fn ends<S: Stop>(g: &FillGeometry<S>) -> Vec<&S> {
+    match g {
+        FillGeometry::Flat { value } => vec![value],
+        FillGeometry::Linear { from, to, .. }
+        | FillGeometry::Radial { from, to, .. }
+        | FillGeometry::Conical { from, to, .. }
+        | FillGeometry::Diamond { from, to, .. }
+        | FillGeometry::Fractal { from, to, .. }
+        | FillGeometry::Noise { from, to, .. } => vec![from, to],
+        FillGeometry::ThreeColour { c0, c1, c2, .. } => vec![c0, c1, c2],
+        FillGeometry::FourColour { c0, c1, c2, c3, .. } => vec![c0, c1, c2, c3],
+        FillGeometry::Bitmap { contone, .. } => contone.iter().flat_map(|(x, y)| [x, y]).collect(),
+    }
+}
+
+/// [`ends`], mutably.
+fn for_each_end_mut<S: Stop>(g: &mut FillGeometry<S>, f: &mut dyn FnMut(&mut S)) {
+    match g {
+        FillGeometry::Flat { value } => f(value),
+        FillGeometry::Linear { from, to, .. }
+        | FillGeometry::Radial { from, to, .. }
+        | FillGeometry::Conical { from, to, .. }
+        | FillGeometry::Diamond { from, to, .. }
+        | FillGeometry::Fractal { from, to, .. }
+        | FillGeometry::Noise { from, to, .. } => {
+            f(from);
+            f(to);
+        }
+        FillGeometry::ThreeColour { c0, c1, c2, .. } => {
+            f(c0);
+            f(c1);
+            f(c2);
+        }
+        FillGeometry::FourColour { c0, c1, c2, c3, .. } => {
+            f(c0);
+            f(c1);
+            f(c2);
+            f(c3);
+        }
+        FillGeometry::Bitmap { contone, .. } => {
+            if let Some((x, y)) = contone {
+                f(x);
+                f(y);
+            }
+        }
+    }
+}
+
+/// The values at a fill's two ends along its ramp axis.
+fn first_last<S: Stop>(g: &FillGeometry<S>) -> (Option<&S>, Option<&S>) {
+    let e = ends(g);
+    (e.first().copied(), e.get(1).or(e.first()).copied())
+}
+
+fn ramp_of<S: Stop>(g: &FillGeometry<S>) -> Option<&Ramp<S>> {
+    match g {
+        FillGeometry::Linear { ramp, .. }
+        | FillGeometry::Radial { ramp, .. }
+        | FillGeometry::Conical { ramp, .. }
+        | FillGeometry::Diamond { ramp, .. } => Some(ramp),
+        _ => None,
+    }
+}
+
+fn ramp_mut<S: Stop>(g: &mut FillGeometry<S>) -> Option<&mut Ramp<S>> {
+    match g {
+        FillGeometry::Linear { ramp, .. }
+        | FillGeometry::Radial { ramp, .. }
+        | FillGeometry::Conical { ramp, .. }
+        | FillGeometry::Diamond { ramp, .. } => Some(ramp),
+        _ => None,
+    }
+}
+
+/// The value at stop position `pos` of `from`, the ramp's stops, `to`
+/// (no profile or mapping: positions are where stops stand).
+fn raw_sample<S: Stop>(from: &S, ramp: &Ramp<S>, to: &S, pos: f32, effect: FillEffect) -> S {
+    let mut lo = (0.0f32, from);
+    for s in ramp
+        .stops()
+        .iter()
+        .map(|s| (s.pos, &s.value))
+        .chain([(1.0, to)])
+    {
+        if pos <= s.0 {
+            let span = s.0 - lo.0;
+            let k = if span <= f32::EPSILON {
+                0.0
+            } else {
+                (pos - lo.0) / span
+            };
+            return lo.1.lerp(s.1, k, effect);
+        }
+        lo = s;
+    }
+    to.clone()
+}
+
 fn lerp_f(a: f64, b: f64, t: f64) -> f64 {
     a + (b - a) * t
 }

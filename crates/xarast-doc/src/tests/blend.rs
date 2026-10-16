@@ -38,6 +38,11 @@ fn blend(params: &BlendParams, objects: usize) -> (Document, NodeId) {
         flat(0.0, 0.0, 1.0),
         flat(0.0, 1.0, 0.0),
     ];
+    blend_of(params, &colours, objects)
+}
+
+/// [`blend`] with each object's fill taken from `colours` in turn.
+fn blend_of(params: &BlendParams, colours: &[AttrValue], objects: usize) -> (Document, NodeId) {
     let mut b = skeleton(BuildLimits::small()).unwrap();
     b.node(live(LiveRole::Controller, params)).unwrap();
     b.push_scope().unwrap();
@@ -51,7 +56,7 @@ fn blend(params: &BlendParams, objects: usize) -> (Document, NodeId) {
         b.node(path_node(square(Point::raw(10_000 * i as i32, 0), side)))
             .unwrap();
         b.push_scope().unwrap();
-        b.attribute(colours[i % 3].clone()).unwrap();
+        b.attribute(colours[i % colours.len()].clone()).unwrap();
         b.pop_scope();
     }
     b.pop_scope();
@@ -249,4 +254,118 @@ fn a_preview_override_regenerates_apart_and_an_inert_one_finds_the_committed_out
     cache.current_or_regenerate_with(&doc, c, 0.0, over, &mut generate);
     cache.current_or_regenerate_with(&doc, c, 0.0, over, &mut generate);
     assert_eq!(cache.regenerated(), 1);
+}
+
+fn linear(from: ColourValue, to: ColourValue, x: i32) -> AttrValue {
+    AttrValue::Fill(Paint::Linear {
+        start: Point::raw(x, 0),
+        end: Point::raw(x + 1_000, 0),
+        persp: None,
+        from: Colour::Direct(from),
+        to: Colour::Direct(to),
+        ramp: crate::fill::Ramp::new(),
+    })
+}
+
+fn fill_paint(attrs: &[AttrValue]) -> Paint {
+    attrs
+        .iter()
+        .find_map(|a| match a {
+            AttrValue::Fill(f) => Some(f.clone()),
+            _ => None,
+        })
+        .unwrap()
+}
+
+/// Fills of different kinds blend the original's way (XARA-T-0335): the
+/// start's type, colours blended, points blended or moved with the
+/// objects; a flat start takes the end's type.
+#[test]
+fn mixed_fill_kinds_take_the_start_type_and_blend_their_colours() {
+    let red = ColourValue::rgbt(1.0, 0.0, 0.0, 0.0);
+    let blue = ColourValue::rgbt(0.0, 0.0, 1.0, 0.0);
+    let green = ColourValue::rgbt(0.0, 1.0, 0.0, 0.0);
+    let radial = AttrValue::Fill(Paint::Radial {
+        centre: Point::raw(11_000, 1_000),
+        major: Point::raw(12_000, 1_000),
+        minor: Point::raw(11_000, 2_000),
+        aspect_locked: true,
+        persp: None,
+        from: Colour::Direct(blue),
+        to: Colour::Direct(green),
+        ramp: crate::fill::Ramp::new(),
+    });
+    let p = BlendParams {
+        steps: 1,
+        ..BlendParams::default()
+    };
+    // Linear (red → blue) to radial (blue → green): a linear step, its
+    // start colour half way red → blue, its end colour blue → green, its
+    // start point half way to the radial's centre.
+    let (doc, c) = blend_of(&p, &[linear(red, blue, 0), radial], 2);
+    let fill = fill_paint(&generate(&doc, c).unwrap()[0][0].attrs);
+    let Paint::Linear {
+        start, from, to, ..
+    } = fill
+    else {
+        panic!("the start's type: {fill:?}");
+    };
+    assert_eq!(start, Point::raw(5_500, 500));
+    assert_eq!(from, Colour::Direct(ColourValue::rgbt(0.5, 0.0, 0.5, 0.0)));
+    assert_eq!(to, Colour::Direct(ColourValue::rgbt(0.0, 0.5, 0.5, 0.0)));
+    // Flat red to a linear fill: the end's type, red blended into both
+    // its colours, its points moved back with the objects. The objects'
+    // centres are (500, 500) and (11 000, 1 000): half way, the start
+    // point stands half that shift back from the end's.
+    let (doc, c) = blend_of(&p, &[flat(1.0, 0.0, 0.0), linear(blue, green, 10_000)], 2);
+    let fill = fill_paint(&generate(&doc, c).unwrap()[0][0].attrs);
+    let Paint::Linear {
+        start, from, to, ..
+    } = fill
+    else {
+        panic!("the end's type: {fill:?}");
+    };
+    assert_eq!(start, Point::raw(10_000 - 5_250, -250));
+    assert_eq!(from, Colour::Direct(ColourValue::rgbt(0.5, 0.0, 0.5, 0.0)));
+    assert_eq!(to, Colour::Direct(ColourValue::rgbt(0.5, 0.5, 0.0, 0.0)));
+}
+
+/// Ramps with different stop counts blend over the union of their
+/// positions (the original's many-to-many case), not one picked half way.
+#[test]
+fn ramps_with_different_stop_counts_blend_over_their_union() {
+    let red = ColourValue::rgbt(1.0, 0.0, 0.0, 0.0);
+    let blue = ColourValue::rgbt(0.0, 0.0, 1.0, 0.0);
+    let mut ramp = crate::fill::Ramp::new();
+    ramp.insert(crate::fill::RampStop {
+        pos: 0.25,
+        value: Colour::Direct(ColourValue::rgbt(0.0, 1.0, 0.0, 0.0)),
+    });
+    let stopped = AttrValue::Fill(Paint::Linear {
+        start: Point::raw(10_000, 0),
+        end: Point::raw(11_000, 0),
+        persp: None,
+        from: Colour::Direct(red),
+        to: Colour::Direct(red),
+        ramp,
+    });
+    let p = BlendParams {
+        steps: 1,
+        ..BlendParams::default()
+    };
+    let (doc, c) = blend_of(&p, &[linear(red, blue, 0), stopped], 2);
+    let Paint::Linear { ramp, .. } = fill_paint(&generate(&doc, c).unwrap()[0][0].attrs) else {
+        panic!("a linear step");
+    };
+    assert_eq!(ramp.stops().len(), 1);
+    assert!((ramp.stops()[0].pos - 0.25).abs() < 1e-6);
+    // Half way between the start sampled at 0.25 (0.75 red, 0.25 blue)
+    // and the green stop.
+    let Colour::Direct(ColourValue::Rgbt { r, g, b, .. }) = ramp.stops()[0].value else {
+        panic!("a direct colour");
+    };
+    assert!(
+        (r - 0.375).abs() < 1e-4 && (g - 0.5).abs() < 1e-4 && (b - 0.125).abs() < 1e-4,
+        "{r} {g} {b}"
+    );
 }
