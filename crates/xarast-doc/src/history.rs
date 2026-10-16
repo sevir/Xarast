@@ -785,7 +785,29 @@ impl<'d> Tx<'d> {
             .into_iter()
             .map(|n| Action::Transform { node: n, matrix: m })
             .collect();
-        self.act(Action::Batch(batch))?;
+        let batch = Action::Batch(batch);
+        match self.record.take() {
+            // Journalled as one step, not one per node: moving a group of
+            // half a million nodes is a line of a hundred bytes, and replay
+            // expands it over the same subtree.
+            Some(mut record) => {
+                let bytes = batch.size_hint(self.doc);
+                let Some(tag) = self.doc.tree.get(node).map(|d| d.tag.0) else {
+                    return self.act_costing(batch, bytes);
+                };
+                record.push(crate::journal::Step::Act {
+                    bytes: bytes as u64,
+                    act: crate::journal::Act::TransformTree {
+                        node: tag,
+                        matrix: m,
+                    },
+                });
+                let applied = self.act_costing(batch, bytes);
+                self.record = Some(record);
+                applied?;
+            }
+            None => self.act(batch)?,
+        }
         // Moving an object is an orthogonal edit (§8.5 rule 2).
         self.mark_edited(node, ForeignMarks::DIRTY)
     }
@@ -1675,6 +1697,17 @@ impl CommandBus {
         let pending = self.take_journal();
         self.journal = Some(crate::journal::Recorder::new(doc));
         pending
+    }
+
+    /// Continues recording a journal after a recovery replayed it into this
+    /// bus: every step of the history came from the journal, so all of them
+    /// can be undone and redone in it.
+    pub fn resume_journal(&mut self, doc: &Document) {
+        let mut r = crate::journal::Recorder::new(doc);
+        r.past = self.history.past.len();
+        r.future = self.history.future.len();
+        r.held = self.history.held_redo.as_ref().map_or(0, |(h, _)| h.len());
+        self.journal = Some(r);
     }
 
     /// Stops recording. Returns what was recorded and not yet taken.

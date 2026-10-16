@@ -238,7 +238,7 @@ egui_kittest = { version = "0.33", default-features = false }
 accesskit = "0.21"
 # Layout and preference persistence. Both `MIT OR Apache-2.0`.
 serde = { version = "1.0", features = ["derive", "rc"] }
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
 
 # ── Shell and platform integration ───────────────────────────────────────────
 # `winit` is pinned at the 0.30 stable line, not the 0.31 beta. The evaluation

@@ -5694,8 +5694,11 @@ version = "0.0.1"
 dependencies = [
  "bitflags 2.13.2",
  "criterion",
+ "flate2",
  "indexmap",
  "kurbo 0.13.1",
+ "proptest",
+ "serde_json",
  "sha2",
  "thiserror 2.0.20",
  "xarast-color",

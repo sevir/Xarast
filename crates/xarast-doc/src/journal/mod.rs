@@ -53,6 +53,7 @@
 
 pub mod base;
 pub mod blob;
+pub mod ndjson;
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -248,6 +249,14 @@ pub enum Act {
     },
     /// [`Action::Batch`].
     Batch(Vec<Act>),
+    /// [`Tx::transform`]: one [`Action::Transform`] per node of the
+    /// subtree at `node`, in document order, all by `matrix`.
+    TransformTree {
+        /// The subtree's root.
+        node: u32,
+        /// The transform.
+        matrix: xarast_geom::Matrix,
+    },
 }
 
 /// The tag of a live node, for recording.
@@ -387,6 +396,15 @@ fn action_of(doc: &Document, a: &Act) -> Result<Action, ReplayError> {
             v.iter()
                 .map(|a| action_of(doc, a))
                 .collect::<Result<_, _>>()?,
+        ),
+        Act::TransformTree { node: n, matrix } => Action::Batch(
+            doc.tree
+                .preorder(node(doc, *n)?)
+                .map(|id| Action::Transform {
+                    node: id,
+                    matrix: *matrix,
+                })
+                .collect(),
         ),
     })
 }
