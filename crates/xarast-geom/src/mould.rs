@@ -1026,9 +1026,166 @@ impl<'a> MouldTransform<'a> {
     }
 }
 
+/// Which of a perspective's vanishing points (the mould tool's draggable
+/// blobs, G9).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Vanishing {
+    /// Where the left side (bottom-left → top-left) and the right side
+    /// (bottom-right → top-right) meet: the "vertical" lines converge.
+    Sides,
+    /// Where the bottom side (bottom-right → bottom-left) and the top side
+    /// (top-right → top-left) meet: the "horizontal" lines converge.
+    Ends,
+}
+
+impl Vanishing {
+    /// Both, in the order [`vanishing_points`] reports them.
+    pub const ALL: [Vanishing; 2] = [Vanishing::Sides, Vanishing::Ends];
+}
+
+/// Where the line `a`–`b` meets the line `c`–`d`, as the parameter `t`
+/// along `a`–`b` (`a + t·(b − a)`), or `None` when they are parallel or a
+/// line has no length.
+fn meet(a: KPoint, b: KPoint, c: KPoint, d: KPoint) -> Option<f64> {
+    let (r, s) = (b - a, d - c);
+    let den = r.x * s.y - r.y * s.x;
+    let scale = r.hypot() * s.hypot();
+    // Within a billionth of a radian of parallel: no meeting point.
+    if scale.is_nan() || scale <= 0.0 || den.abs() <= 1e-9 * scale {
+        return None;
+    }
+    let t = ((c.x - a.x) * s.y - (c.y - a.y) * s.x) / den;
+    t.is_finite().then_some(t)
+}
+
+/// The point where `a`–`b` meets `c`–`d`, in `f64` millipoints.
+fn meeting(a: KPoint, b: KPoint, c: KPoint, d: KPoint) -> Option<KPoint> {
+    meet(a, b, c, d).map(|t| a.lerp(b, t))
+}
+
+/// The lines a vanishing point is where: `(a, b)` and `(c, d)` as corner
+/// indices (bottom-left 0, top-left 1, top-right 2, bottom-right 3), each
+/// line running from its corner nearer the "start" to the other.
+const fn vanishing_lines(which: Vanishing) -> [(usize, usize); 2] {
+    match which {
+        Vanishing::Sides => [(0, 1), (3, 2)],
+        Vanishing::Ends => [(3, 0), (2, 1)],
+    }
+}
+
+/// A perspective's vanishing points, in [`Vanishing::ALL`] order: where
+/// its opposite sides, extended, meet (`Kernel/moldpers.cpp:1840-1870`
+/// computes the same two points). `None` for a pair of sides that are
+/// parallel, or that meet outside the document extent, where no blob can
+/// stand.
+#[must_use]
+pub fn vanishing_points(corners: [Point; 4]) -> [Option<Point>; 2] {
+    let c = corners.map(kp);
+    Vanishing::ALL.map(|which| {
+        let [(a, b), (p, q)] = vanishing_lines(which);
+        let m = meeting(c[a], c[b], c[p], c[q])?;
+        let (pt, clamped) = Point::from_f64_round(m.x, m.y).clamp_to_extent();
+        (!clamped).then_some(pt)
+    })
+}
+
+/// The corners after the vanishing point `which` is dragged to `to`
+/// (`Kernel/moldpers.cpp:1949-1978`, as facts): the pair of sides that meet
+/// there turn about their far corners so that both run through `to`, and
+/// the near corners slide along their own edge's line. "Near" is the end
+/// the vanishing point lies beyond in `corners` (the drag's start): beyond
+/// the bottom edge, the bottom corners move along the bottom line; beyond
+/// the top, the top corners along the top line; likewise left and right
+/// for [`Vanishing::Ends`].
+///
+/// `None` when `corners` has no such vanishing point, or the result is not
+/// a valid perspective ([`Perspective::validate`]): a drag that would fold
+/// or collapse the cage moves nothing.
+#[must_use]
+pub fn drag_vanishing_point(
+    corners: [Point; 4],
+    which: Vanishing,
+    to: Point,
+) -> Option<[Point; 4]> {
+    let c = corners.map(kp);
+    let i = kp(to);
+    let [(a, b), (p, q)] = vanishing_lines(which);
+    // Where the vanishing point is along the first line, from its start.
+    let t = meet(c[a], c[b], c[p], c[q])?;
+    // Beyond the start (t < 0): the start corners `a`, `p` move along the
+    // edge `a`–`p`, each on the line from the fixed far corner through
+    // `to`. Otherwise the far corners `b`, `q` move along `b`–`q`.
+    let (move1, fix1, move2, fix2) = if t < 0.0 { (a, b, p, q) } else { (b, a, q, p) };
+    let edge = (c[move1], c[move2]);
+    let n1 = meeting(c[fix1], i, edge.0, edge.1)?;
+    let n2 = meeting(c[fix2], i, edge.0, edge.1)?;
+    let mut out = corners;
+    for (k, n) in [(move1, n1), (move2, n2)] {
+        let (pt, clamped) = Point::from_f64_round(n.x, n.y).clamp_to_extent();
+        if clamped {
+            return None;
+        }
+        out[k] = pt;
+    }
+    Perspective::validate(out).ok().map(|()| out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rectangle_has_no_vanishing_points_and_a_trapezoid_one() {
+        let square = [
+            Point::raw(0, 0),
+            Point::raw(0, 72_000),
+            Point::raw(72_000, 72_000),
+            Point::raw(72_000, 0),
+        ];
+        assert_eq!(vanishing_points(square), [None, None]);
+        // The floor preset: the sides meet above the top edge.
+        let floor = [
+            Point::raw(0, 0),
+            Point::raw(27_000, 72_000),
+            Point::raw(45_000, 72_000),
+            Point::raw(72_000, 0),
+        ];
+        let [sides, ends] = vanishing_points(floor);
+        assert_eq!(sides, Some(Point::raw(36_000, 96_000)));
+        assert_eq!(ends, None);
+    }
+
+    #[test]
+    fn dragging_a_vanishing_point_turns_the_sides_through_it() {
+        let floor = [
+            Point::raw(0, 0),
+            Point::raw(27_000, 72_000),
+            Point::raw(45_000, 72_000),
+            Point::raw(72_000, 0),
+        ];
+        let to = Point::raw(36_000, 150_000);
+        let out = drag_vanishing_point(floor, Vanishing::Sides, to).unwrap();
+        // The vanishing point is beyond the top: the bottom corners stay,
+        // the top ones slide along the top line (y = 72 000).
+        assert_eq!((out[0], out[3]), (floor[0], floor[3]));
+        assert_eq!((out[1].y.raw(), out[2].y.raw()), (72_000, 72_000));
+        let [sides, _] = vanishing_points(out);
+        let got = sides.unwrap();
+        assert!((got.x.raw() - to.x.raw()).abs() <= 2 && (got.y.raw() - to.y.raw()).abs() <= 2);
+        // Inside the cage the sides would cross: refused.
+        assert_eq!(
+            drag_vanishing_point(floor, Vanishing::Sides, Point::raw(36_000, 30_000)),
+            None
+        );
+        // A rectangle has nothing to drag.
+        let square = [
+            Point::raw(0, 0),
+            Point::raw(0, 72_000),
+            Point::raw(72_000, 72_000),
+            Point::raw(72_000, 0),
+        ];
+        assert_eq!(drag_vanishing_point(square, Vanishing::Ends, to), None);
+    }
 
     fn rect() -> Rect {
         Rect::raw(0, 0, 90_000, 60_000)
