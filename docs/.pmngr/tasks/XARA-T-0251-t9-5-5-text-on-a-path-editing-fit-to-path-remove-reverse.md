@@ -2,12 +2,13 @@
 id: XARA-T-0251
 type: task
 title: "T9.5.5 Text on a path editing: fit to path, remove, reverse, start offset"
-status: backlog
+status: in_progress
 parent: XARA-US-0048
 author: mcp
 labels: [phase-9, text]
 created: 2026-09-23T23:43:49Z
-updated: 2026-09-23T23:43:49Z
+updated: 2026-10-16T15:21:27Z
+started: 2026-10-16T15:21:27Z
 ---
 
 ## Description

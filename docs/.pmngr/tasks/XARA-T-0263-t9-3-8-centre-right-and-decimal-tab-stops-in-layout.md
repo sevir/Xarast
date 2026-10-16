@@ -2,13 +2,14 @@
 id: XARA-T-0263
 type: task
 title: T9.3.8 — Centre, right and decimal tab stops in layout
-status: in_progress
+status: done
 parent: XARA-US-0046
 author: mcp
 labels: [phase-9, text]
 created: 2026-09-24T01:52:49Z
-updated: 2026-10-16T14:08:19Z
+updated: 2026-10-16T15:21:27Z
 started: 2026-10-16T14:08:19Z
+closed: 2026-10-16T15:21:27Z
 ---
 
 ## Description
