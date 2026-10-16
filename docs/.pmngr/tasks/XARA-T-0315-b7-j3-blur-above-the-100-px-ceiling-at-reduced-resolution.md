@@ -2,14 +2,15 @@
 id: XARA-T-0315
 type: task
 title: B7 + J3 — Blur above the 100 px ceiling at reduced resolution; Draft-quality effects during drags
-status: in_progress
+status: done
 priority: low
 parent: XARA-US-0068
 author: mcp
 labels: [phase-13, live-effects, render]
 created: 2026-09-24T18:06:47Z
-updated: 2026-10-16T02:49:20Z
+updated: 2026-10-16T03:58:02Z
 started: 2026-10-16T02:49:20Z
+closed: 2026-10-16T03:58:02Z
 ---
 
 ## Description

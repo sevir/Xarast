@@ -2,12 +2,13 @@
 id: XARA-T-0215
 type: task
 title: ProbeX16 app save is ~1.05–1.09 s against the 1 s budget (snapshot restore cost)
-status: todo
+status: in_progress
 parent: XARA-US-0084
 author: mcp
 labels: [phase-6, perf, app-core]
 created: 2026-09-23T19:55:07Z
-updated: 2026-09-23T19:55:07Z
+updated: 2026-10-16T03:58:08Z
+started: 2026-10-16T03:58:08Z
 ---
 
 ## Description
