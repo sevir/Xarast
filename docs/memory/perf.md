@@ -537,7 +537,7 @@ for both. Release, a scratch probe (not in the tree, like T-0287's) that
 per file, in one process: opens the session, walks it once with the
 session's own walker (`rebuild_scene`, as the window does before any
 export), exports PNG at 96 dpi twice through `Registry::export` and
-`SessionSource` (what `xarast-cli export` runs), then renders the
+`SessionSource` (what `xarast-cli export` ran then; now `Session` itself), then renders the
 thumbnail twice (`thumbnail_png` before, `thumbnail_png_with(doc,
 session.decoded_images())` after — what a save now does). Nine runs,
 medians, ms. "Scene" is `ExportReport::scene_time` (the export's walk).

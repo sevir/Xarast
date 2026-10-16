@@ -486,6 +486,47 @@ Full note: [`tools.md`](tools.md). What the interface side owns:
   a Brightness of 0.2 or a Gamma of 1.3 used to send a `Set` every
   frame. A crop field whose drag `Esc` ends applies nothing.
 
+### File › Export… (phase 11 T11.1.8, XARA-T-0192)
+
+- **Seam**: `UiModel::export_dialog: Option<ExportDialogView>` in,
+  `UiCommand::ExportDialog(ExportDialogOp)` out; the shell maps it 1:1 to
+  `Intent::ExportDialog`. The model, its rules and the export itself are
+  `xarast-app`'s (`app-core.md` "File › Export in the core",
+  `export.md` "File › Export"); the types reach this crate as re-exports
+  of `xarast_app::export_dialog` (no `xarast-io` dependency here).
+- **Dialog** (`dialogs::export`, an `egui::Modal` like the prompt, drawn
+  by `Workspace` before the prompt so a question stays on top): a grid of
+  Format, Area, then only the fields the view carries — Width/Height in
+  pixels, Keep proportions, Resolution (dpi), Printed width/height in the
+  document's unit, Background, Quality — then the flatten note and the
+  error line, then by phase: Export… / Cancel; "Choose where to save the
+  file…"; a progress bar ("Export progress: Rendering") + Cancel (asks for
+  a repaint every 100 ms); the summary and "Not reproduced exactly:" with
+  one line per compromise + Close; "Export failed: …" + Close. Fields are
+  disabled while choosing or running. Escape / click outside = `Cancel`.
+- **Accessible names**: the combos are "Export format", "Export area",
+  "Export background" (the grid's own label already says "Format"; two
+  nodes with one name broke `get_by_label`); "Width in pixels",
+  "Resolution in dots per inch", "Printed width in millimetres",
+  "Quality, 1 to 100".
+- **Shell**: File › Export… (after Import…, Ctrl+Shift+E);
+  `PlatformRequest::ShowExportFileDialog` → one parented
+  `PortalHandle::save_file` at a time (`export_dialog` id) filtered to the
+  format ("PNG (*.png)"), pre-filled with `stem.ext` in the document's
+  directory; `SaveChosen` → `Intent::ExportTo`, Cancelled/Failed →
+  `ExportFileDialogClosed` (a failure also to the status bar and the
+  problem list); `housekeeping` calls `poll_exports`.
+- Tests: `tests/export_dialog.rs` (7, kittest over AccessKit): the field
+  set per format against the capabilities (PNG, JPEG, WebP, PDF, SVG), the
+  JPEG flatten note, ops from clicks, a typed resolution → `Sizing(Dpi)`,
+  a disabled Export with the max-side message, Cancel while running, the
+  compromise list, Escape. The rules themselves are unit-tested in
+  `xarast_app::export_dialog`. Shell:
+  `viewer::tests::ctrl_shift_e_exports_through_the_dialog_and_the_chooser`
+  (Ctrl+Shift+E → dialog → Export… → a synthetic `SaveChosen` → the
+  file, phase `Done`). The live portal round trip on a compositor has not
+  been driven yet.
+
 ### Showing a pane: F9, F10, F11 and the Window menu (XARA-T-0254)
 
 - **Command**: `AppCommand::ShowPane(DockPane)` (`xarast-app`;

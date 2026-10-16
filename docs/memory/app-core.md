@@ -136,6 +136,8 @@ scale factor and calls `Intent::SetDpi`.
 | `schedule` | `QualityScheduler` (the Draft → Final policy, clock injected), `Canvas` (it joined to a `RenderThread` and a `Session`), `Backdrop`, `FINAL_AFTER` |
 | `structure` | `StructureCommand`/`StructureOp` (group, ungroup, z-order, move-each, duplicate, cut), `ZOrder`, `AlignSpec`, `align_moves`, clipboard fragments (`copy_fragment`, `PasteFragment`, `fragment_svg`, `fragment_from_svg`) |
 | `snap` | `SnapSource`, `SnapResolver`, `SnapSettings`, grid/guide/object sources, `GuideCommand` |
+| `export` | `impl xarast_io::ExportSource for Session`, `Session::export_job`, `ExportJob`, `ExportWorker`, `ExportProgress`, `ExportOutcome` (XARA-T-0192) |
+| `export_dialog` | `ExportDialog` (state), `ExportDialogView`, `ExportDialogOp`, `ExportPhase`, `AreaChoice`, `BackgroundChoice` — File › Export, generated from `Capabilities` |
 
 Tests: 13 viewport, 11 session/selection/command, 8 corpus (the 59 real
 `.xar` files, through `XARAST_XAR_CORPUS`, never copied into the
@@ -474,7 +476,7 @@ reason the walker *reports*, which is its own test.
 42. **A session's walkers decode each bitmap once between them**
     (XARA-T-0281). `Session` owns a `DecodedImages` (`src/decoded.rs`) and
     every walker it makes shares it: its own, `Session::scene_walker()`
-    (`build_scene`, the CLI's `SessionSource`), `headless::render`, and
+    (`build_scene`, export through `impl ExportSource for Session`), `headless::render`, and
     the save thread's thumbnail (`SaveJob::with_decoded_images`, set by
     `Session::save_job`; `thumbnail::thumbnail_png_with`), and the bitmap
     gallery's thumbnail thread (`DecodedImages::image_for`, which decodes
@@ -833,6 +835,33 @@ placer (XARA-T-0259, 2026-09-24, ext4, load ≈ 3): ProbeX16 UI thread
   linear fill deforms with it, an envelope that bulges.
 
 ---
+
+### File › Export in the core (XARA-T-0192, 2026-10-16)
+
+- `Session` is an `ExportSource` (`src/export.rs`); the CLI hands its
+  sessions straight to the registry. A private `DocSource` holds the
+  shared code; a live session and an `ExportJob`'s detached copy both
+  forward to it, which is why the job's bytes equal the session's (tested
+  on the corpus).
+- **The export scene ignores the session's view and edit state**: it is
+  walked with `EditState::for_document` and `session::initial_viewport`
+  (factored out of `Session::adopt`, same numbers). Do not pass
+  `s.viewport` / `s.edit`: the photo-proxy level follows the view's scale,
+  and the file would change with the zoom.
+- `AppState` owns `export: Option<ExportDialog>` and an `ExportWorker`
+  (one job at a time, thread `xarast-export`, woken by the save waker).
+  Flow: `AppCommand::Export` (Ctrl+Shift+E, the original's key, research/04
+  §4.2) → `Intent::ShowExportDialog` → `Intent::ExportDialog(op)` edits →
+  op `Export` queues `PlatformRequest::ShowExportFileDialog { title,
+  file_name, directory, filter, extensions }` and the phase becomes
+  `Choosing` → `Intent::ExportTo(path)` (a missing or foreign extension
+  gets the format's: `export_dialog::with_extension`) builds the request,
+  `Session::export_job`, starts it (`Running`) → `poll_exports` /
+  `wait_exports` → `Done { summary, compromises }`, `Failed`, or back to
+  `Editing` on a cancel; the notice is "Exported NAME" / "Export
+  cancelled". `ExportFileDialogClosed` returns to `Editing`. Op `Cancel`
+  stops a running export (else closes); `Close` cancels and closes.
+- Session ignores the four new intents (they are `AppState`'s).
 
 ## Invariants that must not be broken
 

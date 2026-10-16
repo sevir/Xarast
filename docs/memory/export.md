@@ -15,8 +15,10 @@ mapper in its `Interchange` dialect (section "SVG" below). Round 4
 (2026-09-24, XARA-US-0060): **colour fidelity and the export regression
 harness** (section "Colour fidelity and regression" below). Batch export
 (T11.1.6), export hints in the document (T11.1.5), palette quantisation
-(T11.2.8), AVIF (T11.2.7) and the dialog (T11.1.8, XARA-T-0192) are not
-built yet. Round 5 (2026-09-24, XARA-T-0228 + XARA-T-0233 + XARA-T-0245):
+(T11.2.8) and AVIF (T11.2.7) are not built yet. Round 6 (2026-10-16,
+XARA-T-0192): **File › Export** — `impl ExportSource for Session` in
+`xarast-app`, exports off the interface thread with cancel, and the
+dialog generated from `Capabilities` (section "File › Export" below). Round 5 (2026-09-24, XARA-T-0228 + XARA-T-0233 + XARA-T-0245):
 **fonts** — PDF text is live text in embedded subset fonts with
 `ToUnicode`, SVG embeds WOFF2 subsets, `--text outlines` for both, and
 faces whose `fsType` forbids embedding become outlines (section "Fonts"
@@ -32,7 +34,10 @@ below).
 | The three raster exporters, atomic writes | `crates/xarast-io/src/raster.rs` |
 | PNG writer (ours), parallel zlib, JPEG and WebP wrappers | `png.rs`, `deflate.rs`, `jpeg.rs`, `webp.rs` |
 | The export rasteriser (strips on the CPU backend) | `crates/xarast-render/src/export.rs`, `CpuBackend::render_rows` |
-| `xarast-cli export` + `SessionSource` (temporary home) | `crates/xarast-cli/src/export.rs` |
+| `impl ExportSource for Session`, `ExportJob`, `ExportWorker`, `ExportProgress` | `crates/xarast-app/src/export.rs` |
+| The File › Export dialog's model (`ExportDialog`, `ExportDialogView`, `ExportDialogOp`) | `crates/xarast-app/src/export_dialog.rs` |
+| The dialog's widgets (`dialogs::export`) | `crates/xarast-ui/src/dialogs.rs` |
+| `xarast-cli export` (hands its `Session` to the registry) | `crates/xarast-cli/src/export.rs` |
 | `PdfExporter`, `plan_page`, the command translator and the ladder | `crates/xarast-io/src/pdf/mod.rs` |
 | `PdfWriter` façade (the only code naming `pdf-writer`) | `crates/xarast-io/src/pdf/writer.rs` |
 | Gradients → shadings, graduated transparency → soft-mask content | `crates/xarast-io/src/pdf/shading.rs` |
@@ -102,9 +107,8 @@ behind `SvgOptions::dialect`; that list is the table above.
   `document() -> Option<&Document>` and `svg_text_placer() -> Option<Placer>`.
   SVG export maps the model, not the scene, so a scene-only source
   (`SceneSource`) is refused with `UnsupportedFormat`; `build_scene` is
-  never called. `SessionSource` (CLI) returns the session's document and
-  `xarast_app::svg_text::placer()`. XARA-T-0192's `Session` impl must do
-  the same.
+  never called. `Session` (and the detached copy an `ExportJob` exports)
+  returns its document and `xarast_app::svg_text::placer()`.
 - **Bitmaps** (`svg.rs`, `Links`): PNG / JPEG / GIF originals **with no
   reconstruction palette** pass through byte for byte; anything else (the
   `.xar` BMP flavours, JPEG8BPP, pixel-only bitmaps) is decoded by the
@@ -303,6 +307,69 @@ Girard_simple, Watch4 and testimp1 unchanged. A glow is still cast from
 an opaque pass by the renderer but from `SourceAlpha` in SVG, so a
 partly transparent object glows weaker in SVG (no corpus glows).
 
+## File › Export (T11.1.8, XARA-T-0192, 2026-10-16)
+
+- **The source.** `impl xarast_io::ExportSource for Session`
+  (`xarast-app/src/export.rs`); the CLI's `SessionSource` is gone and
+  `xarast-cli export`, `fixtures`, `bench` and the tests pass `&session`.
+  Areas: drawing = `drawing_or_page_rect`, page = `page_rect` or the given
+  page node, spread = `spread_rect`, selection = `EditState::selection_bounds`
+  (empty → `ExportError::Area`). Walker shortfalls (`WalkStats`) and font
+  substitutions become `NotRendered` / `FontSubstituted` as before. Fonts:
+  the session walker's service (`Session::walker_fonts`, `None` = the
+  process's shared one) for the scene and `text_as_outlines`.
+- **What an export draws is a function of the document only.** The scene is
+  walked with a fresh `EditState::for_document` and
+  `session::initial_viewport(doc)` (1024 × 768 fitted to the page, what a
+  freshly opened session has — so the CLI's bytes did not move), never with
+  the user's selection, zoom or tool preview. The viewport matters: the
+  walker picks a photo-adjusted bitmap's proxy level from the view's scale
+  (`proxy_level_of`). Test `the_export_does_not_depend_on_the_view_or_the_selection`.
+- **Off the interface thread.** `Session::export_job(request)` resolves the
+  area to `ExportArea::Rect` on the UI thread (node ids do not survive a
+  snapshot restore), snapshots the document and carries the decoded-bitmap
+  cache and the fonts. `ExportJob::run` restores the snapshot into a
+  detached source with the same code (`DocSource`) and calls the registry.
+  `ExportWorker` runs one job at a time on `xarast-export`; `ExportProgress`
+  (atomics: cancel flag, stage, fraction bits) is the `Progress` the
+  exporters poll before every band. Measured cancel latency (debug build,
+  1200 dpi A4 PNG, cancel at the first `Render` report): **21 ms**.
+- **Cancel leaves no file.** The exporters' atomic writes remove the
+  `.part`; a cancel that lands after the last band (the export returned
+  `Ok`) makes the worker delete the file it just wrote and report
+  `Cancelled`, so "Cancel" always means "no file". Closing the dialog
+  while an export runs cancels it.
+- **Byte identity with the CLI** (acceptance): `xarast-cli/tests/file_export.rs`
+  runs the binary and `AppState` through the dialog's operations on the
+  same file and compares bytes — 7 cases (PNG default; PNG 150 dpi, paper,
+  page; JPEG default; JPEG q70 72 dpi; WebP; PDF; SVG) × (a synthetic
+  `.xarast` made by the test + Groucho2, leafgirl, SimpleText, TextCurve
+  from the corpus) = **35 comparisons, all identical**.
+  `xarast-app/tests/export.rs` checks a background job writes the live
+  session's bytes for all five formats on a synthetic document and six
+  corpus files (shadows, bevels, feathers, text on a path, bitmaps, fills,
+  stories).
+- **The dialog** is generated from the registry's `Capabilities`; a field
+  is `None` in `ExportDialogView` exactly when the format does not declare
+  it: `!vector` → pixel width/height + "Keep proportions"; `has_dpi` →
+  resolution and printed width/height (shown in the document's unit);
+  `alpha` → background (Transparent / Paper colour); no alpha → the note
+  "JPEG has no transparency: transparent areas are flattened onto the
+  paper colour." and no background field (the request keeps
+  `Background::Transparent`, as the CLI default, and the report says
+  `AlphaFlattened`); `lossy` → Quality 1–100; `max_side` → "WebP stores at
+  most 16383 px a side" and Export disabled. Size/dpi/printed size are
+  linked by `ExportSizing::edit` (resolution pinned by default, as the
+  CLI). Per format: PNG = size, dpi, printed size, background; JPEG = size,
+  dpi, printed size, quality, flatten note; WebP = size, background (no
+  dpi: WebP stores none); PDF and SVG = background only. After the export
+  the dialog shows the summary and every `ExportReport::compromises` line.
+  Defaults are the CLI's (PNG, drawing, 96 dpi, transparent, `Final`).
+- Not in the dialog yet: bleed, explicit rectangles, a background colour,
+  PNG depth/colour/interlace, JPEG progressive/subsampling, PDF and SVG
+  options (all reachable from the CLI); the dialog only edits what
+  `Capabilities` describes plus quality.
+
 ## Colour fidelity and regression (W11.5, W11.6, XARA-US-0060)
 
 ### Colour (T11.5.1–T11.5.5)
@@ -352,7 +419,7 @@ partly transparent object glows weaker in SVG (no corpus glows).
 ### Regression harness (T11.6.1–T11.6.4)
 
 - **`xarast-cli fixtures --out-dir D --format F [export options]`**
-  exports three built-in documents through `SessionSource` and the
+  exports three built-in documents through `Session` (the export source) and the
   registry (`export::run_on` takes in-memory inputs): `colour-sheet`,
   `features` (linear gradient with a middle stop, elliptical radial, 8 pt
   stroke, 50 % flat transparency over an opaque square), `synthetic`
@@ -613,8 +680,8 @@ with it.
   there. The types need only `xarast-doc` (`NodeId`), `xarast-geom` and
   `xarast-render`, so they sit with the trait. What does need the app —
   turning a selection or a page into a rectangle and walking the document
-  into a scene — is the `ExportSource` trait, which the app implements
-  (XARA-T-0192). Until then `xarast-cli` carries `SessionSource`.
+  into a scene — is the `ExportSource` trait, which `Session` implements
+  (XARA-T-0192).
 - **Export geometry is exact.** `export_transform` maps the area's top-left
   to pixel (0, 0) and its bottom-right to (w, h), independently in x and y
   (non-uniform when the aspect lock is off). The headless `render` path
@@ -809,9 +876,14 @@ with it.
 
 ## Open TODOs
 
-- XARA-T-0192: `impl ExportSource for Session` in `xarast-app`, File ›
-  Export dialog from `Capabilities`, export off the UI thread with a
-  `CancelFlag`.
+- ~~XARA-T-0192~~ (done, "File › Export"). Follow-ups: the dialog's
+  missing options (bleed, a background colour, PNG/JPEG/PDF/SVG options),
+  remembering the last options per document (T11.1.5 export hints), a
+  preview; the photo-proxy level of an export follows the fixed export
+  view, not the export's dpi (a photo-adjusted bitmap exported at 300 dpi
+  may use a reduced proxy) — make `build_scene` take the output scale; the
+  live portal round trip (Export… → chooser → file) has not been driven on
+  a compositor.
 - XARA-T-0038 remainder: the per-pixel cost of gradient fills (~30 ns/px)
   and the on-screen/headless path's three bands; export itself is done.
 - T11.1.5 export hints in `meta.xml` (the option structs are serde-ready and
