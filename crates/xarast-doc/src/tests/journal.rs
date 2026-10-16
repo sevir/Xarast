@@ -396,3 +396,65 @@ fn hostile_bases_and_entries_are_errors_not_panics() {
     let back: BaseDoc = from_json(&blobs, &broken);
     assert!(back.into_document().is_err());
 }
+
+/// "No colour" (`Colour::None`, XARA-T-0204) journals and replays: a flat
+/// fill and a gradient key set to it come back as `Colour::None`, not as
+/// transparent black, and the recovered digest equals the live one.
+#[test]
+fn a_no_colour_edit_records_and_replays() {
+    use crate::attr::AttrValue;
+    use crate::fill::{Paint, Ramp};
+    use crate::history::{Command, EditError, Tx};
+    use crate::kind::NodeKind;
+    use xarast_color::{Colour, ColourValue};
+
+    #[derive(Debug)]
+    struct SetNone(NodeId, AttrValue);
+    impl Command for SetNone {
+        fn label(&self) -> &'static str {
+            "Set Fill"
+        }
+        fn run(&self, tx: &mut Tx<'_>) -> Result<(), EditError> {
+            tx.set_attr(self.0, self.1.clone())
+        }
+    }
+
+    let mut live = Live::new(edit_fixture().doc);
+    let attrs: Vec<NodeId> = live
+        .doc
+        .tree
+        .preorder(live.doc.tree.root())
+        .filter(|n| matches!(live.doc.tree.kind(*n), Some(NodeKind::Attr(_))))
+        .collect();
+    assert!(attrs.len() >= 2, "the fixture has attributes");
+    let flat = AttrValue::Fill(Paint::Flat {
+        value: Colour::None,
+    });
+    let gradient = AttrValue::Fill(Paint::Linear {
+        start: xarast_geom::Point::raw(0, 0),
+        end: xarast_geom::Point::raw(10_000, 0),
+        persp: None,
+        from: Colour::None,
+        to: Colour::Direct(ColourValue::rgbt(0.2, 0.4, 0.6, 0.0)),
+        ramp: Ramp::new(),
+    });
+    for (n, v) in [(attrs[0], flat.clone()), (attrs[1], gradient.clone())] {
+        live.bus
+            .dispatch(&mut live.doc, &SetNone(n, v))
+            .expect("set");
+        live.flush();
+    }
+    assert!(
+        live.lines.iter().any(|l| l.contains("\"None\"")),
+        "{:#?}",
+        live.lines
+    );
+    let (doc, _) = live.recover();
+    assert_eq!(doc.canonical_digest(), live.doc.canonical_digest());
+    let value = |n: NodeId| match doc.tree.kind(n) {
+        Some(NodeKind::Attr(a)) => a.value.clone(),
+        _ => panic!("an attribute"),
+    };
+    assert_eq!(value(attrs[0]), flat);
+    assert_eq!(value(attrs[1]), gradient);
+}
