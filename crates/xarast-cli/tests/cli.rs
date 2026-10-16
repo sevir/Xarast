@@ -268,6 +268,40 @@ fn smoke_open_reports_walk_stats_and_fails_on_a_bad_file() {
 }
 
 #[test]
+fn repair_rebuilds_a_package_without_its_central_directory() {
+    let dir = scratch("repair");
+    let xar = write(&dir, "sq.xar", &square_xar());
+    let pkg = dir.join("sq.xarast");
+    let o = run(&[
+        "convert",
+        xar.to_str().unwrap(),
+        "-o",
+        pkg.to_str().unwrap(),
+    ]);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    let bytes = std::fs::read(&pkg).unwrap();
+    let cd = bytes.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+    let damaged = write(&dir, "damaged.xarast", &bytes[..cd]);
+    let fixed = dir.join("fixed.xarast");
+
+    let o = run(&["repair", damaged.to_str().unwrap(), fixed.to_str().unwrap()]);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert!(stdout(&o).contains("entries found"), "{}", stdout(&o));
+    let r = xarast_format::XarastReader::open(std::fs::File::open(&fixed).unwrap())
+        .expect("the repaired package opens strictly");
+    assert!(r.diagnostics().is_empty(), "{:?}", r.diagnostics());
+
+    // Nothing recoverable, same path twice, and a missing input.
+    let junk = write(&dir, "junk.xarast", b"not a package");
+    let o = run(&["repair", junk.to_str().unwrap(), dir.join("o.xarast").to_str().unwrap()]);
+    assert_eq!(o.status.code(), Some(2));
+    let o = run(&["repair", fixed.to_str().unwrap(), fixed.to_str().unwrap()]);
+    assert_eq!(o.status.code(), Some(1));
+    let o = run(&["repair", dir.join("nope").to_str().unwrap(), dir.join("o2").to_str().unwrap()]);
+    assert_eq!(o.status.code(), Some(2));
+}
+
+#[test]
 fn export_writes_every_format_at_the_requested_resolution() {
     let dir = scratch("export-formats");
     let input = write(&dir, "square.xar", &square_xar());

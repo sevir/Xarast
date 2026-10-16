@@ -22,6 +22,7 @@ pub mod fixtures;
 pub mod inputs;
 pub mod inspect;
 pub mod render;
+pub mod repair;
 pub mod smoke;
 
 /// The process exit codes every subcommand shares.
@@ -60,6 +61,7 @@ SUBCOMMANDS
     fixtures     export the built-in test documents (CI's export checks)
     inspect      report what a document holds (--fills: every fill)
     render       render documents to PNG on the CPU backend
+    repair       rebuild a damaged .xarast package (local-header scan)
     smoke-open   import documents, walk the scene and report what is missing
     version      print the version
 
@@ -93,6 +95,7 @@ pub fn run(argv: &[String]) -> Exit {
         "fixtures" => dispatch(rest, fixtures::USAGE, fixtures::parse, fixtures::run),
         "inspect" => dispatch(rest, inspect::USAGE, inspect::parse, inspect::run),
         "render" => dispatch(rest, render::USAGE, render::parse, render::run),
+        "repair" => dispatch(rest, repair::USAGE, repair::parse, repair::run),
         "smoke-open" => dispatch(rest, smoke::USAGE, smoke::parse, smoke::run),
         other => {
             eprintln!("xarast-cli: unknown subcommand `{other}`\n");

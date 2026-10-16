@@ -39,6 +39,10 @@ pub struct OpenOptions {
     pub limits: Limits,
     /// SVG reader options (its `limits` are replaced by the ones above).
     pub read: ReadOptions,
+    /// Recover from a malformed `document.svg` instead of refusing it
+    /// (F6.9): keep the well-formed prefix, close it, and report the loss.
+    /// Off by default: the strict open is what a healthy file goes through.
+    pub recover: bool,
 }
 
 /// Why a package could not be opened as a document.
@@ -50,6 +54,19 @@ pub enum OpenError {
     /// `document.svg` could not be read.
     #[error("document.svg: {0}")]
     Svg(#[from] SvgReadError),
+}
+
+/// How much of a malformed `document.svg` a recovering open could use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SvgRecovery {
+    /// Why the strict read failed.
+    pub error: String,
+    /// Bytes of `document.svg` that were read.
+    pub kept_bytes: usize,
+    /// Size of `document.svg`.
+    pub total_bytes: usize,
+    /// End tags that had to be supplied.
+    pub closed_elements: usize,
 }
 
 /// An opened document and everything that came with it.
@@ -68,6 +85,10 @@ pub struct OpenedDocument<R: Read + Seek> {
     pub stats: ReadStats,
     /// The preservation digest check (§8.4).
     pub preservation: Preservation,
+    /// Set when `document.svg` was malformed and only a prefix was read
+    /// ([`OpenOptions::recover`]). The document is then read-only material:
+    /// [`read_only_suggested`](Self::read_only_suggested) is `true`.
+    pub recovered: Option<SvgRecovery>,
     /// The package, kept for raw copies on the next save.
     pub package: XarastReader<R>,
     /// Time spent parsing `document.svg` into the model.
@@ -114,6 +135,7 @@ pub fn open_reader<R: Read + Seek>(
     read.limits = opts.limits;
     let mut missing: Vec<String> = Vec::new();
     let t = Instant::now();
+    let mut recovered = None;
     let result = {
         let mut fetch = |p: &str| -> Option<Arc<[u8]>> {
             match package.entry(p) {
@@ -124,8 +146,18 @@ pub fn open_reader<R: Read + Seek>(
                 }
             }
         };
-        read_svg(&svg, &read, &mut fetch)?
+        match read_svg(&svg, &read, &mut fetch) {
+            Ok(r) => r,
+            Err(e) if opts.recover => {
+                let (r, info) = recover_svg(&svg, &read, &mut fetch, e)?;
+                recovered = Some(info);
+                r
+            }
+            Err(e) => return Err(e.into()),
+        }
     };
+    missing.sort();
+    missing.dedup();
     let parse_time = t.elapsed();
     let mut document = result.document;
     let mut diagnostics = result.diagnostics;
@@ -139,16 +171,116 @@ pub fn open_reader<R: Read + Seek>(
             format!("{p} is missing or corrupt in the package"),
         ));
     }
+    let read_only_suggested = read_only_suggested || recovered.is_some();
+    if let Some(r) = &recovered {
+        diagnostics.push(xarast_doc::Diagnostic::new(
+            Severity::Warning,
+            DiagCode::Repaired,
+            format!(
+                "document.svg is damaged ({}); only its first {} of {} bytes were read and the \
+                 rest of the drawing is lost. The document is open read-only: use Save As to \
+                 keep what was recovered.",
+                r.error, r.kept_bytes, r.total_bytes
+            ),
+        ));
+    }
     Ok(OpenedDocument {
         document,
         diagnostics,
         container,
         read_only_suggested,
+        recovered,
         stats: result.stats,
         preservation: result.preservation,
         package,
         parse_time,
     })
+}
+
+/// The most times a recovering read cuts at the parser's error position and
+/// tries again.
+const MAX_RECOVERY_ROUNDS: usize = 8;
+
+/// Reads the longest well-formed prefix of a malformed `document.svg`.
+///
+/// Round one closes the prefix the tag scanner finds; if the real parser
+/// still objects at some byte, the next round cuts there. Gives up with the
+/// original error.
+fn recover_svg(
+    svg: &[u8],
+    read: &ReadOptions,
+    fetch: &mut crate::svg::read::ResourceFetch<'_>,
+    first: SvgReadError,
+) -> Result<(crate::svg::read::SvgRead, SvgRecovery), SvgReadError> {
+    let depth = usize::try_from(read.limits.max_xml_depth).unwrap_or(usize::MAX);
+    let message = first.to_string();
+    let mut cut = svg.len();
+    for _ in 0..MAX_RECOVERY_ROUNDS {
+        let Some(p) = svg.get(..cut).and_then(|s| crate::partial::close_partial(s, depth)) else {
+            break;
+        };
+        match read_svg(&p.bytes, read, fetch) {
+            Ok(r) => {
+                return Ok((
+                    r,
+                    SvgRecovery {
+                        error: message,
+                        kept_bytes: p.kept,
+                        total_bytes: svg.len(),
+                        closed_elements: p.closed,
+                    },
+                ));
+            }
+            Err(SvgReadError::Xml(dom::XmlError::Syntax { offset, .. })) if offset < p.kept => {
+                // Cut where the parser tripped, which is inside what was kept.
+                cut = offset;
+            }
+            Err(_) => break,
+        }
+    }
+    Err(first)
+}
+
+/// Opens a package that may be damaged: the strict open first, and when the
+/// container is refused, [`repair`](crate::repair::repair) in memory and open
+/// that. A malformed `document.svg` is recovered as well
+/// ([`OpenOptions::recover`] is forced on).
+///
+/// The second element is the repair report, `None` when the container was
+/// fine. Whenever it is `Some` or the document was recovered, the result's
+/// `read_only_suggested` is `true`.
+///
+/// # Errors
+///
+/// [`OpenError`] when nothing can be recovered; the error is the strict open's.
+pub fn open_recovering(
+    bytes: &[u8],
+    opts: &OpenOptions,
+) -> Result<
+    (
+        OpenedDocument<std::io::Cursor<Vec<u8>>>,
+        Option<crate::repair::RepairReport>,
+    ),
+    OpenError,
+> {
+    let mut o = opts.clone();
+    o.recover = true;
+    let strict = open_reader(std::io::Cursor::new(bytes.to_vec()), &o);
+    let first = match strict {
+        Ok(d) => return Ok((d, None)),
+        Err(OpenError::Package(e)) => e,
+        Err(e) => return Err(e),
+    };
+    let ro = crate::repair::RepairOptions {
+        limits: opts.limits,
+        ..Default::default()
+    };
+    let Ok(fixed) = crate::repair::repair(bytes, &ro) else {
+        return Err(OpenError::Package(first));
+    };
+    let mut d = open_reader(std::io::Cursor::new(fixed.bytes), &o)?;
+    d.read_only_suggested = true;
+    Ok((d, Some(fixed.report)))
 }
 
 /// Reads what the model keeps of `meta.xml` (`research/06 §7.2`): title,

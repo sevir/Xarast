@@ -66,8 +66,10 @@ pub mod limits;
 pub mod manifest;
 pub mod name;
 pub mod open;
+pub mod partial;
 pub mod policy;
 pub mod reader;
+pub mod repair;
 pub mod resource;
 pub mod save;
 pub mod sniff;
@@ -84,10 +86,11 @@ pub use error::{Diagnostic, ReadError, WriteError};
 pub use limits::Limits;
 pub use manifest::{FileEntry, Manifest, Role};
 pub use open::{
-    OpenError, OpenOptions, OpenedDocument, open, open_reader, open_with, prepare_resave,
-    save_opened, save_opened_to,
+    OpenError, OpenOptions, OpenedDocument, SvgRecovery, open, open_reader, open_recovering,
+    open_with, prepare_resave, save_opened, save_opened_to,
 };
 pub use reader::{EntryInfo, XarastReader};
+pub use repair::{RepairError, RepairOptions, RepairReport, Repaired, repair, repair_file};
 pub use resource::{ResourceId, ResourceIndex, ResourceKind};
 pub use save::{SaveOptions, SaveReport, meta_xml, prepare_save, save, save_to};
 pub use sniff::{sniff, sniff_bytes};
