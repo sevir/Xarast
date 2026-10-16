@@ -332,3 +332,186 @@ fn export_phase(
         }
     }
 }
+
+/// The title of the guideline properties dialog.
+pub const GUIDE_PROPERTIES_TITLE: &str = "Guideline Properties";
+
+/// The guideline properties dialog: the position of one guide, which can be
+/// typed, and its orientation, which is shown and cannot be changed. That
+/// is the whole of what the original offers (a position field and a
+/// read-only "Horizontal"/"Vertical" label, committed with OK); guidelines
+/// have no layer of their own to pick.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GuideProperties {
+    /// The guide, as an index into [`crate::model::DocumentView::guides`].
+    pub index: usize,
+    /// Which way it runs.
+    pub axis: crate::guides::Axis,
+    /// The position field.
+    pub text: String,
+    /// Why the field could not be read, once OK was pressed.
+    pub error: Option<String>,
+}
+
+impl GuideProperties {
+    /// The dialog for guide `index`, the position shown in `unit`.
+    pub fn open(index: usize, guide: &crate::guides::Guide, unit: Unit) -> GuideProperties {
+        GuideProperties {
+            index,
+            axis: guide.axis,
+            text: crate::units::format_measure(guide.position, unit),
+            error: None,
+        }
+    }
+
+    /// The position the field holds, in `unit` when it names none.
+    pub fn position(&self, unit: Unit) -> Result<Mp, crate::units::MeasureError> {
+        crate::units::parse_measure(&self.text, unit)
+    }
+
+    /// The orientation, as the dialog words it.
+    pub fn orientation(&self) -> &'static str {
+        match self.axis {
+            crate::guides::Axis::Horizontal => "Horizontal",
+            crate::guides::Axis::Vertical => "Vertical",
+        }
+    }
+}
+
+/// Draws the guideline properties dialog while `state` holds one, and
+/// pushes a [`UiCommand::MoveGuide`] when OK is pressed on a new position.
+/// The dialog closes by itself when its guide is gone.
+pub fn guide_properties(
+    ctx: &egui::Context,
+    state: &mut Option<GuideProperties>,
+    doc: &crate::model::DocumentView,
+    out: &mut CommandSink,
+) {
+    let Some(p) = state.as_mut() else { return };
+    let Some(guide) = doc.guides.get(p.index) else {
+        *state = None;
+        return;
+    };
+    let unit = doc.unit;
+    let current = guide.position;
+    let mut ok = false;
+    let mut cancel = false;
+    let mut open = true;
+    egui::Window::new(GUIDE_PROPERTIES_TITLE)
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .show(ctx, |ui| {
+            egui::Grid::new("xarast_guide_properties")
+                .num_columns(2)
+                .show(ui, |ui| {
+                    ui.label("Position");
+                    let field =
+                        ui.add(egui::TextEdit::singleline(&mut p.text).desired_width(120.0));
+                    if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        ok = true;
+                    }
+                    ui.end_row();
+                    ui.label("Orientation");
+                    ui.label(p.orientation());
+                    ui.end_row();
+                });
+            if let Some(e) = &p.error {
+                ui.colored_label(ui.visuals().error_fg_color, e);
+            }
+            ui.horizontal(|ui| {
+                ok |= ui.button("OK").clicked();
+                cancel |= ui.button("Cancel").clicked();
+            });
+        });
+    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        cancel = true;
+    }
+    if ok {
+        match p.position(unit) {
+            Ok(position) => {
+                if position != current {
+                    out.push(UiCommand::MoveGuide {
+                        index: p.index,
+                        position,
+                    });
+                }
+                *state = None;
+                return;
+            }
+            Err(e) => p.error = Some(e.to_string()),
+        }
+    }
+    if cancel || !open {
+        *state = None;
+    }
+}
+
+#[cfg(test)]
+mod guide_tests {
+    use super::*;
+    use crate::guides::Guide;
+    use crate::model::DocumentView;
+
+    fn run(
+        state: &mut Option<GuideProperties>,
+        doc: &DocumentView,
+        events: Vec<egui::Event>,
+    ) -> CommandSink {
+        let ctx = egui::Context::default();
+        let mut out = CommandSink::new();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 600.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| guide_properties(ctx, state, doc, &mut out));
+        out
+    }
+
+    #[test]
+    fn the_dialog_shows_the_position_and_the_orientation_read_only() {
+        let g = Guide::horizontal(Mp::from_mm(25.0));
+        let p = GuideProperties::open(0, &g, Unit::Millimetre);
+        assert_eq!(p.text, "25mm");
+        assert_eq!(p.orientation(), "Horizontal");
+        assert_eq!(p.position(Unit::Millimetre), Ok(Mp::from_mm(25.0)));
+        let v = GuideProperties::open(0, &Guide::vertical(Mp::ZERO), Unit::Point);
+        assert_eq!(v.orientation(), "Vertical");
+    }
+
+    #[test]
+    fn a_typed_position_reads_in_the_display_unit_and_bad_text_is_refused() {
+        let g = Guide::vertical(Mp::from_mm(10.0));
+        let mut p = GuideProperties::open(0, &g, Unit::Millimetre);
+        p.text = "12".to_owned();
+        assert_eq!(p.position(Unit::Millimetre), Ok(Mp::from_mm(12.0)));
+        p.text = "twelve".to_owned();
+        assert!(p.position(Unit::Millimetre).is_err());
+    }
+
+    #[test]
+    fn a_dialog_whose_guide_is_gone_closes() {
+        let doc = DocumentView::default();
+        let g = Guide::vertical(Mp::ZERO);
+        let mut state = Some(GuideProperties::open(3, &g, Unit::Point));
+        let out = run(&mut state, &doc, vec![]);
+        assert!(state.is_none() && out.is_empty());
+    }
+
+    #[test]
+    fn an_open_dialog_keeps_its_state_and_asks_for_nothing_until_ok() {
+        let g = Guide::vertical(Mp::from_mm(10.0));
+        let doc = DocumentView {
+            guides: vec![g.clone()],
+            ..Default::default()
+        };
+        let mut state = Some(GuideProperties::open(0, &g, doc.unit));
+        let out = run(&mut state, &doc, vec![]);
+        assert!(state.is_some() && out.is_empty());
+    }
+}

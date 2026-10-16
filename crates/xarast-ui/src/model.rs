@@ -300,6 +300,9 @@ pub struct DocumentView {
     pub grid: GridSettings,
     /// The guides.
     pub guides: Vec<Guide>,
+    /// Whether snapping to the grid is on: a guide dragged from a ruler
+    /// or moved lands on the nearest grid line within reach.
+    pub snap_to_grid: bool,
     /// Whether the rulers are shown.
     pub show_rulers: bool,
     /// Whether the guides are shown.
@@ -321,6 +324,7 @@ impl Default for DocumentView {
             view: ViewTransform::default(),
             grid: GridSettings::default(),
             guides: Vec::new(),
+            snap_to_grid: false,
             show_rulers: true,
             show_guides: true,
             unit: Unit::default(),

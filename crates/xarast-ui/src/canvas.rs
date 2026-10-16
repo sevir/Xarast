@@ -110,6 +110,16 @@ impl FrameCtx<'_> {
         )
     }
 
+    /// A guide position dragged to `position`, snapped to the grid when
+    /// snapping to the grid is on.
+    fn snapped_guide(&self, axis: Axis, position: Mp) -> Mp {
+        if self.doc.snap_to_grid {
+            crate::guides::snap_to_grid(axis, position, &self.doc.grid, self.doc.view.zoom)
+        } else {
+            position
+        }
+    }
+
     /// How far into the canvas a ruler strip reaches this frame.
     fn ruler_depth(&self) -> f64 {
         if self.doc.show_rulers {
@@ -156,6 +166,8 @@ pub struct CanvasWidget {
     /// can put it back.
     guide_origin: Option<Mp>,
     creating_guide: Option<Axis>,
+    /// A guide the user double-clicked: its properties are wanted.
+    guide_properties: Option<usize>,
     /// The text ruler to show on the horizontal ruler this frame.
     text_ruler: Option<xarast_app::TextRuler>,
     /// The text ruler marker being dragged.
@@ -178,6 +190,13 @@ impl CanvasWidget {
     /// A fresh widget.
     pub fn new() -> CanvasWidget {
         CanvasWidget::default()
+    }
+
+    /// The guide the user double-clicked since the last call, as an
+    /// index into [`DocumentView::guides`]: the host opens its
+    /// properties.
+    pub fn take_guide_properties(&mut self) -> Option<usize> {
+        self.guide_properties.take()
     }
 
     /// Chooses who navigates; see [`CanvasNavigation`].
@@ -404,6 +423,15 @@ impl CanvasWidget {
         let mut interacting = false;
         let local = |p: egui::Pos2| f.local(p);
 
+        if response.double_clicked()
+            && let Some(p) = pointer
+        {
+            let (lx, ly) = local(p);
+            if let Some(i) = guide_at(&doc.guides, &doc.view, lx, ly) {
+                self.guide_properties = Some(i);
+            }
+        }
+
         // Where the press was, not where egui recognised the drag (past
         // its 6 pt threshold): that is already outside a guide's 4 pt grab.
         if response.drag_started()
@@ -434,7 +462,10 @@ impl CanvasWidget {
                     if let GuideDragOutcome::Move(position) =
                         resolve_guide_drag(axis, &doc.view, lx, ly, -ruler)
                     {
-                        out.push(UiCommand::AddGuide(Guide { axis, position }));
+                        out.push(UiCommand::AddGuide(Guide {
+                            axis,
+                            position: f.snapped_guide(axis, position),
+                        }));
                     }
                 }
                 self.creating_guide = None;
@@ -463,6 +494,7 @@ impl CanvasWidget {
                 let (lx, ly) = local(p);
                 match resolve_guide_drag(guide.axis, &doc.view, lx, ly, -ruler) {
                     GuideDragOutcome::Move(position) if response.dragged() => {
+                        let position = f.snapped_guide(guide.axis, position);
                         out.push(UiCommand::MoveGuide { index, position });
                     }
                     GuideDragOutcome::Remove if response.drag_stopped() => {
@@ -1136,5 +1168,101 @@ mod tests {
         );
         assert_eq!(doc.guides[0].position, origin);
         assert!(!widget.is_dragging_guide());
+    }
+
+    #[test]
+    fn a_guide_drag_lands_on_a_grid_line_when_snapping_to_the_grid_is_on() {
+        let ctx = egui::Context::default();
+        let origin = Mp::from_pt(100.0);
+        let run = |snap: bool| {
+            let mut widget = CanvasWidget::new();
+            let mut doc = DocumentView {
+                guides: vec![Guide::vertical(origin)],
+                snap_to_grid: snap,
+                grid: crate::grid::GridSettings {
+                    spacing: Mp::from_pt(50.0),
+                    subdivisions: 1,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            doc.view.zoom = 1.0;
+            let region = frame(&doc, &mut widget, input_with(vec![]), &ctx)
+                .0
+                .rect_points;
+            let at = |doc: &DocumentView, dx: f32| {
+                let x = doc.view.doc_to_view_x(origin) as f32 + dx;
+                egui::pos2(region.min.x + x, region.min.y + 200.0)
+            };
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let steps = vec![
+                vec![egui::Event::PointerMoved(at(&doc, 0.0))],
+                vec![button(at(&doc, 0.0), true)],
+                vec![egui::Event::PointerMoved(at(&doc, 20.0))],
+                vec![egui::Event::PointerMoved(at(&doc, 47.0))],
+                vec![button(at(&doc, 47.0), false)],
+                vec![],
+            ];
+            let mut last = None;
+            for events in steps {
+                let (_, out) = frames(&doc, &mut widget, &ctx, vec![input_with(events)]);
+                for c in out.commands() {
+                    if let UiCommand::MoveGuide { index, position } = c {
+                        doc.guides[*index].position = *position;
+                        last = Some(*position);
+                    }
+                }
+            }
+            last.expect("the guide moved")
+        };
+        assert_eq!(run(true), Mp::from_pt(150.0), "snapped to the 50 pt line");
+        let free = run(false);
+        assert!(
+            (free.to_pt() - 147.0).abs() < 1.0 && free != Mp::from_pt(150.0),
+            "{free:?}"
+        );
+    }
+
+    #[test]
+    fn double_clicking_a_guide_asks_for_its_properties() {
+        let ctx = egui::Context::default();
+        let mut widget = CanvasWidget::new();
+        let origin = Mp::from_pt(100.0);
+        let doc = DocumentView {
+            guides: vec![Guide::vertical(origin)],
+            ..Default::default()
+        };
+        let region = frame(&doc, &mut widget, input_with(vec![]), &ctx)
+            .0
+            .rect_points;
+        let pos = egui::pos2(
+            region.min.x + doc.view.doc_to_view_x(origin) as f32,
+            region.min.y + 200.0,
+        );
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let steps = vec![
+            vec![egui::Event::PointerMoved(pos)],
+            vec![button(true)],
+            vec![button(false)],
+            vec![button(true)],
+            vec![button(false)],
+            vec![],
+        ];
+        let mut asked = None;
+        for events in steps {
+            frames(&doc, &mut widget, &ctx, vec![input_with(events)]);
+            asked = asked.or(widget.take_guide_properties());
+        }
+        assert_eq!(asked, Some(0));
     }
 }

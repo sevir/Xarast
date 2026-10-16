@@ -278,3 +278,39 @@ fn showing_a_pane_brings_its_tab_to_the_front_and_gives_it_the_keyboard() {
         assert!(workspace.borrow().is_pane_showing(pane), "{pane:?}");
     }
 }
+
+#[test]
+fn delete_all_guides_is_a_view_item_enabled_only_with_guides() {
+    // With a guide the item raises its command.
+    let mut model = with_document();
+    model.document.as_mut().unwrap().guides =
+        vec![xarast_ui::Guide::vertical(xarast_geom::Mp::ZERO)];
+    let commands = RefCell::new(Vec::new());
+    let mut h = harness(&model, &commands, 1.0);
+    h.get_by_label("View").click();
+    h.run();
+    h.get_by_role_and_label(MENU_ITEM, "Delete all guides")
+        .click();
+    h.run();
+    drop(h);
+    assert!(
+        commands
+            .into_inner()
+            .contains(&UiCommand::App(AppCommand::DeleteAllGuides))
+    );
+    // Without one it is greyed out and raises nothing.
+    let model = with_document();
+    let commands = RefCell::new(Vec::new());
+    let mut h = harness(&model, &commands, 1.0);
+    h.get_by_label("View").click();
+    h.run();
+    h.get_by_role_and_label(MENU_ITEM, "Delete all guides")
+        .click();
+    h.run();
+    drop(h);
+    assert!(
+        !commands
+            .into_inner()
+            .contains(&UiCommand::App(AppCommand::DeleteAllGuides))
+    );
+}

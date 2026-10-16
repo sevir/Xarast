@@ -53,6 +53,8 @@ pub struct Workspace {
     menu: AppMenu,
     infobar: crate::toolbar::InfobarRow,
     side_width: f32,
+    /// The guideline properties dialog, while it is open.
+    guide_props: Option<crate::dialogs::GuideProperties>,
 }
 
 impl Default for Workspace {
@@ -87,6 +89,7 @@ impl Workspace {
             menu: AppMenu::new(),
             infobar: crate::toolbar::InfobarRow::new(),
             side_width: 280.0,
+            guide_props: None,
         }
     }
 
@@ -240,6 +243,16 @@ impl Workspace {
                 None => crate::menus::empty_state(ui, model, &tokens, &mut out),
             });
 
+        if let Some(doc) = &model.document {
+            if let Some(i) = self.canvas.take_guide_properties()
+                && let Some(g) = doc.guides.get(i)
+            {
+                self.guide_props = Some(crate::dialogs::GuideProperties::open(i, g, doc.unit));
+            }
+            crate::dialogs::guide_properties(ctx, &mut self.guide_props, doc, &mut out);
+        } else {
+            self.guide_props = None;
+        }
         self.menu.windows(ctx, &tokens);
         self.menu.align_window(ctx, model, &mut out);
         if let Some(v) = &model.export_dialog {
@@ -258,6 +271,11 @@ impl Workspace {
             canvas: canvas_response,
             theme: resolved,
         }
+    }
+
+    /// The guideline properties dialog, while it is open.
+    pub fn guide_properties(&self) -> Option<&crate::dialogs::GuideProperties> {
+        self.guide_props.as_ref()
     }
 
     /// The document view the canvas last drew, for a caller that wants to

@@ -2140,6 +2140,7 @@ fn document_view(
         view,
         grid,
         guides,
+        snap_to_grid: s.edit.snap.grid,
         show_guides: xarast_app::snap::guides_visible(doc),
         ..DocumentView::default()
     }

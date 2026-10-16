@@ -114,6 +114,15 @@ impl AppMenu {
                 ] {
                     toggle_item(ui, model, c, on, out);
                 }
+                ui.separator();
+                let has_guides = doc.is_some_and(|d| !d.guides.is_empty());
+                labelled_item(
+                    ui,
+                    AppCommand::DeleteAllGuides,
+                    AppCommand::DeleteAllGuides.label(),
+                    has_guides,
+                    out,
+                );
             });
             // Every docked pane, shown and brought to the front: the way
             // back to one that was dragged away or sits behind a tab.

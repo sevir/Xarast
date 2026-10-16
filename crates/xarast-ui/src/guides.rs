@@ -96,6 +96,29 @@ pub fn guide_at(
     best.map(|(i, _)| i)
 }
 
+/// How close, in logical points, a guide has to be to a grid line to
+/// land on it (the application's snap radius, 8 device pixels).
+pub const GRID_SNAP_REACH: f64 = 8.0;
+
+/// Snaps the position of a guide being dragged to the nearest line of the
+/// grid, when one is within [`GRID_SNAP_REACH`] at this zoom. The grid
+/// lines are the minor ones, the same as every other snap.
+pub fn snap_to_grid(axis: Axis, position: Mp, grid: &crate::grid::GridSettings, zoom: f64) -> Mp {
+    if !(zoom.is_finite() && zoom > 0.0) {
+        return position;
+    }
+    let line = match axis {
+        Axis::Vertical => grid.snap_x(position),
+        Axis::Horizontal => grid.snap_y(position),
+    };
+    let reach = f64::from(Mp::from_pt(GRID_SNAP_REACH / zoom).raw());
+    if (i64::from(line.raw()) - i64::from(position.raw())).abs() as f64 <= reach {
+        line
+    } else {
+        position
+    }
+}
+
 /// What a guide drag has turned into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuideDragOutcome {
@@ -206,5 +229,29 @@ mod tests {
         let json = serde_json::to_string(&g).unwrap();
         assert_eq!(serde_json::from_str::<Guide>(&json).unwrap(), g);
         assert_eq!(Axis::Vertical.other(), Axis::Horizontal);
+    }
+
+    #[test]
+    fn a_guide_snaps_to_a_grid_line_within_reach_and_only_then() {
+        let grid = crate::grid::GridSettings {
+            spacing: Mp::from_pt(50.0),
+            subdivisions: 1,
+            origin: (Mp::from_pt(10.0), Mp::ZERO),
+            ..Default::default()
+        };
+        // The vertical lines sit at 10, 60, 110 pt: 4 pt away snaps at
+        // zoom 1, 4 pt away does not at zoom 4 (reach 2 pt).
+        let near = Mp::from_pt(64.0);
+        assert_eq!(
+            snap_to_grid(Axis::Vertical, near, &grid, 1.0),
+            Mp::from_pt(60.0)
+        );
+        assert_eq!(snap_to_grid(Axis::Vertical, near, &grid, 4.0), near);
+        // Horizontal guides use the other origin.
+        assert_eq!(
+            snap_to_grid(Axis::Horizontal, Mp::from_pt(103.0), &grid, 1.0),
+            Mp::from_pt(100.0)
+        );
+        assert_eq!(snap_to_grid(Axis::Vertical, near, &grid, 0.0), near);
     }
 }
