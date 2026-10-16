@@ -2,14 +2,15 @@
 id: XARA-T-0335
 type: task
 title: "Blend follow-ups: along a path (F6), live/text/nested ends, step distance, mixed fill types, shadows casting steps"
-status: in_progress
+status: done
 priority: medium
 parent: XARA-US-0070
 author: mcp
 labels: [phase-13, live-effects, geom, render]
 created: 2026-10-15T22:07:01Z
-updated: 2026-10-16T13:20:48Z
+updated: 2026-10-16T15:00:26Z
 started: 2026-10-16T13:20:48Z
+closed: 2026-10-16T15:00:26Z
 ---
 
 ## Description
