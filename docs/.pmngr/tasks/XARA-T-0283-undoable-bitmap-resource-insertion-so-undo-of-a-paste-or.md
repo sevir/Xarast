@@ -2,14 +2,15 @@
 id: XARA-T-0283
 type: task
 title: Undoable bitmap resource insertion, so undo of a paste or placement is digest-exact
-status: in_progress
+status: done
 priority: low
 parent: XARA-US-0052
 author: mcp
 labels: [phase-10, bitmap, document-model]
 created: 2026-09-24T10:08:47Z
-updated: 2026-10-16T12:46:37Z
+updated: 2026-10-16T14:08:19Z
 started: 2026-10-16T12:46:37Z
+closed: 2026-10-16T14:08:19Z
 ---
 
 ## Description
