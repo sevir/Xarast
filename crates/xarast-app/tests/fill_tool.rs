@@ -1252,3 +1252,31 @@ fn a_slider_preview_on_a_feathered_object_repaints_all_it_changes() {
         (s0, r0) = (s1, r1);
     }
 }
+
+/// Phase 13 I5: the transparency selector shows every one of the twelve
+/// families as it is, and selects exactly it.
+#[test]
+fn the_transparency_selector_carries_all_twelve_families() {
+    use xarast_app::fill_tool::{transp_mode_choice, transp_mode_label};
+    let mut labels = Vec::new();
+    for m in TranspMode::ALL {
+        let (options, selected) = transp_mode_choice(Some(m));
+        let i = selected.expect("a family is always selected");
+        // None reads as Mix (the original's `SetTranspType`), so the
+        // menu's Mix entry is the one shown.
+        let shown = if m == TranspMode::None {
+            TranspMode::Mix
+        } else {
+            m
+        };
+        assert_eq!(options[i], transp_mode_label(shown), "{m:?}");
+        assert!(options.len() <= TRANSP_MODES.len() + 1);
+        labels.push(options[i]);
+    }
+    labels.sort_unstable();
+    labels.dedup();
+    assert_eq!(labels.len(), 11, "Mix and None share one entry: {labels:?}");
+    // A mixed selection selects nothing and offers only the menu.
+    let (options, selected) = transp_mode_choice(None);
+    assert_eq!((options.len(), selected), (TRANSP_MODES.len(), None));
+}

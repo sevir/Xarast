@@ -436,7 +436,11 @@ pub type GradFillTool = FillLikeTool<ColourFill>;
 /// The transparency tool.
 pub type TransparencyTool = FillLikeTool<TranspFill>;
 
-/// The transparency modes the infobar offers, in menu order.
+/// The transparency modes the infobar offers, in menu order: the
+/// original's menu (`tools/filltool.cpp`, `TranspInfoBarOp`). The other two
+/// of the twelve families are shown but not offered: `Bevel` belongs to a
+/// bevel's own lighting, and `None` reads as Mix, as the original's
+/// `SetTranspType` makes it.
 pub const TRANSP_MODES: [TranspMode; 10] = [
     TranspMode::Mix,
     TranspMode::StainedGlass,
@@ -464,7 +468,29 @@ pub const fn transp_mode_label(m: TranspMode) -> &'static str {
         TranspMode::Brightness => "Brightness",
         TranspMode::Luminosity => "Luminosity",
         TranspMode::Hue => "Hue",
+        TranspMode::Bevel => "Bevel",
     }
+}
+
+/// The transparency selector: the offered modes, plus the family in force
+/// when it is one the menu does not offer, so that every one of the twelve
+/// is shown as it is. Returns the labels and the selected index.
+#[must_use]
+pub fn transp_mode_choice(mode: Option<TranspMode>) -> (Vec<&'static str>, Option<usize>) {
+    let mut options: Vec<&'static str> =
+        TRANSP_MODES.iter().map(|m| transp_mode_label(*m)).collect();
+    let selected = mode.map(|m| match m {
+        TranspMode::None => TranspMode::Mix,
+        m => m,
+    });
+    let selected = selected.map(|m| match TRANSP_MODES.iter().position(|x| *x == m) {
+        Some(i) => i,
+        None => {
+            options.push(transp_mode_label(m));
+            options.len() - 1
+        }
+    });
+    (options, selected)
 }
 
 const EFFECTS: [FillEffect; 3] = [
@@ -1435,10 +1461,11 @@ impl<K: FillKind> Tool for FillLikeTool<K> {
             let mode = stop_value(&set.fill, StopTarget::From)
                 .or_else(|| stop_value(&set.fill, StopTarget::Corner(0)))
                 .map(|t| K::transp_mode(&t));
+            let (options, selected) = transp_mode_choice(mode);
             items.push(InfobarItem::Choice {
                 field: InfobarField::TranspMode,
-                options: TRANSP_MODES.iter().map(|m| transp_mode_label(*m)).collect(),
-                selected: mode.and_then(|m| TRANSP_MODES.iter().position(|x| *x == m)),
+                options,
+                selected,
             });
         }
         // An outline does not tile: the mapping attribute is the
@@ -1585,6 +1612,8 @@ impl<K: FillKind> Tool for FillLikeTool<K> {
                 })
             }
             (InfobarField::TranspMode, InfobarValue::Choice(i)) => {
+                // Past the offered modes is the family in force, shown
+                // but not offered: choosing it changes nothing.
                 let Some(&mode) = TRANSP_MODES.get(i) else {
                     return;
                 };
