@@ -86,6 +86,7 @@ pub mod import;
 pub mod intent;
 pub mod live_edit;
 pub mod locks;
+pub mod mould_tool;
 pub mod node_edit;
 pub mod ops;
 mod paint;

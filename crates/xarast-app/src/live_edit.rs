@@ -60,6 +60,8 @@ pub enum LiveEffect {
     Contour,
     /// A blend between two or more objects.
     Blend,
+    /// An envelope or a perspective (phase 13 G9).
+    Mould,
 }
 
 impl LiveEffect {
@@ -77,6 +79,7 @@ impl LiveEffect {
             LiveKind::Bevel(_) => Some(LiveEffect::Bevel),
             LiveKind::Contour(_) => Some(LiveEffect::Contour),
             LiveKind::Blend(_) => Some(LiveEffect::Blend),
+            LiveKind::Mould(_) => Some(LiveEffect::Mould),
             _ => None,
         }
     }
@@ -136,6 +139,18 @@ pub enum LiveEdit {
         /// The parameters of a new blend.
         kind: LiveKind,
     },
+    /// Moulds `targets` **together**: one mould controller standing where
+    /// the topmost target stood, holding them all in render order, each
+    /// looking as it did (the original's create-mould op puts the whole
+    /// selection in one mould, `Kernel/moldedit.cpp:400-456`).
+    Mould {
+        /// The objects.
+        targets: Vec<NodeId>,
+        /// The mould's parameters (`LiveKind::Mould`).
+        kind: LiveKind,
+        /// The undo label ("Apply Envelope", "Paste Perspective").
+        label: &'static str,
+    },
 }
 
 impl LiveEdit {
@@ -147,6 +162,7 @@ impl LiveEdit {
                 Some(LiveEffect::Bevel) => "Apply Bevel",
                 Some(LiveEffect::Contour) => "Apply Contour",
                 Some(LiveEffect::Blend) => "Blend",
+                Some(LiveEffect::Mould) => "Apply Mould",
                 _ => "Apply Shadow",
             },
             LiveEdit::Remove { effect, .. } => match effect {
@@ -154,10 +170,12 @@ impl LiveEdit {
                 LiveEffect::Bevel => "Remove Bevel",
                 LiveEffect::Contour => "Remove Contour",
                 LiveEffect::Blend => "Remove Blend",
+                LiveEffect::Mould => "Remove Mould",
             },
             LiveEdit::SetParams { label, .. } => label,
             LiveEdit::SetJoin { .. } => "Bevel Join",
             LiveEdit::Blend { .. } => "Blend",
+            LiveEdit::Mould { label, .. } => label,
         }
     }
 
@@ -165,7 +183,9 @@ impl LiveEdit {
     #[must_use]
     pub fn nodes(&self) -> Vec<NodeId> {
         match self {
-            LiveEdit::Apply { targets, .. } | LiveEdit::Remove { targets, .. } => targets.clone(),
+            LiveEdit::Apply { targets, .. }
+            | LiveEdit::Remove { targets, .. }
+            | LiveEdit::Mould { targets, .. } => targets.clone(),
             LiveEdit::SetParams { edits, .. } => edits.iter().map(|(n, _)| *n).collect(),
             LiveEdit::SetJoin { controllers, .. } => controllers.clone(),
             LiveEdit::Blend { start, end, .. } => vec![*start, *end],
@@ -176,9 +196,9 @@ impl LiveEdit {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         match self {
-            LiveEdit::Apply { targets, .. } | LiveEdit::Remove { targets, .. } => {
-                targets.is_empty()
-            }
+            LiveEdit::Apply { targets, .. }
+            | LiveEdit::Remove { targets, .. }
+            | LiveEdit::Mould { targets, .. } => targets.is_empty(),
             LiveEdit::SetParams { edits, .. } => edits.is_empty(),
             LiveEdit::SetJoin { controllers, .. } => controllers.is_empty(),
             LiveEdit::Blend { start, end, .. } => start == end,
@@ -194,7 +214,9 @@ impl LiveEdit {
     pub fn run(&self, tx: &mut Tx<'_>) -> Result<(), EditError> {
         match self {
             LiveEdit::Apply { targets, kind } => {
-                let Some(effect) = LiveEffect::of(kind).filter(|e| *e != LiveEffect::Blend) else {
+                let Some(effect) = LiveEffect::of(kind)
+                    .filter(|e| !matches!(e, LiveEffect::Blend | LiveEffect::Mould))
+                else {
                     return Err(EditError::LimitExceeded(
                         "not a shadow, a bevel or a contour",
                     ));
@@ -235,6 +257,7 @@ impl LiveEdit {
                 Ok(())
             }
             LiveEdit::Blend { start, end, kind } => blend(tx, *start, *end, kind),
+            LiveEdit::Mould { targets, kind, .. } => mould(tx, targets, kind),
         }
     }
 }
@@ -638,6 +661,54 @@ fn blend(tx: &mut Tx<'_>, start: NodeId, end: NodeId, kind: &LiveKind) -> Result
             }
             tx.delete(b)
         }
+    }
+}
+
+/// [`LiveEdit::Mould`]: one controller where the topmost target stood,
+/// every target moved into its source in render order, keeping how it
+/// looks (`materialise`, as a blend's objects are moved).
+fn mould(tx: &mut Tx<'_>, targets: &[NodeId], kind: &LiveKind) -> Result<(), EditError> {
+    if !matches!(kind, LiveKind::Mould(_)) {
+        return Err(EditError::LimitExceeded("not a mould"));
+    }
+    let doc = tx.doc();
+    let mut seen = HashSet::new();
+    let order: Vec<NodeId> = in_render_order(doc, targets)
+        .into_iter()
+        .filter(|t| {
+            doc.tree.is_reachable(*t)
+                && !xarast_doc::live::in_generated(&doc.tree, *t)
+                && seen.insert(*t)
+        })
+        .collect();
+    // Nothing inside another target: it moves with it.
+    let order: Vec<NodeId> = order
+        .iter()
+        .copied()
+        .filter(|t| !order.iter().any(|o| o != t && doc.tree.is_ancestor(*o, *t)))
+        .collect();
+    let Some(&top) = order.last() else {
+        return Ok(());
+    };
+    let was = inherited_batch(doc, &order);
+    let c = tx.create(live(LiveRole::Controller, kind))?;
+    tx.attach(c, top, Attach::Next)?;
+    let s = tx.create(live(LiveRole::Source, kind))?;
+    tx.attach(s, c, Attach::LastChild)?;
+    let g = tx.create(live(LiveRole::Generated, kind))?;
+    tx.attach(g, s, Attach::Prev)?;
+    for t in order {
+        relocate(tx, t, s, Attach::LastChild, &was)?;
+    }
+    Ok(())
+}
+
+/// The parameters of a mould controller.
+#[must_use]
+pub fn mould_params(doc: &Document, c: NodeId) -> Option<&xarast_doc::MouldParams> {
+    match &controller(doc, c)?.kind {
+        LiveKind::Mould(p) => Some(p),
+        _ => None,
     }
 }
 

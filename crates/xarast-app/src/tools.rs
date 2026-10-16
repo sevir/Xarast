@@ -34,6 +34,7 @@ pub fn builtin() -> Vec<Box<dyn Tool>> {
         Box::new(crate::contour_tool::ContourTool::default()),
         Box::new(crate::shadow_tool::ShadowTool::default()),
         Box::new(crate::bevel_tool::BevelTool::default()),
+        Box::new(crate::mould_tool::MouldTool::default()),
     ];
     for id in ToolId::ALL {
         if id.is_available() && !id.is_implemented() {

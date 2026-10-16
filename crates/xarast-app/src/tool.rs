@@ -617,6 +617,20 @@ pub enum InfobarField {
     BlendAttrBias,
     /// The blend attribute profile's gain.
     BlendAttrGain,
+    /// An envelope preset to apply, or to give the selected moulds
+    /// (phase 13, G9).
+    MouldEnvelope,
+    /// A perspective preset to apply, or to give the selected moulds.
+    MouldPerspective,
+    /// Which point of the mould's cage the X and Y fields show.
+    MouldPoint,
+    /// How closely moulded curves follow the mould.
+    MouldThreshold,
+    /// Whether the mould's mesh is drawn over it.
+    MouldGrid,
+    /// Whether editing the cage leaves the moulded objects as they are
+    /// until it is attached again.
+    MouldDetach,
 }
 
 impl InfobarField {
@@ -689,6 +703,12 @@ impl InfobarField {
             InfobarField::ContourInset => "Inset path",
             InfobarField::BlendOneToOne => "One to one",
             InfobarField::BlendAntialias => "Antialias",
+            InfobarField::MouldEnvelope => "Envelope",
+            InfobarField::MouldPerspective => "Perspective",
+            InfobarField::MouldPoint => "Point",
+            InfobarField::MouldThreshold => "Accuracy",
+            InfobarField::MouldGrid => "Mesh",
+            InfobarField::MouldDetach => "Detach",
         }
     }
 
@@ -784,6 +804,16 @@ impl InfobarField {
             }
             InfobarField::BlendAttrGain => {
                 "Pushes the colour change towards the middle or the ends"
+            }
+            InfobarField::MouldEnvelope => "Wraps the selection in an envelope of this shape",
+            InfobarField::MouldPerspective => "Puts the selection in a perspective of this shape",
+            InfobarField::MouldPoint => "Which point of the mould the position fields move",
+            InfobarField::MouldThreshold => {
+                "How far a moulded curve may stray from the mould before it is split"
+            }
+            InfobarField::MouldGrid => "Draw the mould's mesh over it",
+            InfobarField::MouldDetach => {
+                "Edit the mould's shape without moulding the objects until it is attached again"
             }
         }
     }
@@ -1255,8 +1285,17 @@ pub enum ToolAction {
     /// (phase 10, T10.3.1).
     NaturalSize,
     /// Remove the live effect the tool edits from the selection: a
-    /// contour or a blend (phase 13 E6, F8).
+    /// contour or a blend (phase 13 E6, F8), a mould (G9).
     RemoveEffect,
+    /// Keep the selected mould's shape to paste on other objects
+    /// (phase 13 G9).
+    CopyMould,
+    /// Give the selection the kept mould shape as an envelope.
+    PasteEnvelope,
+    /// Give the selection the kept mould shape as a perspective.
+    PastePerspective,
+    /// Turn the selected moulds' contents a quarter turn round the cage.
+    RotateMould,
 }
 
 impl ToolAction {
@@ -1277,6 +1316,10 @@ impl ToolAction {
             ToolAction::Join => "Join ends",
             ToolAction::NaturalSize => "Natural size",
             ToolAction::RemoveEffect => "Remove",
+            ToolAction::CopyMould => "Copy mould",
+            ToolAction::PasteEnvelope => "Paste envelope",
+            ToolAction::PastePerspective => "Paste perspective",
+            ToolAction::RotateMould => "Rotate contents",
         }
     }
 }

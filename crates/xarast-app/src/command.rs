@@ -249,7 +249,7 @@ pub const ZOOM_STEP: f64 = std::f64::consts::SQRT_2;
 impl AppCommand {
     /// Every command, in menu order, then the tools in palette order.
     /// Tools reserved for later phases are not here: they have no key yet.
-    pub const ALL: [AppCommand; 64] = [
+    pub const ALL: [AppCommand; 65] = [
         AppCommand::Open,
         AppCommand::Import,
         AppCommand::Save,
@@ -301,6 +301,7 @@ impl AppCommand {
         AppCommand::Tool(ToolId::Contour),
         AppCommand::Tool(ToolId::Shadow),
         AppCommand::Tool(ToolId::Bevel),
+        AppCommand::Tool(ToolId::Mould),
         AppCommand::Action(ToolAction::Finish),
         AppCommand::Action(ToolAction::MakeLine),
         AppCommand::Action(ToolAction::MakeCurve),
@@ -424,6 +425,7 @@ impl AppCommand {
         const BLEND_TOOL: &[KeyChord] = &[KeyChord::f(7)];
         const CONTOUR_TOOL: &[KeyChord] = &[KeyChord::ctrl_f(7)];
         const BEVEL_TOOL: &[KeyChord] = &[KeyChord::ctrl_f(3)];
+        const MOULD_TOOL: &[KeyChord] = &[KeyChord::shift_f(6)];
         // The shape editor's keys (`research/04 §4.11`).
         const FINISH: &[KeyChord] = &[KeyChord::plain(ChordKey::Enter)];
         const MAKE_LINE: &[KeyChord] = &[KeyChord::char('l')];
@@ -495,6 +497,7 @@ impl AppCommand {
                 ToolId::Contour => CONTOUR_TOOL,
                 ToolId::Shadow => SHADOW_TOOL,
                 ToolId::Bevel => BEVEL_TOOL,
+                ToolId::Mould => MOULD_TOOL,
             },
             AppCommand::Action(a) => match a {
                 ToolAction::Finish => FINISH,
@@ -509,7 +512,11 @@ impl AppCommand {
                 | ToolAction::SelectAll
                 | ToolAction::ClosePath
                 | ToolAction::NaturalSize
-                | ToolAction::RemoveEffect => NONE,
+                | ToolAction::RemoveEffect
+                | ToolAction::CopyMould
+                | ToolAction::PasteEnvelope
+                | ToolAction::PastePerspective
+                | ToolAction::RotateMould => NONE,
             },
             AppCommand::ConvertToShapes => CONVERT,
             AppCommand::Cut => CUT,
@@ -668,6 +675,7 @@ mod tests {
             (ToolId::Contour, "Ctrl+F7"),
             (ToolId::Shadow, "Ctrl+F2"),
             (ToolId::Bevel, "Ctrl+F3"),
+            (ToolId::Mould, "Shift+F6"),
         ] {
             assert_eq!(key(AppCommand::Tool(tool)), k, "{tool:?}");
             assert_eq!(

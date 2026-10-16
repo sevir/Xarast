@@ -351,6 +351,31 @@ fn paint_icon(p: &egui::Painter, r: Rect, tool: ToolId, ink: Color32) {
             ));
             p.rect_stroke(Rect::from_min_max(o0, o1), 0.0, s, egui::StrokeKind::Middle);
         }
+        ToolId::Mould => {
+            // A mesh pinched in at the waist: an envelope's cage and two
+            // of its inner lines.
+            let waist = |t: f32| 0.16 * (std::f32::consts::PI * t).sin();
+            let column = |u: f32| -> Vec<egui::Pos2> {
+                (0..=12)
+                    .map(|i| {
+                        let t = i as f32 / 12.0;
+                        let x = 0.1 + 0.8 * u;
+                        // The sides bow in; the middle column stays put.
+                        let pull = (0.5 - u) * 2.0 * waist(t);
+                        at(x + pull, 0.1 + 0.8 * t)
+                    })
+                    .collect()
+            };
+            for (u, w) in [(0.0_f32, 1.6_f32), (0.5, 1.0), (1.0, 1.6)] {
+                p.add(egui::Shape::line(column(u), Stroke::new(w, ink)));
+            }
+            for v in [0.1_f32, 0.5, 0.9] {
+                let t = (v - 0.1) / 0.8;
+                let w = waist(t);
+                let stroke = if v == 0.5 { 1.0_f32 } else { 1.6 };
+                p.line_segment([at(0.1 + w, v), at(0.9 - w, v)], Stroke::new(stroke, ink));
+            }
+        }
     }
 }
 
@@ -972,6 +997,7 @@ mod tests {
         assert_eq!(tool_tooltip(ToolId::Contour), "Contour (Ctrl+F7)");
         assert_eq!(tool_tooltip(ToolId::Shadow), "Shadow (Ctrl+F2)");
         assert_eq!(tool_tooltip(ToolId::Bevel), "Bevel (Ctrl+F3)");
+        assert_eq!(tool_tooltip(ToolId::Mould), "Mould (Shift+F6)");
         assert_eq!(tool_tooltip(ToolId::Fill), "Fill (F5)");
         assert_eq!(tool_tooltip(ToolId::Transparency), "Transparency (F6)");
     }

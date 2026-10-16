@@ -157,11 +157,13 @@ pub enum ToolId {
     Shadow,
     /// Bevels. Phase 13 (D6).
     Bevel,
+    /// Envelopes and perspectives. Phase 13 (G9).
+    Mould,
 }
 
 impl ToolId {
     /// Every tool, in the order the palette shows them.
-    pub const ALL: [ToolId; 15] = [
+    pub const ALL: [ToolId; 16] = [
         ToolId::Selector,
         ToolId::ShapeEditor,
         ToolId::Rectangle,
@@ -177,6 +179,7 @@ impl ToolId {
         ToolId::Contour,
         ToolId::Shadow,
         ToolId::Bevel,
+        ToolId::Mould,
     ];
 
     /// A stable, lower-case identifier for preferences and shortcuts.
@@ -198,6 +201,7 @@ impl ToolId {
             ToolId::Contour => "contour",
             ToolId::Shadow => "shadow",
             ToolId::Bevel => "bevel",
+            ToolId::Mould => "mould",
         }
     }
 
@@ -220,6 +224,7 @@ impl ToolId {
             ToolId::Contour => "Contour",
             ToolId::Shadow => "Shadow",
             ToolId::Bevel => "Bevel",
+            ToolId::Mould => "Mould",
         }
     }
 
@@ -254,6 +259,7 @@ impl ToolId {
                 | ToolId::Contour
                 | ToolId::Shadow
                 | ToolId::Bevel
+                | ToolId::Mould
         )
     }
 
@@ -275,7 +281,8 @@ impl ToolId {
             | ToolId::Blend
             | ToolId::Contour
             | ToolId::Shadow
-            | ToolId::Bevel => None,
+            | ToolId::Bevel
+            | ToolId::Mould => None,
         }
     }
 

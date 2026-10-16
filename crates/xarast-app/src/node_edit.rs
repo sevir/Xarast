@@ -945,7 +945,12 @@ impl Tool for ShapeEditorTool {
                 true
             }
             // A fill tool's action.
-            ToolAction::NaturalSize | ToolAction::RemoveEffect => false,
+            ToolAction::NaturalSize
+            | ToolAction::RemoveEffect
+            | ToolAction::CopyMould
+            | ToolAction::PasteEnvelope
+            | ToolAction::PastePerspective
+            | ToolAction::RotateMould => false,
             ToolAction::SelectAll => {
                 let paths = edited(cx.doc, cx.edit);
                 if paths.is_empty() {
