@@ -2,13 +2,14 @@
 id: XARA-T-0186
 type: task
 title: T6.11 Path-point nudge family (and Tab/Home/End point cycling)
-status: in_progress
+status: done
 parent: XARA-US-0034
 author: mcp
 labels: [phase-7, tools]
 created: 2026-09-23T19:00:17Z
-updated: 2026-10-16T05:30:19Z
+updated: 2026-10-16T06:21:59Z
 started: 2026-10-16T05:30:19Z
+closed: 2026-10-16T06:21:59Z
 ---
 
 ## Description
