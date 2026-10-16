@@ -1565,6 +1565,22 @@ impl SceneWalker {
             bytes[..8].copy_from_slice(&mix64(version, index).to_le_bytes());
             bytes[8..].copy_from_slice(&self.scope.to_le_bytes());
             let path = PathRef::from_arc(Arc::clone(&shape.path));
+            // A shape from a feathered object inside the mould carries
+            // its feather (`mould::generate`): feathered on its own.
+            let feather = shape.attrs.iter().find_map(|a| match a {
+                AttrValue::Feather { size, profile } if size.raw() > 0 => {
+                    Some(LayerEffect::Feather {
+                        size: size.to_f64(),
+                        profile: *profile,
+                    })
+                }
+                _ => None,
+            });
+            let feathered = feather.is_some();
+            if let Some(effect) = feather {
+                b.push_effect(effect);
+                self.stats.effects += 1;
+            }
             self.paint_geometry(
                 doc,
                 id,
@@ -1576,6 +1592,9 @@ impl SceneWalker {
                 b,
                 ContentHash(bytes),
             );
+            if feathered {
+                b.pop_effect();
+            }
             attrs.pop_scope();
         }
         true

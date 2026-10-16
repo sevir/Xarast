@@ -407,8 +407,18 @@ fn wrap_plan(doc: &Document, node: NodeId, effect: LiveEffect) -> Option<Wrap> {
     if effect_of(doc, node, effect).is_some() || xarast_doc::live::in_generated(&doc.tree, node) {
         return None;
     }
-    // The original refuses to contour a bevel (`tools/cntrtool.cpp:779-797`).
-    if effect == LiveEffect::Contour && effect_of(doc, node, LiveEffect::Bevel).is_some() {
+    // The original refuses to contour a bevel (`tools/cntrtool.cpp:779-797`)
+    // or anything inside one, and to bevel a contour or anything inside
+    // one: each controller refuses the other's create op whoever asks
+    // (`Kernel/nbevcont.cpp:2346-2351`, `Kernel/ncntrcnt.cpp:1246-1249`).
+    let refused_by = match effect {
+        LiveEffect::Contour => Some(LiveEffect::Bevel),
+        LiveEffect::Bevel => Some(LiveEffect::Contour),
+        _ => None,
+    };
+    if let Some(other) = refused_by
+        && (effect_of(doc, node, other).is_some() || inside(doc, node, other))
+    {
         return None;
     }
     if effect.nests_in_shadow()
@@ -419,6 +429,32 @@ fn wrap_plan(doc: &Document, node: NodeId, effect: LiveEffect) -> Option<Wrap> {
         return (!objects_in(doc, parts.source).is_empty()).then_some(Wrap::Contents(parts.source));
     }
     Some(Wrap::Node(node))
+}
+
+/// Whether `node` stands inside the source of a controller of `effect`.
+fn inside(doc: &Document, node: NodeId, effect: LiveEffect) -> bool {
+    doc.tree
+        .ancestors(node)
+        .any(|a| controller(doc, a).is_some_and(|l| effect.is(&l.kind)))
+}
+
+/// Why the original would not mould `node` (`None`: it would): a shadow
+/// controller refuses to be moulded directly (`Kernel/nodecont.cpp:
+/// 413-418`, "no direct moulding"), a blend refuses its objects being
+/// replaced (`Kernel/nodeblnd.cpp:1862-1867`), and a mould refuses every op
+/// on its children (`Kernel/nodemldr.cpp:1528-1535`).
+#[must_use]
+pub fn mould_refusal(doc: &Document, node: NodeId) -> Option<&'static str> {
+    if controller(doc, node).is_some_and(|l| matches!(l.kind, LiveKind::Shadow(_))) {
+        return Some("a shadow cannot be moulded");
+    }
+    if blend_holding(doc, node).is_some() {
+        return Some("an object of a blend cannot be moulded");
+    }
+    if inside(doc, node, LiveEffect::Mould) {
+        return Some("an object inside a mould cannot be moulded");
+    }
+    None
 }
 
 fn live(role: LiveRole, kind: &LiveKind) -> NodeKind {
@@ -678,6 +714,7 @@ fn mould(tx: &mut Tx<'_>, targets: &[NodeId], kind: &LiveKind) -> Result<(), Edi
         .filter(|t| {
             doc.tree.is_reachable(*t)
                 && !xarast_doc::live::in_generated(&doc.tree, *t)
+                && mould_refusal(doc, *t).is_none()
                 && seen.insert(*t)
         })
         .collect();
