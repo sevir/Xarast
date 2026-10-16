@@ -72,8 +72,19 @@ prop_compose! {
         -> Vec<(i32, i32)> { pts }
 }
 
+/// Generated cases per property: 96 on every push, and whatever
+/// `XARAST_CONTOUR_CASES` says for the nightly tier (phase 13 acceptance
+/// criterion 10 asks for 10 000: `XARAST_CONTOUR_CASES=10000 cargo test
+/// --release -p xarast-geom --test contour`).
+fn cases() -> u32 {
+    std::env::var("XARAST_CONTOUR_CASES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(96)
+}
+
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 96, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig { cases: cases(), ..ProptestConfig::default() })]
 
     #[test]
     fn offsets_of_random_polygons_are_sane_and_monotone(

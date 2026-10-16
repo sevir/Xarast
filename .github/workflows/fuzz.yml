@@ -124,3 +124,20 @@ jobs:
           name: fuzz-${{ matrix.target }}-${{ github.run_id }}
           path: fuzz/artifacts/${{ matrix.target }}/
           if-no-files-found: ignore
+
+  # Phase 13 acceptance criterion 10: the contour offsetting properties at
+  # 10 000 generated cases (96 on every push). A failing seed is printed by
+  # proptest; add it to crates/xarast-geom/tests/contour.proptest-regressions.
+  contour-proptest:
+    name: contour offsetting properties, 10 000 cases
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: contour-proptest
+      - name: Properties
+        env:
+          XARAST_CONTOUR_CASES: "10000"
+        run: cargo test --release --locked -p xarast-geom --test contour
