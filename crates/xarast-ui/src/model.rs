@@ -372,6 +372,9 @@ pub struct UiModel {
     /// (unsaved changes, a locked document, recovery). Shown as a modal
     /// dialog; the answer is [`UiCommand::AnswerPrompt`].
     pub prompt: Option<xarast_app::Prompt>,
+    /// File › Export…, while it is open (phase 11 T11.1.8). Shown as a
+    /// modal dialog; what the user does is [`UiCommand::ExportDialog`].
+    pub export_dialog: Option<xarast_app::export_dialog::ExportDialogView>,
 }
 
 /// What the editing chrome shows: the Edit menu's labels, the tool in force
@@ -514,6 +517,8 @@ pub enum UiCommand {
     },
     /// Stop the background imports (the status bar's Cancel).
     CancelImports,
+    /// An operation of the export dialog: a field, Export…, Cancel.
+    ExportDialog(xarast_app::export_dialog::ExportDialogOp),
     /// Change the theme preference.
     SetTheme(Theme),
     /// Open the problem list — the non-modal importer diagnostics.

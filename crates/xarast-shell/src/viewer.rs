@@ -147,6 +147,8 @@ pub struct Viewer {
     title_stale: bool,
     /// The save chooser on screen, if one is.
     save_dialog: Option<PortalRequestId>,
+    /// The File › Export… destination chooser on screen, if one is.
+    export_dialog: Option<PortalRequestId>,
     /// SIGINT/SIGTERM/SIGHUP, from the handler thread.
     signals: crate::signals::SignalWatch,
     /// A thread the process cannot run without (the render thread) died
@@ -223,6 +225,7 @@ impl Viewer {
             import_dialog: None,
             title_stale: false,
             save_dialog: None,
+            export_dialog: None,
             signals: crate::signals::SignalWatch::inert(),
             fatal: xarast_app::crash::FatalWatch::new(),
             wakers_set: false,
@@ -447,6 +450,24 @@ impl Viewer {
                         self.save_dialog = Some(id);
                     }
                 }
+                PlatformRequest::ShowExportFileDialog {
+                    title,
+                    file_name,
+                    directory,
+                    filter,
+                    extensions,
+                } => {
+                    if self.export_dialog.is_none() {
+                        let id = ctx.portal().save_file(SaveFileRequest {
+                            title,
+                            filters: vec![FileFilter::new(filter, &extensions)],
+                            file_name: Some(file_name),
+                            directory,
+                            parent: ctx.parent_window(),
+                        });
+                        self.export_dialog = Some(id);
+                    }
+                }
                 PlatformRequest::Quit => ctx.exit(),
                 PlatformRequest::SetClipboardText(text) => {
                     // The SVG flavour of a copy. `arboard` offers text,
@@ -575,6 +596,38 @@ impl Viewer {
         true
     }
 
+    /// Takes the answer to the export destination chooser. Returns false
+    /// for an answer to something else.
+    fn export_answer(&mut self, event: &PortalEvent) -> bool {
+        let request = match event {
+            PortalEvent::SaveChosen { request, .. }
+            | PortalEvent::Cancelled { request }
+            | PortalEvent::Failed { request, .. } => *request,
+            _ => return false,
+        };
+        if self.export_dialog != Some(request) {
+            return false;
+        }
+        self.export_dialog = None;
+        let intent = match event {
+            PortalEvent::SaveChosen { path, .. } => Intent::ExportTo(path.clone()),
+            PortalEvent::Failed { reason, .. } => {
+                let message = format!("Could not show the export file chooser: {reason}");
+                tracing::warn!("{message}");
+                self.app.diagnostics.push(xarast_app::DiagnosticEntry {
+                    severity: xarast_app::Severity::Error,
+                    message: message.clone(),
+                    document: None,
+                });
+                self.message = Some(message);
+                Intent::ExportFileDialogClosed
+            }
+            _ => Intent::ExportFileDialogClosed,
+        };
+        self.apply(vec![intent]);
+        true
+    }
+
     /// The core's own work between events: finished saves, due autosaves,
     /// the recovery question, a signal. Runs at every event and frame.
     fn housekeeping(&mut self, ctx: &mut ShellCtx<'_>) {
@@ -606,6 +659,8 @@ impl Viewer {
         // Background imports that finished (T10.7.5) land now; thumbnails
         // that arrived redraw the gallery.
         changed |= self.app.poll_imports();
+        // A finished export (T11.1.8) shows its report in the dialog.
+        changed |= self.app.poll_exports();
         if self.app.poll_thumbnails() {
             ctx.request_redraw();
         }
@@ -761,6 +816,7 @@ impl Viewer {
             bitmap_gallery,
             photo_panel: self.app.active().map(Session::photo_panel_view),
             imports: self.app.import_progress(),
+            export_dialog: self.app.export_dialog_view(),
             system_scheme: match self.scheme {
                 ColorScheme::NoPreference => xarast_ui::ColorScheme::NoPreference,
                 ColorScheme::Dark => xarast_ui::ColorScheme::Dark,
@@ -1031,6 +1087,7 @@ impl Viewer {
                 }))
             }
             UiCommand::CancelImports => Intent::CancelImports,
+            UiCommand::ExportDialog(op) => Intent::ExportDialog(op),
             UiCommand::SetFill(v) | UiCommand::SetLine(v) => {
                 use xarast_app::colour_bar::{ColourBarOp, ColourSource};
                 use xarast_app::colour_editor::PaintSlot;
@@ -1398,6 +1455,7 @@ impl Viewer {
             ShellEvent::Portal(answer) if self.portal_answer(answer) => redraw = true,
             ShellEvent::Portal(answer) if self.import_answer(answer) => redraw = true,
             ShellEvent::Portal(answer) if self.save_answer(answer) => redraw = true,
+            ShellEvent::Portal(answer) if self.export_answer(answer) => redraw = true,
             ShellEvent::CloseRequested => {
                 // The window's close button is File › Quit: it asks about
                 // unsaved changes first.
@@ -3959,6 +4017,52 @@ mod tests {
         assert!(message.starts_with("Saved square.xarast"), "{message}");
         assert_eq!(v.window_title(), "square.xarast — Xarast");
         assert!(dir.join("square.xarast").is_file());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn ctrl_shift_e_exports_through_the_dialog_and_the_chooser() {
+        let dir = scratch("export");
+        let (mut v, _) = viewer_with_square();
+        press(
+            &mut v,
+            Key::char('E'),
+            Modifiers::NONE.with_ctrl().with_shift(),
+        );
+        let model = v.ui_model(1.0);
+        let view = model.export_dialog.expect("the dialog is shown");
+        assert_eq!(view.format, xarast_app::export_dialog::FormatId::Png);
+        // The dialog's Export… asks for a file, filtered to the format.
+        assert_eq!(
+            v.ui_intent(
+                UiCommand::ExportDialog(xarast_app::export_dialog::ExportDialogOp::Export),
+                1.0
+            ),
+            Some(Intent::ExportDialog(
+                xarast_app::export_dialog::ExportDialogOp::Export
+            ))
+        );
+        v.apply(vec![Intent::ExportDialog(
+            xarast_app::export_dialog::ExportDialogOp::Export,
+        )]);
+        assert!(matches!(
+            v.requests.as_slice(),
+            [PlatformRequest::ShowExportFileDialog { file_name, extensions, .. }]
+                if file_name == "Untitled.png" && extensions.contains(&"png")
+        ));
+        v.requests.clear();
+        v.export_dialog = Some(PortalRequestId(7));
+        v.handle(&ShellEvent::Portal(PortalEvent::SaveChosen {
+            request: PortalRequestId(7),
+            path: dir.join("square"),
+        }));
+        assert!(v.export_dialog.is_none());
+        v.app.wait_exports();
+        assert!(dir.join("square.png").is_file());
+        assert!(matches!(
+            v.ui_model(1.0).export_dialog.map(|d| d.phase),
+            Some(xarast_app::export_dialog::ExportPhase::Done { .. })
+        ));
         let _ = std::fs::remove_dir_all(dir);
     }
 

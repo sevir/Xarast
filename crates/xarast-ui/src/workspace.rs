@@ -242,6 +242,13 @@ impl Workspace {
 
         self.menu.windows(ctx, &tokens);
         self.menu.align_window(ctx, model, &mut out);
+        if let Some(v) = &model.export_dialog {
+            let unit = model
+                .document
+                .as_ref()
+                .map_or_else(crate::units::Unit::default, |d| d.unit);
+            crate::dialogs::export(ctx, v, unit, &tokens, &mut out);
+        }
         if let Some(p) = &model.prompt {
             crate::dialogs::prompt(ctx, p, &tokens, &mut out);
         }

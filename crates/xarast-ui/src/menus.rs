@@ -78,6 +78,7 @@ impl AppMenu {
                 let recent = ui.menu_button("Open Recent", |ui| recent_menu(ui, model, out));
                 menu_item_node(ui.ctx(), recent.response.id, "Open Recent", None);
                 command_item(ui, model, AppCommand::Import, out);
+                command_item(ui, model, AppCommand::Export, out);
                 ui.separator();
                 command_item(ui, model, AppCommand::Save, out);
                 command_item(ui, model, AppCommand::SaveAs, out);
