@@ -989,7 +989,18 @@ XARA-T-0330 it was misused for include-line-widths) and
   `tests/svg_read.rs::a_contour_is_baked_as_real_offset_paths_and_reads_back_exactly`
   and the corpus round trip: 59/59 normal form and byte-identical with
   the four corpus contours.
-- Not done: an inset path's source is still drawn by an SVG viewer.
+- **XARA-T-0332.** The rings are **cubics** now (`geom::contour::refit`,
+  ≤ 187.5 mp from the polyline): far fewer path commands in the bake
+  (sizes in `export.md`). A contour of **text** bakes rings around the
+  glyph outlines when the placer makes outlines (`generate_full` with
+  the placer's outliner, as the mould bake does). An **inset path's
+  source** carries `display="none"` on its `live-source` group, in both
+  dialects, so a browser draws only its rings as the walker does; the
+  reader ignores `display` there (a known, non-inherited property) and
+  reads the source as usual, so a reload is still a fixed point.
+  Pinned in `tests/svg_read.rs::a_contour_is_baked_…` (one
+  `display="none"`, on the inset's source, in the package and in the
+  interchange export).
 
 ## Moulds: source hidden in the parameters, copy baked (XARA-T-0334, 2026-10-16)
 

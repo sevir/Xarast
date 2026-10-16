@@ -522,9 +522,22 @@ New in Phase 2:
     else does not blend and keeps the start (the original's failed
     blend). `regenerate` returns them; the walker keys a `LiveCache` on
     `RegenKey` (`LiveCache::current_or_regenerate`), so no queue is
-    needed. An outer contour's controller bounds grow by `growth()`:
-    the distance × 11.47 when the corners may be mitred (a cheap
-    conservative bound, see TODO).
+    needed. An outer contour's controller bounds are **its rings' own
+    box** (XARA-T-0332): `bounds::compute_bounds_in(doc, …)` adds
+    `contour::ring_extent` (each ring's exact curve box grown by the
+    stroke it is drawn with), kept in `Document::ring_extents` under the
+    controller's `RegenKey`, so a repeated query is a subtree hash and a
+    lookup and the value never depends on what was asked before. The
+    tree-only `compute_bounds_with` keeps the cheap superset (`growth()`,
+    the distance × 11.47 when the corners may be mitred) for callers
+    without a document. `update_bounds`, culling, the clip test, shadow
+    anchors, mould source rectangles, `nodes_rect`/`content_rect`/
+    `drawing_rect` and the SVG writer's effect regions read the exact
+    one. Text has no box in the document, so the rings of text are not
+    in it either: the walker never culls a contour holding text and
+    reports every ring it drew (`SceneWalker::live_ink`), which the
+    session unions into the scene ink (as `text_ink`); that is also what
+    covers a previewed contour's rings during a drag.
 51. **A blend's pairs are generated nodes between its objects; its steps
     are never nodes** (XARA-T-0333, phase 13 F1/F5/F7). The tree mirrors
     the original's: `Controller (Blend)` › attributes, `Source (Blend)` ›
@@ -608,8 +621,8 @@ New in Phase 2:
     |---|---|---|
     | shadow | the rendered alpha of everything drawn (nested effects included) | `render.md`, "Shadows from rendered alpha" |
     | feather, bevel | an outline silhouette (`render.md`, "Nested effects in a silhouette pass") | `Kernel/nodecntr.cpp:1184-1231` |
-    | contour | outlines (`contour::inks`): ink nodes, a **mould anywhere below as its moulded copy**; other nested generated output (rings, steps) left out | a mould's path conversion passes back its moulder's paths, `Kernel/nodemold.cpp:997-1015` |
-    | blend | each end through `contour::inks` (same rule); nested blends blend their own ends | as above; `Kernel/nodeblnd.cpp:502-620` |
+    | contour | what it draws (`contour::drawn_inks`, XARA-T-0332): ink nodes, a **mould anywhere below as its moulded copy**, a nested contour's **rings** (under a negative rule, an inset path without its source), a nested blend's **steps**, text as its glyph outlines (the caller's outliner) | a mould's path conversion passes back its moulder's paths, `Kernel/nodemold.cpp:997-1015`; a contour's or blend's passes back what it draws, `Kernel/ncntrcnt.cpp:520-600` |
+    | blend | each end through `contour::inks`: ink nodes and moulds as above, nested rings and steps left out; nested blends blend their own ends | as above; `Kernel/nodeblnd.cpp:502-620` |
     | mould | outlines of everything (rings, steps, inner moulds moulded where they stand); a **shadow** inside is left out, a **bevel** is its flat unlit band (outer: beneath, inner: over its objects, in its own colour else its first object's fill), a **feather** on an object or group *inside the source* stays on each path from it | `CopyChildrenAsShapes` = `BECOMEA_PASSBACK` (`Kernel/noderend.cpp:4465-4490`); `NodeShadow::DoBecomeA` passes nothing back (`Kernel/nodeshad.cpp:1058-1248`); `NodeBevel` passes its ink path filled, line colour none (`Kernel/nodebev.cpp:2499-2528`); `AttrFeather` is never factored out (`Kernel/fthrattr.cpp:1772-1779`) |
     A feather on the mould controller or above it feathers the mould as
     one unit (the walker's `own_feather`), never each shape again
@@ -1072,9 +1085,11 @@ the digest recorded for that state serial.
 - **Converting shadows and bevels to shapes** (decision 55): the
   original makes a bitmap-filled path; needs the renderer's offscreen
   result as a `BitmapResource`.
-- **Contours of nested blends and contours**: `contour::inks` leaves
-  nested rings and steps out of a contour's silhouette; the original's
-  conversion passes them back (`Kernel/ncntrcnt.cpp:520-600`).
+- **Blends of nested blends and contours**: `contour::inks` leaves
+  nested rings and steps out of a blend end; the original's conversion
+  passes them back (`Kernel/ncntrcnt.cpp:520-600`). Contours read them
+  since XARA-T-0332 (`drawn_inks`); a blend end would need its step
+  attributes as whole maps (`Ink::Drawn` carries resolved attributes).
 - **Blend follow-ups (XARA-T-0333).** F6 (along a path: the record
   family is decoded and reported, the path dropped; none in the corpus;
   bounds would then need the path); blends whose ends are shadows or
@@ -1089,14 +1104,14 @@ the digest recorded for that state serial.
   subpath with the stepper and strips only blend-path-derived ones), so
   it was not implemented; the 12-pair VM comparison of the matching rule
   was not run (`geometry.md`, "Blends"). F8, the tool.
-- **Contour follow-ups (XARA-T-0330).** Exact controller bounds from the
-  regenerated rings (today `growth()` is ×11.47 for mitred corners, which
-  over-sizes culling, damage and "fit drawing"); text sources are not
-  contoured (their outlines come from the app's layout); a nested live
-  object's generated output is left out of the silhouette; the inset
-  path hides its source in the walker but not in the SVG bake; the
-  contour tool (E6). `RegenQueue` is still unused (the walker keys the
-  cache instead): wire it if a consumer needs `flush_urgent`.
+- **Contour follow-ups (XARA-T-0330, closed by XARA-T-0332 but for
+  these).** Exact bounds, cubic rings, text sources, nested output and
+  the inset source in SVG are done (decisions 50 and 54,
+  `geometry.md`, `xarast-format.md`). Left: the document-side bounds of
+  a contour of text (the document has no fonts; the walker covers it);
+  an inner contour's bounds still ignore a ring stroke wider than its
+  inset (none in the corpus). `RegenQueue` is still unused (the walker
+  keys the cache instead): wire it if a consumer needs `flush_urgent`.
 - [x] **Per-node foreign-baggage container (XARA-T-0089, phase 6 risk K1).**
       Done 2026-09-23 (8b0834d): decision 32, invariant 20. Automatic
       dirty/stale marking of edited nodes: done in W4 (decision 32);

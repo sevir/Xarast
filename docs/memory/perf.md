@@ -150,7 +150,7 @@ the budgets file records; both tiers passed, 12/12 and 27/27):
 | `spitfire-first` (first text document) | nightly | first ms | 200 | — | 100 | 100–108 | st |
 | `render-feathers` (whole Final frames, effect cache warm; corpus) | pr | median ms | 12 | — | 3.5 | 3.3–4.0 | mt |
 | `render-groucho2` (same) | nightly | median ms | 16 | — | 6.5 | 5.8–6.7 | mt |
-| `fx-contour-24` (24 steps, 500-node path, Final) | pr | median ms | 250 | 250 | 66 | 66–67 | st |
+| `fx-contour-24` (24 steps, 500-node path, Final) | pr | median ms | 250 | 250 | 76 | 76 (66–67 before the cubic refit of the rings, XARA-T-0332) | st |
 | `fx-blend-50` (correspondence + 50 steps of 200-node paths) | pr | median ms | 100 | 100 | 0.15 | 0.11–0.23 | st |
 | `fx-mould-5000` (a perspective over 5000 nodes) | pr | median ms | 16 | 16 | 0.13 | 0.13 | st |
 | `fx-bevel-400` (lighting of 400 x 400 px) | pr | median ms | 150 | 150 | 0.5 | 0.48–0.51 | st |

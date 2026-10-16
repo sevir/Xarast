@@ -651,9 +651,33 @@ Decisions:
   the original's flatness, smaller side / 375, clamped to 10..=375 mp.
 - Measured (release, a 1 015-segment curved blob): ±1 000 mp 25 ms,
   ±1e6 mp 33 ms per pair of offsets.
-- Output rings are **polylines** (curves flattened at the tolerance):
-  the boolean restore only keeps untouched *input* curves. Fitting the
-  rings back to cubics (`fit`) is an open TODO.
+- The boolean's output is **polylines** (curves flattened at the
+  tolerance; the restore only keeps untouched *input* curves), so
+  `steps` **refits every step to cubics** (`contour::refit`,
+  XARA-T-0332): each closed subpath is cut at its corners (a turn above
+  20°, or the end of a kept cubic) and at both ends of a **long line**
+  (four times as long as each of the three edges either side: a
+  straight edge of the source or a mitre, which stays a line, and the
+  curves either side leave it in its direction, G1); each run between
+  cuts is fitted by Schneider's fitter (`fit::fit_run_cubics`, no corner
+  detection of its own) with its end edges as tangents, sampled at the
+  vertices and along every edge at the run's shortest-edge spacing (≥ 3,
+  ≤ 8 per edge: 64 cost 55 ms on `fx-contour-24`, 66 → 122 ms; 8 gives 76); a fitted cubic whose handles lie on its chord (½ mp)
+  is a line; a loop with no cut is one run with a smooth seam. Tolerance
+  `min(step tolerance, REFIT_TOLERANCE)`, `REFIT_TOLERANCE` = 187.5 mp
+  = ¼ px at 100 %. Deterministic. Pinned by
+  `tests/contour.rs::rings_are_refitted_to_few_curves_within_the_
+  tolerance` (both-way deviation ≤ tolerance, ≥ 4× fewer segments, area
+  within 0.5 %, same output twice) and `refitting_keeps_corners_and_
+  straight_edges` (a mitred or bevelled square is returned unchanged; a
+  rounded one keeps its exact box and has ≤ 16 segments).
+- Dead ends of the refit: **a 40° corner** rounded a square contoured
+  twice with bevels (its 16-gon turns by 22.5°) by 39 mp; **"long" =
+  four times both neighbours** flagged every chord of a curve offset
+  with round joins (they alternate long chords and short join wedges),
+  so nothing was fitted (352 → 342 segments); **samples at the quarter
+  points only** let a curve bulge 422 mp off a long straight edge in a
+  run of short arc chords (the error is only measured at samples).
 - Property tests (`tests/contour.rs`): identity at 0, monotone area,
   n round offsets of w ≈ one of n·w (tight bounds within 64n mp, area
   within 1 %), curved insets past the inradius empty, hostile
