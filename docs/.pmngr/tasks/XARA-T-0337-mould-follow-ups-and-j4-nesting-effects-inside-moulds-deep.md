@@ -2,14 +2,15 @@
 id: XARA-T-0337
 type: task
 title: "Mould follow-ups and J4 nesting: effects inside moulds, deep mould blend ends, edit inside a mould, font-aware key, affine shortcut, convert to shapes, nesting composition order"
-status: in_progress
+status: done
 priority: medium
 parent: XARA-US-0071
 author: mcp
 labels: [phase-13, live-effects, geom, app]
 created: 2026-10-15T22:43:28Z
-updated: 2026-10-16T00:50:15Z
+updated: 2026-10-16T01:58:37Z
 started: 2026-10-16T00:50:15Z
+closed: 2026-10-16T01:58:37Z
 ---
 
 ## Description
