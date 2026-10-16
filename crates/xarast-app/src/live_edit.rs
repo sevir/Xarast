@@ -876,6 +876,19 @@ pub(crate) fn become_shapes(
             let groups =
                 xarast_doc::blend::generate_full(doc, c, None, None, text).unwrap_or_default();
             let blenders = xarast_doc::blend::blenders(&doc.tree, parts.source);
+            // The path a blend runs along stays, beneath or over the rest
+            // as it was drawn (F6).
+            let along = xarast_doc::blend::blend_path(&doc.tree, c);
+            let path_over = along.is_some_and(|p| {
+                doc.tree
+                    .children(c)
+                    .position(|k| k == p)
+                    .zip(doc.tree.children(c).position(|k| k == parts.source))
+                    .is_some_and(|(p, s)| p > s)
+            });
+            if let Some(p) = along.filter(|_| !path_over) {
+                plan.push(Part::Object(p));
+            }
             for child in doc.tree.children(parts.source) {
                 if let Some(k) = blenders.iter().position(|(g, _, _)| *g == child) {
                     let base = xarast_doc::attr::resolve_uncached(&doc.tree, child, &doc.defaults);
@@ -889,6 +902,9 @@ pub(crate) fn become_shapes(
                 {
                     plan.push(Part::Object(child));
                 }
+            }
+            if let Some(p) = along.filter(|_| path_over) {
+                plan.push(Part::Object(p));
             }
         }
         _ => return Ok(None),

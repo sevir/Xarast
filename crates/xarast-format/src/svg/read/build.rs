@@ -1174,6 +1174,15 @@ impl<'d, 'r, 'f> Reader<'d, 'r, 'f> {
                 .collect()
         };
         let index = |e: &Elem, n: &str| xa(e, n).and_then(|v| v.parse::<u32>().ok());
+        // Two finite numbers, as the writer spells a pair.
+        let two = |e: &Elem, n: &str| {
+            let v = xa(e, n)?;
+            let mut it = v.split_ascii_whitespace().map(str::parse::<f64>);
+            match (it.next(), it.next(), it.next()) {
+                (Some(Ok(a)), Some(Ok(b)), None) if a.is_finite() && b.is_finite() => Some((a, b)),
+                _ => None,
+            }
+        };
         kids(p)
             .into_iter()
             .filter(|e| e.is(NS_XARAST, "blender"))
@@ -1194,6 +1203,9 @@ impl<'d, 'r, 'f> Reader<'d, 'r, 'f> {
                             .collect()
                     })
                     .unwrap_or_default(),
+                path_span: two(e, "path-span"),
+                path_angles: two(e, "path-angles").unwrap_or((0.0, 0.0)),
+                path_reversed: is_true(xa(e, "path-reversed")),
             })
             .take(1 << 20)
             .collect()

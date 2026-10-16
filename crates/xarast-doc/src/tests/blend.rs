@@ -369,3 +369,143 @@ fn ramps_with_different_stop_counts_blend_over_their_union() {
         "{r} {g} {b}"
     );
 }
+
+/// Two squares (side 1 000 at the origin, side 2 000 at x 10 000) blended
+/// with `params`, along `path` when given (a path child of the
+/// controller, before its source).
+fn blend_along(params: &BlendParams, path: Option<xarast_geom::Path>) -> (Document, NodeId) {
+    let mut b = skeleton(BuildLimits::small()).unwrap();
+    b.node(live(LiveRole::Controller, params)).unwrap();
+    b.push_scope().unwrap();
+    if let Some(p) = path {
+        b.node(path_node(p)).unwrap();
+    }
+    b.node(live(LiveRole::Source, params)).unwrap();
+    b.push_scope().unwrap();
+    b.node(path_node(square(Point::raw(0, 0), 1_000))).unwrap();
+    b.node(live(LiveRole::Generated, params)).unwrap();
+    b.node(path_node(square(Point::raw(10_000, 0), 2_000)))
+        .unwrap();
+    b.pop_scope();
+    b.pop_scope();
+    let (mut doc, _) = b.finish().unwrap();
+    doc.validate().assert_clean();
+    doc.update_bounds();
+    let c = doc
+        .tree
+        .preorder(doc.tree.root())
+        .find(|n| matches!(doc.tree.kind(*n), Some(NodeKind::Live(l)) if l.role == LiveRole::Controller))
+        .unwrap();
+    (doc, c)
+}
+
+fn centre_of(r: xarast_geom::Rect) -> (f64, f64) {
+    (
+        (r.lo.x.to_f64() + r.hi.x.to_f64()) / 2.0,
+        (r.lo.y.to_f64() + r.hi.y.to_f64()) / 2.0,
+    )
+}
+
+/// A blend keeping a step distance draws as many steps as fit between
+/// its ends' centres (`NodeBlend::GetNumStepsFromDistance`), whatever its
+/// step count says (XARA-T-0335).
+#[test]
+fn a_step_distance_derives_the_step_count_from_the_blend_s_length() {
+    // Centres (500, 500) and (11 000, 1 000): 10 511.9 apart.
+    let p = BlendParams {
+        steps: 2,
+        step_distance: Some(xarast_geom::Mp::new(1_000)),
+        ..BlendParams::default()
+    };
+    let (doc, c) = blend_along(&p, None);
+    assert_eq!(generate(&doc, c).unwrap()[0].len(), 10);
+    let far = BlendParams {
+        step_distance: Some(xarast_geom::Mp::new(20_000)),
+        ..p.clone()
+    };
+    let (doc, c) = blend_along(&far, None);
+    assert!(generate(&doc, c).unwrap()[0].is_empty());
+    // None or zero: the step count.
+    let zero = BlendParams {
+        step_distance: Some(xarast_geom::Mp::ZERO),
+        ..p
+    };
+    let (doc, c) = blend_along(&zero, None);
+    assert_eq!(generate(&doc, c).unwrap()[0].len(), 2);
+}
+
+/// A blend along a path (F6): steps evenly by arc length along the
+/// pair's stretch of the path, centred on it, turned with it when
+/// tangential; the controller's box covers them; a step distance counts
+/// the path's length.
+#[test]
+fn a_blend_along_a_path_spaces_its_steps_by_arc_length() {
+    // An arc of a quarter circle, radius 20 000 about (0, 0), from
+    // (20 000, 0) to (0, 20 000): steps at 1/4, 1/2, 3/4 of its length.
+    let mut pb = xarast_geom::Path::builder();
+    let k = 0.552_284_75 * 20_000.0;
+    pb.move_to(Point::raw(20_000, 0)).cubic_to(
+        Point::from_f64_round(20_000.0, k),
+        Point::from_f64_round(k, 20_000.0),
+        Point::raw(0, 20_000),
+    );
+    let arc = pb.build();
+    let p = BlendParams {
+        steps: 3,
+        tangential: true,
+        ..BlendParams::default()
+    };
+    let (doc, c) = blend_along(&p, Some(arc.clone()));
+    let steps = &generate(&doc, c).unwrap()[0];
+    assert_eq!(steps.len(), 3);
+    for (i, s) in steps.iter().enumerate() {
+        let (x, y) = centre_of(s.path.bounds());
+        let a = std::f64::consts::FRAC_PI_2 * (i as f64 + 1.0) / 4.0;
+        let (ex, ey) = (20_000.0 * a.cos(), 20_000.0 * a.sin());
+        assert!(
+            (x - ex).abs() < 60.0 && (y - ey).abs() < 60.0,
+            "step {i}: ({x}, {y}) vs ({ex}, {ey})"
+        );
+    }
+    // Tangential: the middle step (a square half way in size, 1 500) is
+    // turned by 135 degrees, so its box is its diagonal wide.
+    let mid = steps[1].path.bounds();
+    assert!(
+        (mid.width().to_f64() - 1_500.0 * 2f64.sqrt()).abs() < 20.0,
+        "{mid:?}"
+    );
+    // Not tangential: upright.
+    let upright = BlendParams {
+        tangential: false,
+        ..p.clone()
+    };
+    let (doc2, c2) = blend_along(&upright, Some(arc.clone()));
+    let mid = generate(&doc2, c2).unwrap()[0][1].path.bounds();
+    assert!((mid.width().to_f64() - 1_500.0).abs() < 2.0, "{mid:?}");
+    // The controller's box covers every step.
+    let cb = doc.tree.bounds(c).get().unwrap();
+    for s in steps {
+        assert!(
+            cb.contains_rect(s.path.bounds()),
+            "{cb:?} {:?}",
+            s.path.bounds()
+        );
+    }
+    // Half of the path: steps over its first half only.
+    let mut half = p.clone();
+    half.blenders = vec![crate::live::BlenderParams {
+        path_span: Some((0.0, 0.5)),
+        ..Default::default()
+    }];
+    let (doc3, c3) = blend_along(&half, Some(arc.clone()));
+    let (x, y) = centre_of(generate(&doc3, c3).unwrap()[0][1].path.bounds());
+    let a = std::f64::consts::FRAC_PI_2 / 4.0;
+    assert!((x - 20_000.0 * a.cos()).abs() < 60.0 && (y - 20_000.0 * a.sin()).abs() < 60.0);
+    // A step distance along a path counts the path's length (31 416).
+    let spaced = BlendParams {
+        step_distance: Some(xarast_geom::Mp::new(10_000)),
+        ..p
+    };
+    let (doc4, c4) = blend_along(&spaced, Some(arc));
+    assert_eq!(generate(&doc4, c4).unwrap()[0].len(), 3);
+}

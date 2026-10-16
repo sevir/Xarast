@@ -205,6 +205,23 @@ pub struct BlenderParams {
     /// paint order; empty pairs them automatically
     /// (`xarast_geom::blend::pair_up`).
     pub pairs: Vec<(u32, u32)>,
+    /// On a blend along a path (`crate::blend::blend_path`): the stretch
+    /// of the path this pair runs over, as proportions of its length
+    /// (the original's `TAG_BLENDER_CURVEPROP`); `None` is all of it.
+    #[serde(default)]
+    pub path_span: Option<(f64, f64)>,
+    /// On a blend along a path: how far each end is turned where it
+    /// stands on the path, degrees anticlockwise (`TAG_BLENDER_CURVEANGLES`).
+    /// The ends are blended turned back by these, and every step is turned
+    /// by the path's direction where it stands when the blend is
+    /// [`tangential`](BlendParams::tangential).
+    #[serde(default)]
+    pub path_angles: (f64, f64),
+    /// On a blend along a path: the pair runs from its later object at the
+    /// span's start to its earlier one at its end (the original's reversed
+    /// blender, bit 0 of `TAG_BLENDERADDITIONAL`).
+    #[serde(default)]
+    pub path_reversed: bool,
 }
 
 /// The most rings a contour draws; a file asking for more is clamped

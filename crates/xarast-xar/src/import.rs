@@ -1944,13 +1944,17 @@ impl<'o> Mapper<'o> {
             c.record.tag != TAG_BLEND_PATH && class_of(c.record.tag) == Some(TagClass::Object)
         };
         let mut blenders = Vec::new();
-        let mut along_path = false;
+        // Along a path (F6): the blend holds its path; a blender says it
+        // runs along it (4073) and where (4060, 4062, its children).
+        let paths = children
+            .iter()
+            .filter(|c| c.record.tag == TAG_BLEND_PATH)
+            .count();
+        let mut on_curve = false;
+        let mut unsupported = paths > 1;
         let mut index = 0i32;
         for (i, c) in children.iter().enumerate() {
             let tag = c.record.tag;
-            if tag == TAG_BLEND_PATH || tag == TAG_NODEBLENDPATH_FILLED {
-                along_path = true;
-            }
             if tag == TAG_BLENDER {
                 let (path_start, path_end) = match decode(
                     tag,
@@ -1966,13 +1970,41 @@ impl<'o> Mapper<'o> {
                     _ => (-1, -1),
                 };
                 let index_of = |i: i32| u32::try_from(i).ok();
-                blenders.push(xarast_doc::BlenderParams {
+                let mut b = xarast_doc::BlenderParams {
                     start_index: index_of(path_start),
                     end_index: index_of(path_end),
-                    pairs: Vec::new(),
-                });
-                if !c.children.is_empty() {
-                    along_path = true;
+                    ..xarast_doc::BlenderParams::default()
+                };
+                for g in &c.children {
+                    let d = decode(
+                        g.record.tag,
+                        &g.record.data,
+                        self.origin,
+                        &mut self.diags,
+                        (g.record.number, g.record.tag),
+                    );
+                    match d {
+                        // Proportions of the path, as the original clamps
+                        // them (`Kernel/nodebldr.cpp:7509-7534`).
+                        Ok(Decoded::BlenderCurveProp(a, e)) => {
+                            let a = if a.is_finite() && a >= 0.0 {
+                                a.min(1.0)
+                            } else {
+                                0.0
+                            };
+                            let e = if e.is_finite() && e >= 0.0 {
+                                e.min(1.0)
+                            } else {
+                                1.0
+                            };
+                            b.path_span = Some((a.min(e), e.max(a)));
+                        }
+                        Ok(Decoded::BlenderCurveAngles(a, e)) => {
+                            let deg = |v: f64| if v.is_finite() { v % 360.0 } else { 0.0 };
+                            b.path_angles = (deg(a) + 0.0, deg(e) + 0.0);
+                        }
+                        _ => {}
+                    }
                 }
                 let extra = children
                     .get(i.saturating_add(1))
@@ -1989,20 +2021,28 @@ impl<'o> Mapper<'o> {
                     });
                 if let Some(Decoded::BlenderExtra(x)) = extra {
                     if x.on_curve != 0 {
-                        along_path = true;
+                        on_curve = true;
+                        // One path per blend is what Xarast models.
+                        if x.path_index > 0 {
+                            unsupported = true;
+                        }
                     }
+                    b.path_reversed = x.bits & 1 != 0;
                     if x.obj_start != index.saturating_sub(1)
                         || x.obj_end != index.saturating_add(1)
                     {
                         degraded(self, 4);
                     }
                 }
+                blenders.push(b);
             }
             if is_object(c) {
                 index = index.saturating_add(1);
             }
         }
-        if along_path {
+        // A blender on a curve with no path, or more than one path: drawn
+        // straight along the first (or none).
+        if unsupported || (on_curve && paths == 0) {
             degraded(self, 3);
         }
         let params = xarast_doc::BlendParams {
@@ -2034,8 +2074,31 @@ impl<'o> Mapper<'o> {
             .position(is_object)
             .unwrap_or(children.len());
         let mut r = Ok(());
-        for c in children.iter().take(first) {
-            r = self.visit(c);
+        // The path the blend runs along: the first one; any other is
+        // dropped (`degraded` 3 above). Its 4074 is read with it.
+        let path_at = children.iter().position(|c| c.record.tag == TAG_BLEND_PATH);
+        let path_filled_at = path_at.map(|p| p.saturating_add(1)).filter(|&f| {
+            children
+                .get(f)
+                .is_some_and(|n| n.record.tag == TAG_NODEBLENDPATH_FILLED)
+        });
+        // A path record, or a 4074, other than the one the path is read
+        // from: counted, its subtree skipped (or read with the path).
+        let path_record = |me: &mut Self, i: usize, c: &RecordNode| {
+            me.mapped = me.mapped.saturating_add(1);
+            if Some(i) != path_filled_at {
+                me.skipped = me.skipped.saturating_add(count_subtree(&c.children));
+            }
+        };
+        for (i, c) in children.iter().enumerate().take(first) {
+            r = if Some(i) == path_at {
+                self.emit_blend_path(c, path_filled_at.and_then(|f| children.get(f)))
+            } else if c.record.tag == TAG_BLEND_PATH || c.record.tag == TAG_NODEBLENDPATH_FILLED {
+                path_record(self, i, c);
+                Ok(())
+            } else {
+                self.visit(c)
+            };
             if r.is_err() {
                 break;
             }
@@ -2045,7 +2108,7 @@ impl<'o> Mapper<'o> {
             self.push_scope()?;
             let mut previous_object = false;
             let mut awaiting_object = false;
-            for c in children.iter().skip(first) {
+            for (i, c) in children.iter().enumerate().skip(first) {
                 let tag = c.record.tag;
                 if tag == TAG_BLENDER {
                     self.mapped = self.mapped.saturating_add(1);
@@ -2062,10 +2125,13 @@ impl<'o> Mapper<'o> {
                     self.mapped = self.mapped.saturating_add(1);
                     continue;
                 }
+                // The path drawn over the objects is emitted after the
+                // source.
+                if Some(i) == path_at {
+                    continue;
+                }
                 if tag == TAG_BLEND_PATH || tag == TAG_NODEBLENDPATH_FILLED {
-                    self.skipped = self
-                        .skipped
-                        .saturating_add(count_subtree(&c.children).saturating_add(1));
+                    path_record(self, i, c);
                     continue;
                 }
                 if is_object(c) {
@@ -2081,6 +2147,66 @@ impl<'o> Mapper<'o> {
                 degraded(self, 0);
             }
             self.pop_scope();
+        }
+        let path_after = path_at.filter(|&p| p >= first);
+        if r.is_ok()
+            && let Some(p) = path_after
+        {
+            r = self.emit_blend_path(&children[p], children.get(p.saturating_add(1)));
+        }
+        self.pop_scope();
+        r
+    }
+
+    /// A blend's path (`TAG_BLEND_PATH`, 4061) as a path node under the
+    /// controller, where the original's `NodeBlendPath` stands, drawn as
+    /// any path is; `TAG_NODEBLENDPATH_FILLED` (4074), written right after
+    /// it (`Kernel/ndbldpth.cpp:837-866`), says whether it is filled. Its
+    /// attributes are the children of either record (they follow the
+    /// last record the node wrote).
+    fn emit_blend_path(
+        &mut self,
+        node: &RecordNode,
+        next: Option<&RecordNode>,
+    ) -> Result<(), XarError> {
+        use crate::tags::TAG_NODEBLENDPATH_FILLED;
+        let rec = &node.record;
+        let at = (rec.number, rec.tag);
+        let path = match decode(rec.tag, &rec.data, self.origin, &mut self.diags, at) {
+            Ok(Decoded::BlendPath(p)) => p,
+            _ => {
+                self.skipped = self
+                    .skipped
+                    .saturating_add(count_subtree(&node.children).saturating_add(1));
+                return Ok(());
+            }
+        };
+        self.mapped = self.mapped.saturating_add(1);
+        let filled_rec = next.filter(|n| n.record.tag == TAG_NODEBLENDPATH_FILLED);
+        // The 4074 record itself is counted by the caller.
+        let filled = filled_rec.is_some_and(|n| {
+            matches!(
+                decode(
+                    n.record.tag,
+                    &n.record.data,
+                    self.origin,
+                    &mut self.diags,
+                    (n.record.number, n.record.tag),
+                ),
+                Ok(Decoded::BlendPathFilled(f)) if f != 0
+            )
+        });
+        self.builder.node(NodeKind::Path(Box::new(PathNode {
+            data: Arc::new(path),
+            filled,
+            stroked: true,
+        })))?;
+        self.push_scope()?;
+        let mut r = self.visit_children(&node.children);
+        if r.is_ok()
+            && let Some(f) = filled_rec
+        {
+            r = self.visit_children(&f.children);
         }
         self.pop_scope();
         r
@@ -4579,7 +4705,8 @@ mod tests {
                 .record(4073, &blender_extra(5, 9))
                 .record(116, &square_path(0, 0, 10_000))
                 .up()
-                // Along a path, and a blender with nothing after it.
+                // Along two paths (Xarast runs along one), and a blender
+                // with nothing after it.
                 .record(105, &[2, 0, 2])
                 .down()
                 .record(116, &square_path(0, 0, 10_000))
@@ -4588,6 +4715,7 @@ mod tests {
                 .record(4060, &doubles(&[0.0, 1.0]))
                 .up()
                 .record(116, &square_path(0, 0, 10_000))
+                .record(4061, &square_path(0, 0, 10_000))
                 .record(4061, &square_path(0, 0, 10_000))
                 .record(106, &[0; 8])
                 .up()
@@ -4610,6 +4738,70 @@ mod tests {
         // The path the second blend ran along is not one of its objects.
         let source = xarast_doc::live::parts(&doc.tree, got[1].0).unwrap().source;
         assert_eq!(kinds_under(&doc, source), ["Path", "Live", "Path", "Live"]);
+    }
+
+    /// A blend along a path (F6): the path is a path node under the
+    /// controller where the file has it, filled as 4074 says, with its
+    /// attributes; each blender's stretch, angles and direction land in its
+    /// parameters, and the steps stand on the path.
+    #[test]
+    fn a_blend_along_a_path_keeps_its_path_and_where_each_pair_runs() {
+        // A right angle: right 100 pt, then up 100 pt.
+        let path = absolute(&[(6, 0, 0), (2, 100_000, 0), (2, 100_000, 100_000)]);
+        let extra = |s: i32, e: i32, bits: u8| -> Vec<u8> {
+            [1i32, 0, s, e]
+                .iter()
+                .flat_map(|x| x.to_le_bytes())
+                .chain([bits])
+                .collect()
+        };
+        let bytes = layer_with(|b| {
+            // Tangential, 3 steps.
+            b.record(105, &[3, 0, 0x04])
+                .down()
+                .record(4061, &path)
+                .record(4074, &1i32.to_le_bytes())
+                .down()
+                .record(176, &[0])
+                .up()
+                .record(116, &square_path(-5_000, -5_000, 10_000))
+                .record(106, &[0, 0, 0, 0, 0, 0, 0, 0])
+                .down()
+                .record(4060, &doubles(&[0.0, 1.0]))
+                .record(4062, &doubles(&[0.0, 450.0]))
+                .up()
+                .record(4073, &extra(0, 2, 1))
+                .record(116, &square_path(95_000, 95_000, 10_000))
+                .up()
+        });
+        let (doc, report) = import(&bytes, &ImportOptions::default()).unwrap();
+        balanced(&report);
+        assert!(blend_diags(&report).is_empty(), "{:?}", report.diagnostics);
+        assert_eq!(report.records_stripped, 0);
+        assert!(doc.validate().errors.is_empty(), "{:?}", doc.validate());
+        let [(c, p)] = blends(&doc).try_into().unwrap();
+        // The path drawn beneath the objects, before the source.
+        assert_eq!(kinds_under(&doc, c), ["Path", "Live"]);
+        let bp = xarast_doc::blend::blend_path(&doc.tree, c).unwrap();
+        let Some(NodeKind::Path(n)) = doc.tree.kind(bp) else {
+            panic!("a path");
+        };
+        assert!(n.filled && n.stroked);
+        assert_eq!(kinds_under(&doc, bp), ["Attr"]);
+        assert!(p.tangential);
+        let b = &p.blenders[0];
+        assert_eq!(b.path_span, Some((0.0, 1.0)));
+        assert_eq!(b.path_angles, (0.0, 90.0));
+        assert!(b.path_reversed);
+        // The middle step stands on the path's middle: its corner.
+        let steps = &xarast_doc::blend::generate(&doc, c).unwrap()[0];
+        assert_eq!(steps.len(), 3);
+        let mid = steps[1].path.bounds();
+        let (cx, cy) = (
+            (mid.lo.x.raw() + mid.hi.x.raw()) / 2,
+            (mid.lo.y.raw() + mid.hi.y.raw()) / 2,
+        );
+        assert!((cx - 100_000).abs() < 50 && cy.abs() < 50, "{mid:?}");
     }
 
     /// An absolute path payload (`TAG_MOULD_PATH`): count, verbs, points.

@@ -3051,6 +3051,20 @@ fn live_params(
                 if let Some(i) = p.end_index {
                     attr(&mut s, "xarast:end-point", &i.to_string());
                 }
+                // Along a path: the pair's stretch of it, its ends' angles
+                // and its direction (XARA-T-0335).
+                if let Some((a, e)) = p.path_span {
+                    let v = format!("{} {}", f64s_exact(a), f64s_exact(e));
+                    attr(&mut s, "xarast:path-span", &v);
+                }
+                if p.path_angles != (0.0, 0.0) {
+                    let (a, e) = p.path_angles;
+                    let v = format!("{} {}", f64s_exact(a), f64s_exact(e));
+                    attr(&mut s, "xarast:path-angles", &v);
+                }
+                if p.path_reversed {
+                    attr(&mut s, "xarast:path-reversed", "true");
+                }
                 if p.pairs.is_empty() {
                     s.push_str("/>");
                 } else {

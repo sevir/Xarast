@@ -36,8 +36,8 @@
 use std::sync::Arc;
 
 use xarast_color::{Colour, ColourValue, FillEffect};
-use xarast_geom::blend::{Correspondence, Outline, correspond, pair_up};
-use xarast_geom::{BiasGain, Path};
+use xarast_geom::blend::{Correspondence, Outline, PathRun, correspond, pair_up};
+use xarast_geom::{BiasGain, Matrix, Path, Point, Rect, Vector};
 
 use crate::attr::{ALL_ATTR_SLOTS, AttrSlot, AttrValue, ResolvedAttrs, resolve_uncached};
 use crate::contour::{Ink, blend_fill, drawn_inks, geometry, lerp_mp, visible};
@@ -92,7 +92,22 @@ struct End {
     /// Each object's bounding-box centre (what a fill point the other
     /// end lacks moves with).
     centres: Vec<(f64, f64)>,
+    /// The whole end's box, as it stands (before a path's angle is undone).
+    bounds: Rect,
     pieces: Vec<Piece>,
+}
+
+impl End {
+    fn centre(&self) -> (f64, f64) {
+        centre(self.bounds)
+    }
+}
+
+fn centre(r: Rect) -> (f64, f64) {
+    (
+        (r.lo.x.to_f64() + r.hi.x.to_f64()) / 2.0,
+        (r.lo.y.to_f64() + r.hi.y.to_f64()) / 2.0,
+    )
 }
 
 /// A blend controller's steps: one group per generated node under its
@@ -150,15 +165,80 @@ pub fn generate_full(
     let moved = moved.map(|m| (controller, m));
     let source = parts(tree, controller)?.source;
     let blenders = blenders(tree, source);
-    let mut out = Vec::with_capacity(blenders.len());
-    for (k, &(_, start, end)) in blenders.iter().enumerate() {
-        let (Some(start), Some(end)) = (start, end) else {
-            out.push(Vec::new());
-            continue;
-        };
-        out.push(pair_steps(doc, params, k, start, end, moved, text));
-    }
+    // Along a path (F6), when the controller holds one with a length.
+    let run = blend_path(tree, controller).and_then(|p| match tree.kind(p) {
+        Some(NodeKind::Path(n)) => PathRun::new(&n.data),
+        _ => None,
+    });
+    let ends: Vec<Option<(End, End)>> = blenders
+        .iter()
+        .enumerate()
+        .map(|(k, &(_, start, end))| {
+            let (start, end) = (start?, end?);
+            let b = params.blender(k);
+            // On a path, each end is blended turned back by the angle it
+            // stands at (`Kernel/nodebldr.cpp:3079-3090`).
+            let (sa, ea) = if run.is_some() {
+                b.path_angles
+            } else {
+                (0.0, 0.0)
+            };
+            Some((
+                end_of(doc, start, b.start_index, moved, text, sa),
+                end_of(doc, end, b.end_index, moved, text, ea),
+            ))
+        })
+        .collect();
+    let n = step_count(params, &ends, run.as_ref());
+    let out = ends
+        .iter()
+        .enumerate()
+        .map(|(k, e)| match e {
+            Some((a, b)) => pair_steps(doc, params, k, a, b, n, run.as_ref()),
+            None => Vec::new(),
+        })
+        .collect();
     Some(out)
+}
+
+/// The path a blend runs along (F6), when it has one: the first path
+/// among the controller's own children (outside its source), as the
+/// original's `NodeBlendPath` is a child of the blend, first (drawn
+/// beneath the objects) or last (over them). It is drawn as any path is.
+#[must_use]
+pub fn blend_path(tree: &Tree, controller: NodeId) -> Option<NodeId> {
+    tree.children(controller)
+        .find(|&c| matches!(tree.kind(c), Some(NodeKind::Path(_))))
+}
+
+/// How many steps each pair draws: [`BlendParams::drawn_steps`], or, when
+/// the blend keeps a step distance, the blend's length over it, rounded
+/// down (`NodeBlend::GetNumStepsFromDistance`, `Kernel/nodeblnd.cpp:2643-
+/// 2660`). The length is the sum over the pairs of the distance between
+/// their ends' box centres (`NodeBlender::GetLinearDistance`,
+/// `Kernel/nodebldr.cpp:7575-7591`), or, along a path, of the path's whole
+/// length (`GetBlendDistance` with `FullDistance`, `:2586-2626`).
+fn step_count(params: &BlendParams, ends: &[Option<(End, End)>], run: Option<&PathRun>) -> usize {
+    let Some(d) = params.step_distance.filter(|d| d.raw() > 0) else {
+        return params.drawn_steps();
+    };
+    let length: f64 = ends
+        .iter()
+        .flatten()
+        .map(|(a, b)| match run {
+            Some(run) => run.length(),
+            None => {
+                let ((ax, ay), (bx, by)) = (a.centre(), b.centre());
+                (bx - ax).hypot(by - ay)
+            }
+        })
+        .sum();
+    let n = (length / d.to_f64()).floor();
+    if n.is_finite() && n > 0.0 {
+        (n.min(f64::from(crate::live::MAX_BLEND_STEPS))) as usize
+    } else {
+        0
+    }
 }
 
 /// The generated nodes directly under a blend's source, each with the ink
@@ -192,6 +272,7 @@ fn end_of(
     start_point: Option<u32>,
     moved: Option<(NodeId, Moved<'_>)>,
     text: &mut TextOutlines<'_>,
+    angle: f64,
 ) -> End {
     let tree = &doc.tree;
     let mut end = End {
@@ -199,6 +280,7 @@ fn end_of(
         filled: Vec::new(),
         stroked: Vec::new(),
         centres: Vec::new(),
+        bounds: Rect::EMPTY,
         pieces: Vec::new(),
     };
     // What a preview moves: an object it moves blends from where it is
@@ -258,7 +340,29 @@ fn end_of(
             Some((path, attrs, f, s))
         })
         .collect();
-    for (path, attrs, f, s) in objects {
+    end.bounds = objects
+        .iter()
+        .map(|o| o.0.bounds())
+        .filter(|b| !b.is_empty())
+        .reduce(Rect::union)
+        .unwrap_or(Rect::EMPTY);
+    // Turned back by the angle it stands at on a path, about its centre.
+    let unturn = (angle.is_finite() && angle.rem_euclid(360.0) != 0.0).then(|| {
+        let (cx, cy) = end.centre();
+        Matrix::rotate_about(-angle.to_radians(), Point::from_f64_round(cx, cy))
+    });
+    for (path, mut attrs, f, s) in objects {
+        let path = match unturn {
+            Some(m) => {
+                for a in &mut attrs {
+                    if a.linked_to_geometry() {
+                        a.transform(m);
+                    }
+                }
+                path.transformed(m)
+            }
+            None => path,
+        };
         let object = end.attrs.len();
         end.attrs.push(attrs);
         end.filled.push(f);
@@ -288,19 +392,18 @@ fn end_of(
     end
 }
 
-/// The steps of pair `k`, from `start` to `end`.
+/// The steps of pair `k`, `n` of them, from `a` to `b`; along `run` when
+/// the blend has a path.
 fn pair_steps(
     doc: &Document,
     params: &BlendParams,
     k: usize,
-    start: NodeId,
-    end: NodeId,
-    moved: Option<(NodeId, Moved<'_>)>,
-    text: &mut TextOutlines<'_>,
+    a: &End,
+    b: &End,
+    n: usize,
+    run: Option<&PathRun>,
 ) -> Vec<GeneratedShape> {
     let blender = params.blender(k);
-    let a = end_of(doc, start, blender.start_index, moved, text);
-    let b = end_of(doc, end, blender.end_index, moved, text);
     let (na, nb) = (a.pieces.len(), b.pieces.len());
     // Explicit pairs when every index names a subpath; else the stepper.
     let explicit: Vec<(usize, usize)> = blender
@@ -329,7 +432,6 @@ fn pair_steps(
             )
         })
         .collect();
-    let n = params.drawn_steps();
     let mut order: Vec<usize> = (1..=n).collect();
     if params.reverse {
         order.reverse();
@@ -337,6 +439,8 @@ fn pair_steps(
     let mut out = Vec::new();
     for step in order {
         let r = StepRatios::of(params, step, n);
+        let place = run.map(|run| on_path(run, params, &blender, a, b, r.object));
+        let first = out.len();
         let mut builder: Option<(Path, usize)> = None;
         for (p, &(i, j)) in pairs.iter().enumerate() {
             let path = matched[p].at(r.object);
@@ -351,17 +455,72 @@ fn pair_steps(
             builder = match builder.take() {
                 Some((so_far, _)) if continues => Some((append(&so_far, &path), p)),
                 Some((done, q)) => {
-                    out.push(shape(doc, &a, &b, pairs[q], done, r, params));
+                    out.push(shape(doc, a, b, pairs[q], done, r, params));
                     Some((path, p))
                 }
                 None => Some((path, p)),
             };
         }
         if let Some((done, q)) = builder {
-            out.push(shape(doc, &a, &b, pairs[q], done, r, params));
+            out.push(shape(doc, a, b, pairs[q], done, r, params));
+        }
+        if let Some(m) = place {
+            for s in &mut out[first..] {
+                *s = placed(s, m);
+            }
         }
     }
     out
+}
+
+/// Where a step at object ratio `t` stands on the path: its blended box
+/// centre carried to the point at that share of the pair's stretch of the
+/// path, turned about it by the path's direction there when the blend is
+/// tangential (`NodeBlender::GetPointOnNodeBlendPath`,
+/// `Kernel/nodebldr.cpp:7430-7458`; the step's placement,
+/// `:1177-1196`). A reversed pair runs from its later object, so it is
+/// measured from the other end of its stretch.
+fn on_path(
+    run: &PathRun,
+    params: &BlendParams,
+    blender: &crate::live::BlenderParams,
+    a: &End,
+    b: &End,
+    t: f64,
+) -> Matrix {
+    let (s, e) = blender.path_span.unwrap_or((0.0, 1.0));
+    let along = if blender.path_reversed { 1.0 - t } else { t };
+    let (p, angle) = run.at(run.length() * (s + (e - s) * along));
+    let ((ax, ay), (bx, by)) = (a.centre(), b.centre());
+    let c = Point::from_f64_round(ax + (bx - ax) * t, ay + (by - ay) * t);
+    let turn = if params.tangential && angle.is_finite() {
+        Matrix::rotate_about(angle, c)
+    } else {
+        Matrix::IDENTITY
+    };
+    let to = Point::from_f64_round(p.x, p.y);
+    turn.then(Matrix::translate(Vector::new(to.x - c.x, to.y - c.y)))
+}
+
+/// `s` through `m`, its geometry-linked attributes (fills) with it.
+fn placed(s: &GeneratedShape, m: Matrix) -> GeneratedShape {
+    let attrs: Vec<AttrValue> = s
+        .attrs
+        .iter()
+        .map(|a| {
+            let mut a = a.clone();
+            if a.linked_to_geometry() {
+                a.transform(m);
+            }
+            a
+        })
+        .collect();
+    GeneratedShape {
+        path: Arc::new(s.path.transformed(m)),
+        attrs: Arc::from(attrs),
+        filled: s.filled,
+        stroked: s.stroked,
+    }
 }
 
 /// One step's path drawn with the attributes of the pair `(i, j)`.

@@ -631,6 +631,13 @@ impl Canon for LiveNode {
                         h.u32(s);
                         h.u32(e);
                     }
+                    h.bool(b.path_span.is_some());
+                    let (s, e) = b.path_span.unwrap_or((0.0, 1.0));
+                    h.f64(s);
+                    h.f64(e);
+                    h.f64(b.path_angles.0);
+                    h.f64(b.path_angles.1);
+                    h.bool(b.path_reversed);
                 }
             }
             LiveKind::Contour(p) => {

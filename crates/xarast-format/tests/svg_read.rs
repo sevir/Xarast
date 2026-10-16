@@ -2589,3 +2589,126 @@ fn a_mould_keeps_its_source_hidden_and_bakes_its_copy() {
     assert_eq!(export.svg.matches("<path").count(), 3, "{}", export.svg);
     assert_eq!(export.stats.moulded_paths, 3);
 }
+
+/// A two-object blend along a path (F6): the path a child of the
+/// controller, beneath the objects (`over` false) or over them, with its
+/// own outline colour; the pair runs over part of it, reversed, its ends
+/// turned (XARA-T-0335).
+fn blend_along_doc(over: bool) -> Document {
+    let mut b = xarast_doc::builder::skeleton(BuildLimits::default()).unwrap();
+    let kind = LiveKind::Blend(Box::new(xarast_doc::BlendParams {
+        steps: 4,
+        tangential: true,
+        blenders: vec![xarast_doc::BlenderParams {
+            path_span: Some((0.125, 0.875)),
+            path_angles: (12.5, -30.0),
+            path_reversed: true,
+            ..xarast_doc::BlenderParams::default()
+        }],
+        ..xarast_doc::BlendParams::default()
+    }));
+    let live = |role| {
+        NodeKind::Live(Box::new(LiveNode {
+            role,
+            kind: kind.clone(),
+            regen: RegenState::Clean,
+            name: None,
+        }))
+    };
+    let mut pb = Path::builder();
+    pb.move_to(Point::raw(50_000, 300_000)).cubic_to(
+        Point::raw(150_000, 500_000),
+        Point::raw(350_000, 100_000),
+        Point::raw(450_000, 300_000),
+    );
+    let mut along = PathNode::new(pb.build());
+    along.filled = false;
+    let path = |b: &mut xarast_doc::DocumentBuilder| {
+        b.node(NodeKind::Path(Box::new(along.clone()))).unwrap();
+        b.push_scope().unwrap();
+        b.attribute(AttrValue::StrokeColour(FillGeometry::Flat {
+            value: rgb(0.2, 0.6, 0.2),
+        }))
+        .unwrap();
+        b.pop_scope();
+    };
+    b.node(live(LiveRole::Controller)).unwrap();
+    b.push_scope().unwrap();
+    if !over {
+        path(&mut b);
+    }
+    b.node(live(LiveRole::Source)).unwrap();
+    b.push_scope().unwrap();
+    b.node(triangle(0, 250_000)).unwrap();
+    b.push_scope().unwrap();
+    b.attribute(flat(rgb(0.9, 0.1, 0.1))).unwrap();
+    b.pop_scope();
+    b.node(live(LiveRole::Generated)).unwrap();
+    b.node(triangle(400_000, 250_000)).unwrap();
+    b.push_scope().unwrap();
+    b.attribute(flat(rgb(0.1, 0.1, 0.9))).unwrap();
+    b.pop_scope();
+    b.pop_scope();
+    if over {
+        path(&mut b);
+    }
+    b.pop_scope();
+    b.finish().unwrap().0
+}
+
+#[test]
+fn a_blend_along_a_path_keeps_its_path_and_reads_back_exactly() {
+    for over in [false, true] {
+        let doc = blend_along_doc(over);
+        let first = package(&doc, SvgOptions::default());
+        let svg = svg_of(&first);
+        assert!(
+            svg.contains(
+                "xarast:path-span=\".125 .875\" xarast:path-angles=\"12.5 -30\" \
+                 xarast:path-reversed=\"true\""
+            ),
+            "{svg}"
+        );
+        let mut o = open(&first);
+        assert!(o.diagnostics.is_empty(), "{:?}", o.diagnostics);
+        same_text(&normal_form(&doc), &normal_form(&o.document));
+        // The path is still the controller's, where it was.
+        let c = o
+            .document
+            .tree
+            .preorder(o.document.tree.root())
+            .find(|&n| {
+                matches!(o.document.tree.kind(n), Some(NodeKind::Live(l))
+                    if l.role == LiveRole::Controller)
+            })
+            .unwrap();
+        let p = xarast_doc::blend::blend_path(&o.document.tree, c).expect("its path");
+        let kids: Vec<_> = o.document.tree.children(c).collect();
+        let at = kids.iter().position(|&k| k == p).unwrap();
+        let source = kids
+            .iter()
+            .position(|&k| {
+                matches!(o.document.tree.kind(k), Some(NodeKind::Live(l))
+                    if l.role == LiveRole::Source)
+            })
+            .unwrap();
+        assert_eq!(at > source, over);
+        // Steps regenerate the same after the reload.
+        let controller = |d: &Document| {
+            d.tree
+                .preorder(d.tree.root())
+                .find(|&n| {
+                    matches!(d.tree.kind(n), Some(NodeKind::Live(l))
+                        if l.role == LiveRole::Controller)
+                })
+                .unwrap()
+        };
+        assert_eq!(
+            xarast_doc::blend::generate(&doc, controller(&doc)),
+            xarast_doc::blend::generate(&o.document, c)
+        );
+        let again = resave(&mut o);
+        same_text(&svg, &svg_of(&again));
+        assert!(first == again, "a fixed point");
+    }
+}

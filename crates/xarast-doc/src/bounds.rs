@@ -186,6 +186,34 @@ fn bounds_of(tree: &Tree, id: NodeId, stroke_extent: xarast_geom::Mp, rings: &Ri
                 _ => own,
             }
         }
+        // A blend along a path (F6) draws its steps centred on the path,
+        // each no bigger than the bigger of its ends and turned about its
+        // centre: within the path's box grown by the largest half
+        // diagonal of the objects' boxes (strokes included).
+        NodeKind::Live(l)
+            if l.role == crate::live::LiveRole::Controller
+                && matches!(l.kind, crate::live::LiveKind::Blend(_))
+                && crate::blend::blend_path(tree, id).is_some() =>
+        {
+            let own = union_children(tree, id, *attrs, rings);
+            let along = crate::blend::blend_path(tree, id)
+                .map_or(Rect::EMPTY, |p| bounds_of(tree, p, *attrs, rings));
+            let reach = crate::live::parts(tree, id).map_or(0.0, |p| {
+                tree.children(p.source)
+                    .map(|c| match tree.bounds(c).get() {
+                        Some(b) => b,
+                        None => bounds_of(tree, c, *attrs, rings),
+                    })
+                    .filter(|b| !b.is_empty())
+                    .map(|b| b.width().to_f64().hypot(b.height().to_f64()) / 2.0)
+                    .fold(0.0, f64::max)
+            });
+            if along.is_empty() {
+                own
+            } else {
+                own.union(along.inflated(xarast_geom::Mp::from_f64_round(reach.ceil())))
+            }
+        }
         // An outer bevel's faces lie outside its source, as far as its
         // width reaches. An outer contour's rings are where they are when
         // the caller can regenerate them (`compute_bounds_in`); else as far
