@@ -1060,10 +1060,28 @@ ends are the objects either side of its group.
 - Pinned by `tests/svg_read.rs::a_blend_bakes_its_steps_between_…` and the
   corpus round trip: 59/59 normal form and byte-identical with the 480
   blends.
+- **Along a path (XARA-T-0335).** The path is the controller's own
+  `<path>` child, written where it stands (before the live source:
+  beneath; after it: over) with its attributes, and read back as the
+  controller's child: no `xarast:path` reference or `<defs>` (the
+  original draws the path, so it is ordinary visible artwork). Each
+  `<xarast:blender>` adds `xarast:path-span="s e"` (when set),
+  `xarast:path-angles="a b"` (when not both 0) and
+  `xarast:path-reversed="true"`, shortest exact spellings; malformed
+  pairs are dropped. Pinned by
+  `tests/svg_read.rs::a_blend_along_a_path_keeps_its_path_and_reads_back_exactly`
+  (both positions; normal form, the regenerated steps and the byte fixed
+  point). Text in an end is baked from its outlines when the placer
+  makes them (`Emitter::blend_steps` → `blend::generate_full`).
 - Not done: the §4.6 Case C rule (a baked subtree over 256 KiB replaced by
   a raster in `resources/baked/`): `xarast-format` has no rasteriser; it
-  would need an application-provided one, like the thumbnail. The corpus'
-  largest blend is 35 steps.
+  would need an application-provided one, like the thumbnail. Re-checked
+  for XARA-T-0335 and left: the thumbnail is a finished PNG the app hands
+  in (`OpenOptions::thumbnail`), but Case C needs a callback that renders
+  **one generated node's steps** over its own region, which the walker
+  cannot do without a scene cut to that node; the steps group is not
+  base-authoritative, so the raster would only serve SVG viewers. The
+  corpus' largest blend is 35 steps.
 
 ## The default fill rule became even-odd (XARA-T-0331, 2026-10-15)
 

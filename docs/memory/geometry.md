@@ -717,9 +717,15 @@ Decisions:
   end point of its end, in order, with the area within a split's
   rounding (perimeter × ½ mp); curves within 0.1 %; one-to-one exact; the
   stepper complete and monotone; hostile `i32` input never panics.
-- **Not done:** F6 (arc-length distribution along a path, tangential
-  rotation; nothing in the corpus); the phase plan's "VM comparison over
-  12 pairs" of the matching rule.
+- **`PathRun`** (F6, XARA-T-0335): a path measured once by arc length
+  (each non-degenerate segment's kurbo length to `LENGTH_ACCURACY`, 1 mp,
+  subpaths one after another); `at(d)` clamps `d` to `0..=length` (NaN is
+  0), binary-searches the segment and inverts its arc length, and gives
+  the direction of travel there in radians (a cubic with no derivative at
+  `t` uses its chord). `None` for a path with no length. What a blend
+  along a path places its steps with (`xarast-doc` `blend::on_path`).
+- **Not done:** the phase plan's "VM comparison over 12 pairs" of the
+  matching rule (needs the original running).
 
 ### Moulds: `geom::mould` (XARA-T-0334, 2026-10-16)
 

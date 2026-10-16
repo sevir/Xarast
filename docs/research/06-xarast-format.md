@@ -1710,7 +1710,15 @@ the original's blender record) and, for an explicit correspondence, an
 original stores no explicit correspondence: one-to-one only pairs segments of
 subpaths with equal counts, so a `.xar` import never writes a map. The Case C
 rasterisation is not applied yet (the writer has no rasteriser); steps are always
-baked as paths.
+baked as paths. Along a path (XARA-T-0335) the path is **not** an `xarast:path`
+reference into `<defs>`: it is the controller's own visible `<path>` child, before
+the live source (drawn beneath the objects) or after it (over them), as the
+original draws its blend path; each `<xarast:blender>` carries
+`xarast:path-span="s e"` (the stretch of the path, proportions of its length),
+`xarast:path-angles="a b"` (degrees each end stands turned) and
+`xarast:path-reversed="true"`; the blend's `xarast:tangential` turns the steps
+with the path. `xarast:rotate-along-path`, `xarast:start-angle` and
+`xarast:end-angle` above are not written.
 
 #### 6.8.5 Moulds (`TAG_MOULD_ENVELOPE` 107, `TAG_MOULD_PERSPECTIVE` 108, `TAG_MOULD_GROUP` 109, `TAG_MOULD_PATH` 110, `TAG_MOULD_BOUNDS` 4012)
 

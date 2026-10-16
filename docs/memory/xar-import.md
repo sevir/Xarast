@@ -940,10 +940,29 @@ yet). Watch4 has one blender with no 4073.
   the same `BlendParams` (`blenders[k]` = pair `k`). Negative zeros in
   profiles become zero (a reload spells them `0`). `BlendDegraded`: 0 a
   blender without two objects, 1 a stray blender, 2 a colour type outside
-  0..=3 (faded, plus `UnknownEnumValue`), 3 along a path (the path is
-  dropped, drawn straight), 4 object indices that disagree with the
+  0..=3 (faded, plus `UnknownEnumValue`), 3 along a path Xarast cannot
+  follow (since XARA-T-0335: a second path, a path index above 0, or a
+  blender on a curve with no path; drawn along the first path or
+  straight), 4 object indices that disagree with the
   neighbours (the neighbours win), 5 more than 999 steps (kept, 999
   drawn). None fires on the corpus.
+- **Along a path (XARA-T-0335).** `TAG_BLEND_PATH` (4061, an absolute
+  path) is the original's `NodeBlendPath`, a child of the blend first or
+  last (`NodeBlend::BlendAlongThisPath`, `Kernel/nodeblnd.cpp:2116-2140`),
+  written with `TAG_NODEBLENDPATH_FILLED` (4074, `INT32` = the path's
+  `IsFilled`) right after it (`Kernel/ndbldpth.cpp:837-866`); its
+  attribute records follow the last of the two. It maps to a `Path`
+  node under the controller where it stood (before the source, or after
+  it), `filled` from 4074, `stroked`, with the attributes of either
+  record. `TAG_BLENDER_CURVEPROP` (4060, two `double`s, children of the
+  blender) → `BlenderParams::path_span`, clamped to `0..=1` and ordered as
+  the original's setters do (`Kernel/nodebldr.cpp:7509-7534`; written
+  only for a blender on a curve, `:7265-7275`);
+  `TAG_BLENDER_CURVEANGLES` (4062, two `double`s, written when either is
+  non-zero, `:7277-7283`) → `path_angles`, modulo 360 as the setters;
+  4073's bit 0 → `path_reversed` (the original's `ReverseEnds` swaps the
+  blender's start and end nodes, `:3679-3692`). Pinned by
+  `import::tests::a_blend_along_a_path_keeps_its_path_and_where_each_pair_runs`.
 - Snapshots: skipped records BLUECAR 6 → 2, Watch4 775 → 513 (its moulds
   remain), scope3 295 → 21, ProbeX16 1 411 → 259, WATCH2 246 → 2. Fuzz
   seed `blend`.

@@ -567,6 +567,49 @@ New in Phase 2:
     when either end is; `reverse` draws the steps from the end. The
     controller's bounds need nothing: a straight blend's steps lie in its
     ends' union.
+    **Follow-ups (XARA-T-0335):**
+    - *Ends blend what they draw* (`contour::drawn_inks`, decision 54):
+      nested rings, nested blends' steps (and their objects, in paint
+      order), moulds' copies, text laid out by the caller's outliner
+      (`blend::generate_full`; the walker passes its fonts when the
+      blend holds a story, and then never culls it and reports its
+      steps' ink, as for a contour of text). A nested blend inside an end
+      is regenerated with the same outliner. `generate`/`generate_with`
+      draw no text. A preview that moves a whole end moves what its
+      nested objects draw too.
+    - *Mixed fills* (`contour::blend_fill`, blends only): the start's
+      kind (a flat start takes the end's), end colours in order (start ↔
+      start, end ↔ end else the other's start, the rest ↔ theirs else
+      the other's last), control points by role (start, end, end2;
+      perspective corners and a fourth axis only within a family),
+      points the other lacks moved by the ends' box-centre shift × the
+      ratio, ramps of different stop counts over the union of their
+      positions, a fill profile blended when either has one. Equal
+      families with equal stop counts keep `blend_paint`. **Contours keep
+      their rule** (start kept) — the original's contour blends attribute
+      maps with the same `Blend` calls, so a contour follow-up could
+      adopt it, with its goldens.
+    - *Step distance*: `step_distance` > 0 draws `floor(length /
+      distance)` steps, length = Σ over pairs of the ends' box-centre
+      distance, or the path's whole length per pair along a path (the
+      original's `GetBlendDistance(TRUE)`); 0 or `None` → `steps`.
+    - *Along a path (F6)*: the blend's **path is a `Path` child of the
+      controller** outside the source (`blend::blend_path`: the first
+      one), before the source (drawn beneath) or after it (over), with
+      its own attributes, drawn as any path. Per pair
+      (`BlenderParams`): `path_span` (proportions, `None` = 0..1),
+      `path_angles` (degrees each end stands turned), `path_reversed`.
+      Each end is blended turned back by its angle about its box centre;
+      step at object ratio `t` → its blended box centre (lerp of the
+      ends' centres) goes to the point at `len × (s + (e − s) × t')`
+      (`t' = 1 − t` when reversed), turned by the path's direction there
+      when `tangential`; fills move with it. Bounds: the controller adds
+      the path's box grown by the largest half diagonal of the source's
+      children (a superset that needs no regeneration).
+      **Not built**: the tool's "blend along path"/detach (the original
+      also moves the ends onto the path's ends, `NodeBlend::
+      TransformBlendEndObjects`), more than one path per blend, the
+      profile's direction on a reversed pair.
 52. **A mould's cage is a parameter; its copy is generated, never
     stored** (XARA-T-0334, phase 13 G1/G5–G8). `MouldParams` is an enum:
     `Envelope { shape: [Point; 12] }`, `Envelope2x2 { shape: [Point; 24] }`,
@@ -619,10 +662,10 @@ New in Phase 2:
     outer kind sees what is nested in it:
     | Outer | Reads its source as | Facts |
     |---|---|---|
-    | shadow | the rendered alpha of everything drawn (nested effects included) | `render.md`, "Shadows from rendered alpha" |
+    | shadow | the rendered alpha of everything drawn (nested effects and a blend's steps included; `live_nesting.rs::a_shadow_on_a_blend_casts_its_steps`, XARA-T-0335) | `render.md`, "Shadows from rendered alpha" |
     | feather, bevel | an outline silhouette (`render.md`, "Nested effects in a silhouette pass") | `Kernel/nodecntr.cpp:1184-1231` |
     | contour | what it draws (`contour::drawn_inks`, XARA-T-0332): ink nodes, a **mould anywhere below as its moulded copy**, a nested contour's **rings** (under a negative rule, an inset path without its source), a nested blend's **steps**, text as its glyph outlines (the caller's outliner) | a mould's path conversion passes back its moulder's paths, `Kernel/nodemold.cpp:997-1015`; a contour's or blend's passes back what it draws, `Kernel/ncntrcnt.cpp:520-600` |
-    | blend | each end through `contour::inks`: ink nodes and moulds as above, nested rings and steps left out; nested blends blend their own ends | as above; `Kernel/nodeblnd.cpp:502-620` |
+    | blend | each end as a contour reads it (`contour::drawn_inks`, XARA-T-0335): ink nodes, moulds' copies, nested rings and steps, text's outlines | `BlendRef::Initialise` converts an end with `BECOMEA_PASSBACK` (`Kernel/nodebldr.cpp:4111-4135`); a blend passes back each child in order (`Kernel/nodeblnd.cpp:672-690`), a blender its steps (`Kernel/nodebldr.cpp:2795-2815`) |
     | mould | outlines of everything (rings, steps, inner moulds moulded where they stand); a **shadow** inside is left out, a **bevel** is its flat unlit band (outer: beneath, inner: over its objects, in its own colour else its first object's fill), a **feather** on an object or group *inside the source* stays on each path from it | `CopyChildrenAsShapes` = `BECOMEA_PASSBACK` (`Kernel/noderend.cpp:4465-4490`); `NodeShadow::DoBecomeA` passes nothing back (`Kernel/nodeshad.cpp:1058-1248`); `NodeBevel` passes its ink path filled, line colour none (`Kernel/nodebev.cpp:2499-2528`); `AttrFeather` is never factored out (`Kernel/fthrattr.cpp:1772-1779`) |
     A feather on the mould controller or above it feathers the mould as
     one unit (the walker's `own_feather`), never each shape again
