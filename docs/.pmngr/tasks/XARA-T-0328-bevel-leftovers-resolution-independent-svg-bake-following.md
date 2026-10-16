@@ -2,13 +2,14 @@
 id: XARA-T-0328
 type: task
 title: "Bevel leftovers: resolution-independent SVG bake following joins and inner paint; inner-band concave corners and transparency copy"
-status: backlog
+status: in_progress
 priority: low
 parent: XARA-US-0069
 author: mcp
 labels: [phase-13, live-effects, render, export]
 created: 2026-10-15T17:09:40Z
-updated: 2026-10-15T17:09:40Z
+updated: 2026-10-16T01:19:57Z
+started: 2026-10-16T01:19:57Z
 ---
 
 ## Description

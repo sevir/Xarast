@@ -2,13 +2,14 @@
 id: XARA-T-0344
 type: task
 title: "Proptest failure again: hit.rs stroke_matches_the_renderers_outline under a scaling matrix (second seed)"
-status: in_progress
+status: done
 priority: medium
 author: mcp
 labels: [geometry, bug]
 created: 2026-10-16T00:33:01Z
-updated: 2026-10-16T00:33:01Z
+updated: 2026-10-16T01:19:57Z
 started: 2026-10-16T00:33:01Z
+closed: 2026-10-16T01:19:57Z
 ---
 
 ## Description
