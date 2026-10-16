@@ -2,13 +2,14 @@
 id: XARA-T-0212
 type: task
 title: App wiring — EditCommand variants for the phase-8 fill and palette commands
-status: in_progress
+status: done
 parent: XARA-US-0038
 author: mcp
 labels: [phase-8, app, tools]
 created: 2026-09-23T19:53:36Z
-updated: 2026-10-16T06:21:59Z
+updated: 2026-10-16T06:42:43Z
 started: 2026-10-16T06:21:59Z
+closed: 2026-10-16T06:42:43Z
 ---
 
 ## Description
