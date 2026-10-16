@@ -1871,6 +1871,43 @@ impl<'d, 'b> Emitter<'d, 'b> {
         }
     }
 
+    /// Whether a live controller's source is made of horizontal and
+    /// vertical segments only (rectangles, and paths whose segments are
+    /// all such lines), the shapes on which a filter's square or diamond
+    /// grows corners exactly as a join cuts them (`effect::grow_by_join`).
+    /// Text, curves, ellipses and anything else are not.
+    fn source_is_rectilinear(&self, n: NodeId) -> bool {
+        let tree = &self.doc.tree;
+        let Some(parts) = xarast_doc::live::parts(tree, n) else {
+            return false;
+        };
+        let lines = |p: &Path| {
+            p.segments().all(|s| match s {
+                xarast_geom::Segment::Line { p0, p1 } => p0.x == p1.x || p0.y == p1.y,
+                xarast_geom::Segment::Cubic { .. } => false,
+            })
+        };
+        let mut any = false;
+        for c in tree.preorder(parts.source) {
+            let ok = match tree.kind(c) {
+                Some(NodeKind::Path(p)) => lines(&p.data),
+                Some(NodeKind::QuickShape(q)) => q.path.as_deref().is_some_and(lines),
+                Some(NodeKind::Shape(s)) => {
+                    s.shape == ShapeKind::Rect
+                        && ((s.major.dy.raw() == 0 && s.minor.dx.raw() == 0)
+                            || (s.major.dx.raw() == 0 && s.minor.dy.raw() == 0))
+                }
+                Some(NodeKind::Bitmap(_) | NodeKind::TextStory(_)) => false,
+                _ => continue,
+            };
+            if !ok {
+                return false;
+            }
+            any = true;
+        }
+        any
+    }
+
     fn live(&mut self, n: NodeId, l: &LiveNode) {
         self.stats.live += 1;
         let kind = live_name(&l.kind);
@@ -2287,6 +2324,18 @@ impl<'d, 'b> Emitter<'d, 'b> {
             0
         };
         let region = self.effect_region(n, Mp::new(i32::try_from(reach).unwrap_or(i32::MAX)));
+        // An inner band's flat paint (the renderer's `paint_inner`), else
+        // the object's own colours are lit.
+        let inner = (!bv.outer)
+            .then(|| bv.flat_paint(&self.doc.tree, n, &self.doc.defaults))
+            .flatten();
+        let (hex, opacity) = match &inner {
+            Some(c) => {
+                let rgba = c.resolve(&self.doc.resources.colours).to_rgba8();
+                (self.shadow_colour(c).0, f64::from(rgba.a) / 255.0)
+            }
+            None => (hex, opacity),
+        };
         let spec = effect::Bevel {
             indent: f64::from(bv.indent.raw()) / 1000.0,
             outer: bv.outer,
@@ -2295,6 +2344,9 @@ impl<'d, 'b> Emitter<'d, 'b> {
             contrast: f64::from(bv.contrast),
             colour: &hex,
             opacity,
+            join: self.join_at(n),
+            rectilinear: self.source_is_rectilinear(n),
+            inner_paint: inner.is_some(),
         };
         let id = effect::bevel(&spec, region).finish(&mut self.defs);
         el.a("filter", format!("url(#{id})"));

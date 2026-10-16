@@ -17,6 +17,7 @@
 use super::defs::Defs;
 use super::num::{f64s, mp};
 use super::xml::attr;
+use xarast_geom::Join;
 
 /// Where a filter draws, in the user space of the element it is set on.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -456,6 +457,82 @@ fn light_tables(tilt: f64, contrast: f64, reach: f64) -> (String, String) {
     (dark.join(" "), light.join(" "))
 }
 
+/// Appends primitives that dilate `SourceAlpha` by the union of the
+/// rectangles `rects` (half-sides), leaving the result in the alpha channel
+/// under the name `g`: [`morph_disc`]'s scheme (`feBlend lighten` over the
+/// alpha moved into the colour channels) for any set of rectangles.
+fn grow_by_rects(s: &mut String, rects: &[Radius]) {
+    s.push_str("<feColorMatrix");
+    attr(s, "in", "SourceAlpha");
+    attr(s, "type", "matrix");
+    attr(s, "values", "0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 0 1");
+    attr(s, "result", "a");
+    s.push_str("/>");
+    for (i, r) in rects.iter().enumerate() {
+        s.push_str("<feMorphology");
+        attr(s, "in", "a");
+        attr(s, "operator", "dilate");
+        attr(s, "radius", &format!("{} {}", f64s(r.x, 4), f64s(r.y, 4)));
+        attr(s, "result", &format!("e{i}"));
+        s.push_str("/>");
+    }
+    let mut acc = "e0".to_owned();
+    for i in 1..rects.len() {
+        s.push_str("<feBlend");
+        attr(s, "in", &format!("e{i}"));
+        attr(s, "in2", &acc);
+        attr(s, "mode", "lighten");
+        attr(s, "result", &format!("u{i}"));
+        s.push_str("/>");
+        acc = format!("u{i}");
+    }
+    s.push_str("<feColorMatrix");
+    attr(s, "in", &acc);
+    attr(s, "type", "matrix");
+    attr(s, "values", "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0");
+    attr(s, "result", "g");
+    s.push_str("/>");
+}
+
+/// How many rectangles stand in for a bevelled join's chamfer.
+const CHAMFER_STEPS: usize = 12;
+
+/// An outer bevel's silhouette grown by its indent, shaped by the join the
+/// renderer cuts the band's corners with, as `g`.
+///
+/// A filter has one structuring element for the whole silhouette, so a
+/// corner can only follow its join where the element's shape matches the
+/// edges' directions: for a **rectilinear** source (every segment
+/// horizontal or vertical, what a frame is) a square is a mitre exactly,
+/// and the union of rectangles under the diamond `|x| + |y| ≤ indent` is a
+/// bevelled join exactly (its edges grow by the indent, its corners are
+/// cut). For anything else the element is a disc, whatever the join (a
+/// square would grow a diagonal edge by √2 indents): corners round.
+fn grow_by_join(s: &mut String, b: &Bevel<'_>) {
+    let r = b.indent;
+    match (b.join, b.rectilinear) {
+        (Join::Mitre, true) => grow_by_rects(s, &[Radius { x: r, y: r }]),
+        (Join::Bevel, true) => {
+            let rects: Vec<Radius> = (0..CHAMFER_STEPS)
+                .map(|i| {
+                    // From a tall thin rectangle to a short wide one, the
+                    // thin side never zero (that disables the primitive).
+                    let t = (i as f64 + 0.5) / CHAMFER_STEPS as f64;
+                    Radius {
+                        x: r * t.max(0.02),
+                        y: r * (1.0 - t).max(0.02),
+                    }
+                })
+                .collect();
+            grow_by_rects(s, &rects);
+        }
+        _ => {
+            morph_disc(s, Radius { x: r, y: r }, "SourceAlpha", true);
+            s.push_str("<feOffset dx=\"0\" dy=\"0\" result=\"g\"/>");
+        }
+    }
+}
+
 /// A bevel's parameters, in the user units of the element it is set on
 /// (points).
 #[derive(Debug, Clone, Copy)]
@@ -471,10 +548,19 @@ pub(crate) struct Bevel<'a> {
     pub light_tilt: f64,
     /// `0..=1`.
     pub contrast: f64,
-    /// An outer band's `#rrggbb`.
+    /// A painted band's `#rrggbb`: an outer band's, or an inner band's
+    /// when `inner_paint`.
     pub colour: &'a str,
-    /// An outer band's opacity, `0..=1`.
+    /// The painted band's opacity, `0..=1`.
     pub opacity: f64,
+    /// The join an outer band's corners are cut with.
+    pub join: Join,
+    /// Whether the source is made of horizontal and vertical segments only
+    /// (see [`grow_by_join`]).
+    pub rectilinear: bool,
+    /// Whether an inner band is painted in `colour` rather than lighting
+    /// the object's own colours (`BevelParams::flat_paint`).
+    pub inner_paint: bool,
 }
 
 /// A bevel (`research/06 §6.8.2`; the renderer's `LayerEffect::Bevel`):
@@ -504,16 +590,7 @@ pub(crate) fn bevel(b: &Bevel<'_>, region: Region) -> FilterChain {
     let c = b.contrast.clamp(0.0, 1.0);
     let delta = DELTA * b.indent;
     let height = if b.outer {
-        morph_disc(
-            &mut s,
-            Radius {
-                x: b.indent,
-                y: b.indent,
-            },
-            "SourceAlpha",
-            true,
-        );
-        s.push_str("<feOffset dx=\"0\" dy=\"0\" result=\"g\"/>");
+        grow_by_join(&mut s, b);
         "g"
     } else {
         "SourceAlpha"
@@ -585,7 +662,7 @@ pub(crate) fn bevel(b: &Bevel<'_>, region: Region) -> FilterChain {
     s.push_str("<feComposite in=\"w\" in2=\"m\" operator=\"arithmetic\" k1=\"1\" k3=\"-1\" k4=\"1\" result=\"w\"/>");
     s.push_str("<feComposite in=\"a\" in2=\"m\" operator=\"arithmetic\" k1=\"1\" result=\"a\"/>");
     // The paint, opaque so that the products leave alpha to the cut below.
-    if b.outer {
+    if b.outer || b.inner_paint {
         s.push_str("<feFlood");
         attr(&mut s, "flood-color", b.colour);
         s.push_str(" result=\"c\"/>");
@@ -607,6 +684,24 @@ pub(crate) fn bevel(b: &Bevel<'_>, region: Region) -> FilterChain {
             );
         }
         s.push_str("<feMerge><feMergeNode in=\"s\"/><feMergeNode in=\"SourceGraphic\"/></feMerge>");
+    } else if b.inner_paint {
+        // The band over the content: the lit paint where the band mask is
+        // set (times the paint's opacity), cut to the object.
+        s.push_str("<feColorMatrix in=\"m\" type=\"matrix\"");
+        attr(
+            &mut s,
+            "values",
+            &format!(
+                "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 {} 0 0 0 0",
+                f64s(b.opacity.clamp(0.0, 1.0), 4)
+            ),
+        );
+        s.push_str(" result=\"k\"/>");
+        s.push_str("<feComposite in=\"p\" in2=\"k\" operator=\"in\" result=\"s\"/>");
+        s.push_str("<feComposite in=\"s\" in2=\"SourceAlpha\" operator=\"in\" result=\"s\"/>");
+        s.push_str(
+            "<feMerge><feMergeNode in=\"SourceGraphic\"/><feMergeNode in=\"s\"/></feMerge>",
+        );
     } else {
         s.push_str("<feComposite in=\"p\" in2=\"SourceAlpha\" operator=\"in\"/>");
     }
@@ -793,6 +888,9 @@ mod tests {
             contrast: 0.5,
             colour: "#000000",
             opacity: 0.0,
+            join: Join::Round,
+            rectilinear: false,
+            inner_paint: false,
         };
         let s = written(bevel(&b, Region::Object { margin: 0.5 }));
         assert!(s.contains("xarast:filter=\"bevel\""));
@@ -858,10 +956,79 @@ mod tests {
             contrast: 1.0,
             colour: "#00ffff",
             opacity: 1.0,
+            join: Join::Round,
+            rectilinear: false,
+            inner_paint: false,
         };
         let s = written(bevel(&b, Region::Object { margin: 0.5 }));
         assert_eq!(s.matches("operator=\"dilate\"").count(), 4, "{s}");
         assert!(s.contains("flood-color=\"#00ffff\""));
         assert!(s.contains("<feMergeNode in=\"s\"/><feMergeNode in=\"SourceGraphic\"/>"));
+    }
+
+    fn outer(join: Join, rectilinear: bool) -> String {
+        let b = Bevel {
+            indent: 4.0,
+            outer: true,
+            light_angle: 300.0,
+            light_tilt: 32.0,
+            contrast: 1.0,
+            colour: "#00ffff",
+            opacity: 0.5,
+            join,
+            rectilinear,
+            inner_paint: false,
+        };
+        written(bevel(&b, Region::Object { margin: 0.5 }))
+    }
+
+    #[test]
+    fn a_rectilinear_source_is_grown_by_a_square_for_a_mitre_and_a_diamond_for_a_bevel() {
+        // A square grows an edge by the indent and fills a corner.
+        let s = outer(Join::Mitre, true);
+        assert_eq!(s.matches("operator=\"dilate\"").count(), 1, "{s}");
+        assert!(s.contains("radius=\"4 4\""), "{s}");
+        // The union of rectangles under |x| + |y| = indent, none with a
+        // zero side.
+        let s = outer(Join::Bevel, true);
+        assert_eq!(s.matches("operator=\"dilate\"").count(), CHAMFER_STEPS, "{s}");
+        assert!(s.contains("radius=\".1667 3.8333\""), "{s}");
+        assert!(!s.contains("radius=\"0 "), "{s}");
+        // Everything else, and a round join, is a disc: a square would
+        // grow a diagonal edge by √2.
+        for (join, rectilinear) in [
+            (Join::Mitre, false),
+            (Join::Bevel, false),
+            (Join::Round, true),
+        ] {
+            let s = outer(join, rectilinear);
+            assert_eq!(s.matches("operator=\"dilate\"").count(), 4, "{join:?}");
+        }
+        // The band's opacity is applied once, to the lit band.
+        assert!(s.contains("flood-opacity=\".5\""), "{s}");
+    }
+
+    #[test]
+    fn a_painted_inner_band_is_the_lit_paint_over_the_object() {
+        let b = Bevel {
+            indent: 4.0,
+            outer: false,
+            light_angle: 300.0,
+            light_tilt: 32.0,
+            contrast: 0.5,
+            colour: "#2850dc",
+            opacity: 0.5,
+            join: Join::Round,
+            rectilinear: false,
+            inner_paint: true,
+        };
+        let s = written(bevel(&b, Region::Object { margin: 0.5 }));
+        assert!(s.contains("<feFlood flood-color=\"#2850dc\" result=\"c\"/>"), "{s}");
+        assert!(!s.contains("in=\"SourceGraphic\" type=\"matrix\""), "{s}");
+        // The band mask carries the opacity; the paint goes over the object
+        // and is cut to it.
+        assert!(s.contains("values=\"0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .5 0 0 0 0\""), "{s}");
+        assert!(s.contains("<feMerge><feMergeNode in=\"SourceGraphic\"/><feMergeNode in=\"s\"/></feMerge>"), "{s}");
+        assert!(s.contains("<feComposite in=\"s\" in2=\"SourceAlpha\" operator=\"in\" result=\"s\"/>"));
     }
 }

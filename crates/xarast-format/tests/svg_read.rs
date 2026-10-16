@@ -1939,6 +1939,102 @@ fn no_join_written_is_a_mitre_as_when_the_default_was_one() {
     }
 }
 
+/// One bevel controller over `shape`, with the join in force (None: the
+/// default) and the bevel's own colour.
+fn bake_bevel_doc(cases: &[(NodeKind, bool, Option<Join>, Option<Colour>)]) -> Document {
+    let mut b = xarast_doc::builder::skeleton(BuildLimits::default()).unwrap();
+    for (shape, outer, join, colour) in cases {
+        let kind = LiveKind::Bevel(Box::new(xarast_doc::BevelParams {
+            bevel_type: xarast_doc::BevelType::ALL[0],
+            indent: Mp::new(2_000),
+            outer: *outer,
+            light_angle: 300.0,
+            light_tilt: 45.0,
+            contrast: 0.5,
+            colour: colour.clone(),
+        }));
+        let live = |role| {
+            NodeKind::Live(Box::new(LiveNode {
+                role,
+                kind: kind.clone(),
+                regen: RegenState::Clean,
+                name: None,
+            }))
+        };
+        b.node(live(LiveRole::Controller)).unwrap();
+        b.push_scope().unwrap();
+        if let Some(j) = join {
+            b.attribute(AttrValue::JoinType(*j)).unwrap();
+        }
+        b.node(live(LiveRole::Generated)).unwrap();
+        b.node(live(LiveRole::Source)).unwrap();
+        b.push_scope().unwrap();
+        b.node(shape.clone()).unwrap();
+        b.push_scope().unwrap();
+        b.attribute(flat(rgb(0.9, 0.5, 0.1))).unwrap();
+        b.pop_scope();
+        b.pop_scope();
+        b.pop_scope();
+    }
+    b.finish().unwrap().0
+}
+
+fn rectangle(x: i32, y: i32) -> NodeKind {
+    let mut pb = Path::builder();
+    pb.move_to(Point::raw(x, y))
+        .line_to(Point::raw(x + 100_000, y))
+        .line_to(Point::raw(x + 100_000, y + 80_000))
+        .line_to(Point::raw(x, y + 80_000))
+        .close();
+    NodeKind::Path(Box::new(PathNode::new(pb.build())))
+}
+
+/// How many `feMorphology` each bevel filter of `svg` holds, in order.
+fn morphologies_per_filter(svg: &str) -> Vec<usize> {
+    svg.split("<filter ")
+        .skip(1)
+        .filter(|f| f.contains("xarast:filter=\"bevel\""))
+        .map(|f| f.split("</filter>").next().unwrap().matches("<feMorphology").count())
+        .collect()
+}
+
+#[test]
+fn a_bevel_bake_follows_the_join_on_rectilinear_sources_only() {
+    let doc = bake_bevel_doc(&[
+        (rectangle(10_000, 10_000), true, Some(Join::Mitre), None),
+        (rectangle(10_000, 110_000), true, None, None),
+        (rectangle(10_000, 210_000), true, Some(Join::Round), None),
+        (triangle(10_000, 310_000), true, Some(Join::Mitre), None),
+        (triangle(10_000, 410_000), true, None, None),
+    ]);
+    let svg = svg_of(&package(&doc, SvgOptions::default()));
+    // A square for a mitre, a staircase under a diamond for a bevel (the
+    // default); a disc (four rectangles) for a round join and for anything
+    // that is not made of horizontal and vertical lines.
+    assert_eq!(morphologies_per_filter(&svg), [1, 12, 4, 4, 4], "{svg}");
+}
+
+#[test]
+fn an_inner_bevel_with_a_flat_paint_bakes_that_paint_over_the_object() {
+    let blue = rgb(0.2, 0.3, 0.9);
+    let doc = bake_bevel_doc(&[
+        (rectangle(10_000, 10_000), false, None, Some(blue)),
+        (rectangle(10_000, 110_000), false, None, None),
+    ]);
+    let svg = svg_of(&package(&doc, SvgOptions::default()));
+    let filters: Vec<&str> = svg
+        .split("<filter ")
+        .skip(1)
+        .filter(|f| f.contains("xarast:filter=\"bevel\""))
+        .collect();
+    assert_eq!(filters.len(), 2, "{svg}");
+    // The bevel's own colour paints the band; without one the object's flat
+    // fill does (the renderer's `paint_inner`, which takes the first
+    // object's fill when it is flat).
+    assert!(filters[0].contains("<feFlood flood-color=\"#334de6\""), "{svg}");
+    assert!(filters[1].contains("<feFlood flood-color=\"#e6801a\""), "{svg}");
+}
+
 /// Contour controllers as the `.xar` importer builds them (XARA-T-0330):
 /// an outer contour beneath its object whose join comes from the
 /// attributes and whose generated node carries a palette colour, an inner
