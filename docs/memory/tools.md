@@ -1058,11 +1058,13 @@ of a shadow and a bevel made by scripted gestures). Unit tests in
     (`chosen_bevel`). `BevelParams::default()` (inner, 0.75 pt, 45°/45°)
     is left alone. Join edits the controller's own `JoinType` attribute
     (`LiveEdit::SetJoin`), which strokes its objects too.
-90. **J3**: drags already run at Draft through the scheduler (Final 120 ms
-    after input stops), but the effect pass ignores the quality: a shadow
-    or bevel preview is computed at full resolution every frame, as in the
-    original. A reduced-resolution Draft effect is a render-crate change
-    (follow-up, with XARA-T-0315).
+90. **J3**: drags run at Draft through the scheduler (Final 120 ms after
+    input stops), and since XARA-T-0315 the effect pass honours it: a
+    feather, shadow or glow wider than 8 px is computed on a reduced grid
+    at Draft (`render.md`, "Blur above the ceiling"); bevels stay at
+    device resolution. The Final after settle is byte-identical to a
+    fresh Final (`tests/effect_quality.rs`, mutation-checked). The
+    original draws shadows at full quality during drags; this is ours.
 
 91. **Shadow follow-ups (XARA-T-0339).**
     - *F5/F6 bug*: `ToolId::Fill` and `ToolId::Transparency` were missing

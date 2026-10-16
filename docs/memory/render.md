@@ -1597,8 +1597,8 @@ Phase 13's B1–B4 and the first consumer, feathering. Modules `blur.rs`,
 - **`blur.rs`.** `Kernel::Disc { radius_px }` (what we render with) and
   `Kernel::Gaussian { sigma_px }` (SVG's), `sigma_for_disc_radius` = r/2
   (`research/06 §6.8.1`), `MAX_RADIUS_PX` = 100 (the original's
-  ceiling; clamped, the reduced-resolution render above it is
-  XARA-T-0315). The disc is `dx² + dy² ≤ r²` **centred on a pixel**: no
+  ceiling; a kernel clamps, and above it the effect computes its mask
+  on a reduced grid, see "Blur above the ceiling", XARA-T-0315). The disc is `dx² + dy² ≤ r²` **centred on a pixel**: no
   half-pixel shift for any radius (the original uses an integer
   diameter and compensates an even one elsewhere). Disc sums use per-row
   prefix sums and a rounded mean (the original truncates through a
@@ -1632,8 +1632,8 @@ Phase 13's B1–B4 and the first consumer, feathering. Modules `blur.rs`,
   × mask, with `r = size·scale/2` capped at 100 px; `reach` = 2·⌊r⌋ + 1,
   `growth` 0. Not reproduced: the 0.75 px gap-closing outer contour
   (`DEFAULT_GAP_TOLERANCE_MP`) and the grey outline ramp the original
-  uses below two pixels; above the 200 px diameter the original renders
-  the silhouette at a lower resolution and scales it, we clamp.
+  uses below two pixels. Above the 200 px diameter the mask is computed
+  on a reduced grid, as the original does (XARA-T-0315).
 - **Against the embedded previews** (T-0248 method: 60 dpi page render,
   registered crop, mean |Δ|; `feathers.xar` is the feather sampler):
   | File | Before | After |
@@ -1799,7 +1799,8 @@ penumbra** → profile → colour × opacity → content over it.
 - **Not reproduced**: CDraw's floor bitmap (a progressive blur or
   perspective, if it has one, is unknowable here; ours is the affine map
   plus a uniform blur); the original's half-pixel offset for even
-  diameters; radii above 100 px are clamped (XARA-T-0315). (A feather
+  diameters. (Radii above 100 px run on a reduced grid since
+  XARA-T-0315.) (A feather
   around a shadow used to see the shadow's half-transparent result in its
   silhouette and erode it away; fixed by XARA-T-0321, see "Nested effects
   in a silhouette pass".)
@@ -2290,6 +2291,75 @@ keyboard tests, 2 round-trip tests, 6 new perf gates.
   a parameter to a tool's infobar fails `keyboard_only_effects.rs` until
   the field is listed, which is the point.
 
+### Blur above the ceiling and Draft effects on a reduced grid (XARA-T-0315, phase 13 B7 + J3, 2026-10-16)
+
+TODO 26 closed, and J3's effect half. One mechanism serves both: an
+effect whose blur, erosion or glow radius exceeds the quality's cap
+computes its mask on a grid of `k`-pixel cells and resamples it.
+
+- **Facts from the original** (facts only): a feather's silhouette is
+  rendered at a reduced resolution above a 200 px diameter and the mask
+  scaled back up, so a large feather keeps its width at any zoom
+  (`Kernel/fthrattr.cpp`, `CreateSilhouetteBitmap`, "FeatherScaleFactor").
+  Shadows share `MAX_SHADOW_BLUR`; we apply the same rule to them.
+- **The cap**: `radius_cap(quality)` = `MAX_RADIUS_PX` (100) at `Final`,
+  `DRAFT_RADIUS_PX` (8) at `Draft`. `LayerEffect::reduction(scale,
+  quality)` = `blur::reduction_for_radius(r, cap)` = 1 up to the cap,
+  `⌈r / cap⌉` above it (bounded by `MAX_REDUCTION` = 1024 so a cell sum
+  fits a `u32`). A feather's `r` is half its size; a shadow's the larger
+  of its blur radius and its glow; a **bevel is never reduced** (its band
+  is crisp geometry, its corner logic is in device pixels, and the
+  original has no bevel draft either).
+- **The grid is absolute.** Cell `(X, Y)` covers device pixels
+  `kX .. kX+k` × `kY .. kY+k` (`blur::ReducedPlane`). `downsample_plane`
+  / `ReducedSums` take the rounded box mean; `upsample_plane` is integer
+  bilinear between cell centres, device pixel `x` at `(2x + 1 − k) / 2k`
+  cells. Nothing depends on where the region starts, so invariant 23
+  holds unchanged; at `k = 1` both are the identity.
+- **On the grid**: feather = erode `r/k`, blur `r/k`, upsample, profile,
+  × colour. Shadow = dilate glow`/k`, warp through `S(k)·back·S(1/k)`
+  (the device move expressed in cells; `warp` samples absolute cell
+  positions), blur `r/k`, upsample, composite under. A nested glow's
+  outline (`outline_at`) dilates on the grid and warps at device
+  resolution.
+- **Reach at `k > 1`** (it must cover the partial edge cells and the
+  upsample's neighbour): feather `k·(2⌊r/k⌋ + 3)`, shadow
+  `k·(⌈d/k⌉ + ⌊blur/k⌋ + ⌊glow/k⌋ + 4)`; at `k = 1` the old formulas,
+  byte for byte. `reach_px`, `growth_px`, `apply_at` and `outline_at`
+  take the quality (the display list and the CPU pass pass
+  `view.quality`, PDF its list's). `scene_damage`'s pad is the larger of
+  both qualities' reach, so a repaint is right whatever quality draws it.
+- **Memory bound**: a reduced region bigger than
+  `CpuConfig::effect_region_px` (default 16 Mi px) renders its colour
+  only over `keep` and its silhouette in strips of whole bands, each
+  summed into `ReducedSums` and dropped (`render_reduced_in_strips`).
+  Exact by invariant 23; not in the effect cache key (memory, not
+  pixels). Without it a 1 000 px feather at high zoom would allocate a
+  full-resolution region of ~(view + 4r)².
+- **Final is unchanged below the ceiling**: every golden but one, the
+  69 effect sweep goldens, the 30 nesting goldens and Groucho2's PNG at
+  100 % and 400 % are byte-identical. **`effect_feather_ceiling`
+  re-blessed**: its 240 pt feather at 1 px/pt (r = 120 px, k = 2) was
+  clamped to 100 px; the new pixels match an exact disc-coverage
+  computation of a 120 px feather (green band: 20 at the edge, 19 in the
+  middle, against 8 → 0 clamped).
+- **Zoom sweep** (`tests/effect_reduced.rs`, r = 40 … 400 px): a
+  feather's half-opaque depth / r is **1.000** at every radius at
+  `Final` (it was capped at 100 px), 0.91–1.00 at `Draft` (the erosion
+  moves by whole cells: within one cell, `k` px); a shadow's
+  quarter-dark distance / r is 0.402–0.409 at `Final` (exact disc value
+  0.404), 0.399–0.406 at `Draft`.
+- **Exactness tests**: the 25 effect cases at `Draft` plus a 230 pt
+  feather, a 260 pt wall shadow, a 110 pt glow and a 220 pt floor
+  shadow at both qualities: one thread, small bands, strips
+  (`effect_region_px` 1 and 3 000) and four dirty-rectangle repaints all
+  byte-identical to the frame.
+- **Dead end avoided**: rendering the silhouette itself at `1/k` would
+  need a second display list per effect (paints, clips and image
+  mappings are already in device space); rendering at device resolution
+  and box-reducing is simpler, anti-aliases better and is bounded by the
+  strip path.
+
 ## Invariants that must not be broken
 
 1. **Never put absolute millipoints into an `f32`.** A 5 m document is
@@ -2424,6 +2494,13 @@ keyboard tests, 2 round-trip tests, 6 new perf gates.
     `tests/effect_cache.rs` and the warm-cache damage property hold it.
     A new effect kind needs nothing: it is a `LayerEffect` variant inside
     the push op, compared by equality like any other parameter.
+26. **An effect's reduced grid is absolute and its reach covers it.**
+    Cells sit at multiples of `k` in device space, never at the region's
+    corner; the reach at `k > 1` includes two cells for the partial edge
+    cells and the bilinear neighbour. Anything that changes `reduction`,
+    a radius on the grid or the resample must change `reach_px` with it
+    (`tests/effect_reduced.rs` fails within a pixel otherwise). `Final`
+    at `k = 1` must stay byte-identical to the device-resolution path.
 ---
 
 ## Dead ends (do not retry)
@@ -2528,7 +2605,7 @@ keyboard tests, 2 round-trip tests, 6 new perf gates.
 | 22 | ~~The pyramid is built on the render thread on first minified frame~~. **Done 2026-09-24**: the walker's decode threads call `ImageRef::prepare`; see "Pixel memory budget" | done (XARA-T-0278) |
 | 23 | ~~Re-materialisation of an evicted base is synchronous on the render thread~~. **Done 2026-09-24** (XARA-T-0281), and since XARA-T-0304 the helper no longer holds the image's lock while it decodes | done |
 | 25 | ~~Offscreen effect cache (B9)~~. **Done 2026-09-24**: keyed by op equality + resources + exact view, not a content hash or a quantised scale, with its own 128 MiB ceiling rather than the Phase 4 budget; see "The effect layer cache" | done (XARA-T-0314) |
-| 26 | Blur radius above the 100 px ceiling: render the silhouette at a reduced resolution and scale up, as the original does for feathers (B7) | XARA-T-0315 |
+| 26 | ~~Blur radius above the 100 px ceiling~~. **Done 2026-10-16**: masks above the quality's cap run on an absolute grid of `⌈r / cap⌉`-px cells and are resampled; Draft uses an 8 px cap (J3); see "Blur above the ceiling" | done (XARA-T-0315) |
 | 27 | GPU blur (B6): not needed while the GPU only composites CPU tiles; lands with the WGSL pass | XARA-T-0051 |
 | 28 | ~~Inner shadows (C5)~~. **Decided 2026-10-15: nothing now**: no `.xar` shadow type is inner, the model has no `Inner` kind and no tool makes one; the rules it will follow are fixed under "Nested effects in a silhouette pass" | deferred to C7 / the native format (XARA-US-0069) |
 | 29 | ~~A nested effect in a silhouette pass composites with its alpha~~. **Done 2026-10-15**: feathers and bevels see nested effects as outlines, a shadow as rendered; see "Nested effects in a silhouette pass" | done (XARA-T-0321) |

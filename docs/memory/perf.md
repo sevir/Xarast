@@ -1346,6 +1346,34 @@ on the reference machine at load 3-5 (another agent building), medians of
 - **Timings were noisy** (another agent compiled throughout); the
   contour's 66 ms and the blur's 5.6 ms agreed across rounds within 2 %.
 
+### Draft effects on a reduced grid (XARA-T-0315, 2026-10-16)
+
+Design in `render.md`, "Blur above the ceiling". Groucho2 (63 feathers,
+81 shadows, 21 bevels), `xarast-cli render --zoom Z --quality Q`, a
+fresh backend per run (cold effect cache: what a drag frame that
+recomputes every effect pays), release, deterministic configuration,
+load 6–9, medians of 5, two interleaved rounds, before = f602fb2,
+after = the T-0315 tip:
+
+| Frame | Before | After |
+|---|---:|---:|
+| 100 % Draft | 143.9 / 153.6 ms | 145.3 / 143.7 ms |
+| 100 % Final | 206.5 / 203.7 ms | 205.1 / 204.5 ms |
+| 400 % Draft | 568.6 / 568.6 ms | **460.1 / 456.3 ms** |
+| 400 % Final | 995.9 / 1008.0 ms | 1017.2 / 1005.1 ms |
+
+- **400 % Draft −20 %.** Instrumented (temporary timers in the effect
+  pass, one run): the shadows' `apply` 137 → 64 ms and the feathers'
+  76 → 38 ms; the bevels' 58–66 ms is unchanged (never reduced).
+  What is left of the effect pass (~376 ms of ~460) is the
+  offscreen colour and silhouette renders, which stay at device
+  resolution.
+- **100 % is unchanged**: Groucho2's radii there are mostly ≤ 8 px.
+- **Final is unchanged** in time and bytes (the PNGs are identical).
+- A one-cell (k px) quantisation of a Draft feather's fade is the
+  price; the 8 px cap keeps it within ~9 % at worst and the Draft
+  against Final mean |Δ| under 2/255 in the tests.
+
 ## Things that were slow, and why
 
 Worth remembering, because each was a factor of several and each has a shape
