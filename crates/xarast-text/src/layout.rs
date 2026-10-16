@@ -242,7 +242,7 @@ impl FormatState {
                 } else {
                     self.remaining
                 };
-                self.remaining = self.remaining - used;
+                self.remaining -= used;
                 self.width = add(self.width, w - used);
             }
             TabKind::Right | TabKind::Decimal
@@ -250,7 +250,7 @@ impl FormatState {
                     && (self.kind == TabKind::Right || (!self.decimal_found && !is_point)) =>
             {
                 if self.remaining >= w {
-                    self.remaining = self.remaining - w;
+                    self.remaining -= w;
                 } else {
                     self.width = add(self.width, w - self.remaining);
                     self.remaining = Mp::ZERO;
