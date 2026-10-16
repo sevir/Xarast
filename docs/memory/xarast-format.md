@@ -1487,3 +1487,22 @@ the file means", not crashes; each input is now a unit test in
 - Raw copies take the host system from the running OS (`zip` does not let
   `raw_copy_file_touch` set it): byte-identical re-saves hold per platform,
   not across Linux ↔ Windows.
+
+## ProbeX16 app save under 1 s (XARA-T-0215, 2026-10-16)
+
+Save thread, 518 k nodes, tmpfs, thumbnail on, machine at load 150-270
+(another agent building): **1.20 s before, 1.03 s after** (A/B, 9
+interleaved runs each, medians); UI thread 55 ms in both. Breakdown
+(`examples/save_probe`): restore ~120, serialise ~550 (walk 470, assemble
+30, rest 50), package ~330 (deflate ~280 of it), free ~25.
+Changes, all byte-neutral: `Document::restore_owned` (moves the nodes),
+the restored document freed after the outcome is sent, `Digest::of`
+hashing inputs of 2 MiB or more with blake3's rayon feature (same digest).
+Dead ends: the walk is flat (a stack sampler over 40 runs showed no
+frame above ~10 %, so no single hotspot; the 377 k `Attr` nodes, 87 k
+paths and 35 k quickshapes each cost ~1 us), deflate cannot be
+parallelised or pipelined with the walk without changing the bytes (one
+stream, and the header is known only after the walk), serialising straight
+from `Snapshot` would save the restore but needs a second tree API in the
+emitter. Next lever if more is needed: parallel emission per layer child
+with deterministic id/def merging.

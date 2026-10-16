@@ -57,7 +57,7 @@ pub struct SaveJob {
     /// The undo state it captures ([`xarast_doc::History::state_serial`]):
     /// the document is clean afterwards only if it is still there.
     pub serial: u64,
-    snapshot: Snapshot,
+    snapshot: Option<Snapshot>,
     source: Option<Arc<[u8]>>,
     thumbnail: bool,
     deterministic: bool,
@@ -74,7 +74,7 @@ impl std::fmt::Debug for SaveJob {
             .field("doc", &self.doc)
             .field("path", &self.path)
             .field("serial", &self.serial)
-            .field("nodes", &self.snapshot.len())
+            .field("nodes", &self.snapshot.as_ref().map(Snapshot::len))
             .field("source", &self.source.as_ref().map(|s| s.len()))
             .field("text_placer", &self.text.is_some())
             .finish_non_exhaustive()
@@ -125,7 +125,7 @@ impl SaveJob {
             doc,
             path,
             serial,
-            snapshot,
+            snapshot: Some(snapshot),
             source,
             thumbnail: kind == SaveKind::Document,
             deterministic: false,
@@ -172,21 +172,45 @@ impl SaveJob {
     /// Writes the package. Never panics on a bad document; every failure is
     /// in the outcome.
     #[must_use]
-    pub fn run(self) -> SaveOutcome {
+    pub fn run(mut self) -> SaveOutcome {
         let started = Instant::now();
-        let result = self.write(started);
+        let mut restored = Document::new_empty();
+        let snapshot = self.snapshot.take();
+        let result = self.write(started, &mut restored, snapshot);
+        let SaveJob {
+            kind,
+            doc,
+            path,
+            serial,
+            ..
+        } = self;
+        // Freeing the restored document (hundreds of thousands of nodes)
+        // is ~25 ms on ProbeX16 and nobody waits for it: the outcome goes
+        // out first.
+        let _ = std::thread::Builder::new()
+            .name("xarast-save-free".into())
+            .spawn(move || drop(restored));
         SaveOutcome {
-            kind: self.kind,
-            doc: self.doc,
-            path: self.path,
-            serial: self.serial,
+            kind,
+            doc,
+            path,
+            serial,
             result,
         }
     }
 
-    fn write(&self, started: Instant) -> Result<SaveSummary, String> {
-        let mut doc = Document::new_empty();
-        doc.restore(&self.snapshot);
+    fn write(
+        &self,
+        started: Instant,
+        doc: &mut Document,
+        snapshot: Option<Snapshot>,
+    ) -> Result<SaveSummary, String> {
+        // The job owns its snapshot, so the nodes move into the document
+        // instead of being cloned.
+        if let Some(snapshot) = snapshot {
+            doc.restore_owned(snapshot);
+        }
+        let doc = &*doc;
         let mut write = if self.deterministic {
             WriteOptions::deterministic()
         } else {
@@ -222,7 +246,6 @@ impl SaveJob {
         // The thumbnail renders while the SVG is serialised: on ProbeX16
         // (518 000 nodes) that is ~0.4 s off a ~1 s save.
         let (prepared, thumbnail) = std::thread::scope(|scope| {
-            let doc = &doc;
             let images = self.images.as_ref();
             let render = self
                 .thumbnail

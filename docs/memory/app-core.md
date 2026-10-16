@@ -578,7 +578,9 @@ serial it wrote). A recovered snapshot has `clean_serial = None`.
 **A save is a job.** `Session::save_job(kind, path)` takes a
 `Document::snapshot()` on the interface thread (ProbeX16, 518 k nodes:
 ~50 ms) and the source package bytes; `SaveJob::run` (on a `SaveWorker`
-thread) restores a document from it (~130 ms), renders `thumbnail.png`
+thread) restores a document from it (`Document::restore_owned`: the
+job is the snapshot's only owner, so the nodes *move* into the new tree,
+~60-70 ms instead of ~120 ms), renders `thumbnail.png`
 on a scoped thread while `xarast_format::prepare_save`/`prepare_resave`
 serialise the SVG, then writes atomically. The SVG is written **with the
 text placer** (`svg_text::placer()` in `SvgOptions::text`, XARA-T-0259),
@@ -591,7 +593,9 @@ packages to a direct save of the live document with the same placer,
 first save and raw-copy re-save alike (`tests/save.rs`), and to
 `xarast-cli convert --deterministic` (`xarast-cli` `tests/app_save.rs`,
 59/59; File › Save adds only `thumbnail.png`).
-The live document is never touched by a save: a failure is a status line
+The restored document is freed on a detached `xarast-save-free` thread
+after the outcome is built (~25 ms on ProbeX16 nobody waits for). The
+live document is never touched by a save: a failure is a status line
 and a problem-list entry, the document stays modified, the target file is
 untouched (`write_atomic`).
 

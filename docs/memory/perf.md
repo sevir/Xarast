@@ -146,7 +146,7 @@ the budgets file records; both tiers passed, 12/12 and 27/27):
 | `leak-first` (phase's definition) | nightly | growth % | 35 | 5 | 18.4 | 15–21 | — |
 | `probex16-open` | nightly | median ms | 1500 | 500 | 760 | 752–1031 | st |
 | `probex16-open-rss` | nightly | MiB | 640 | — | 508 | 508 | — |
-| `probex16-save` (app save job, tmpfs) | nightly | median ms | 2200 | 1000 | 1100 | 1083–1281 | st |
+| `probex16-save` (app save job, tmpfs) | nightly | median ms | 2200 | 1000 | 1050 | 1002–1150 under load 150-270 (1157–1303 before T-0215) | st |
 | `spitfire-first` (first text document) | nightly | first ms | 200 | — | 100 | 100–108 | st |
 | `render-feathers` (whole Final frames, effect cache warm; corpus) | pr | median ms | 12 | — | 3.5 | 3.3–4.0 | mt |
 | `render-groucho2` (same) | nightly | median ms | 16 | — | 6.5 | 5.8–6.7 | mt |
@@ -182,8 +182,9 @@ the budgets file records; both tiers passed, 12/12 and 27/27):
   CPU tier is ~4x over it. Re-measure on a quiet reference machine and
   tighten if the numbers drop. The effect gates also use `--whole`.
 - **Known breaches, gated on regression only:** ProbeX16 open-to-first-
-  paint 0.75 s vs 500 ms (XARA-T-0009), ProbeX16 app save 1.08–1.28 s vs
-  1 s (XARA-T-0215: the snapshot restore), the CPU tier's zoomed pan
+  paint 0.75 s vs 500 ms (XARA-T-0009), ProbeX16 app save ~1.0 s vs
+  1 s (XARA-T-0215: restore moves the nodes, the free is off-path; it
+  sits on the budget, see `xarast-format.md`), the CPU tier's zoomed pan
   (the 16 ms budget is the integrated GPU's and is met there, T-0050),
   and the leak check against the phase's own definition (below).
 - **Leak check (B5).** 200 open → walk → render → edit → undo → save →

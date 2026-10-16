@@ -11,6 +11,9 @@ use std::io::{self, Read};
 /// The manifest name of the digest algorithm.
 pub const BLAKE3_256: &str = "blake3-256";
 
+/// The input size from which [`Digest::of`] hashes in parallel.
+const PARALLEL_FROM: usize = 2 << 20;
+
 /// A BLAKE3-256 digest.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Digest(pub [u8; 32]);
@@ -18,6 +21,14 @@ pub struct Digest(pub [u8; 32]);
 impl Digest {
     /// Digests a byte slice in one call.
     pub fn of(bytes: &[u8]) -> Digest {
+        // BLAKE3 is a tree: hashing the chunks on several threads gives
+        // the same digest. Below a few MiB the fork-join costs more than
+        // it saves.
+        if bytes.len() >= PARALLEL_FROM {
+            let mut h = blake3::Hasher::new();
+            h.update_rayon(bytes);
+            return Digest(*h.finalize().as_bytes());
+        }
         Digest(*blake3::hash(bytes).as_bytes())
     }
 

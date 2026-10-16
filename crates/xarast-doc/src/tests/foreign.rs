@@ -207,6 +207,28 @@ fn a_snapshot_carries_baggage_onto_the_new_ids() {
 }
 
 #[test]
+fn an_owned_restore_builds_the_same_document_as_a_cloning_one() {
+    let f = fixture();
+    let mut doc = f.doc;
+    doc.tree.set_foreign(f.path, Some(Arc::new(baggage("s"))));
+    let digest = doc.canonical_digest();
+    let snap = doc.snapshot();
+    let mut cloned = crate::Document::new_empty();
+    cloned.restore(&snap);
+    // Shared with `snap`, so it has to clone; same result.
+    let mut shared = crate::Document::new_empty();
+    shared.restore_owned(snap.clone());
+    // Sole owner: the nodes move.
+    let mut moved = crate::Document::new_empty();
+    moved.restore_owned(snap);
+    assert_eq!(digest, moved.canonical_digest());
+    assert_eq!(digest, shared.canonical_digest());
+    assert_eq!(digest, cloned.canonical_digest());
+    assert_eq!(moved.tree.node_count(), doc.tree.node_count());
+    assert_eq!(moved.tree.foreign_len(), 1);
+}
+
+#[test]
 fn the_builder_attaches_baggage() {
     let mut b = crate::builder::skeleton(crate::BuildLimits::default()).unwrap();
     let id = b.node(NodeKind::Group(Box::default())).unwrap();

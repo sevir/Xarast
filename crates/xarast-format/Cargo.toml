@@ -24,7 +24,9 @@ xarast-color = { path = "../xarast-color" }
 xarast-image = { path = "../xarast-image" }
 zip = { workspace = true }
 quick-xml = { workspace = true }
-blake3 = { workspace = true }
+# `rayon`: `Digest::of` hashes a multi-megabyte `document.svg` on all cores
+# (same digest, ~4x faster). `MIT OR Apache-2.0` on the rayon side.
+blake3 = { workspace = true, features = ["rayon"] }
 # The escape heuristic of `research/06 §4.3` deflates a 64 KiB sample. This
 # is also the dependency that gives `zip` its DEFLATE backend (`zlib-rs`,
 # chosen once in the workspace manifest).

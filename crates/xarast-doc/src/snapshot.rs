@@ -17,7 +17,6 @@
 //! makes checkpoints incremental it will need dirty tracking in the tree
 //! first; the representation can be revisited then.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use slotmap::SecondaryMap;
@@ -105,36 +104,61 @@ impl Document {
     /// `NodeId`, are what the file formats serialise. Callers that keep a
     /// history must clear it.
     pub fn restore(&mut self, s: &Snapshot) {
-        let root_kind = s
-            .nodes
-            .get(s.root)
+        let nodes = &s.nodes;
+        self.rebuild(s, nodes.len(), |id| nodes.get(id).cloned());
+    }
+
+    /// [`Document::restore`] that consumes the snapshot. When nothing else
+    /// holds its nodes (a save job's own copy) they are *moved* into the
+    /// new tree instead of cloned: no allocation per node, and nothing
+    /// left to free afterwards. Otherwise it clones, like `restore`. The
+    /// result is the same document.
+    pub fn restore_owned(&mut self, mut s: Snapshot) {
+        let count = s.nodes.len();
+        if let Some(mut nodes) = Arc::get_mut(&mut s.nodes).map(std::mem::take) {
+            self.rebuild(&s, count, |id| nodes.remove(id));
+        } else {
+            self.restore(&s);
+        }
+    }
+
+    fn rebuild(
+        &mut self,
+        s: &Snapshot,
+        count: usize,
+        mut fetch: impl FnMut(NodeId) -> Option<NodeData>,
+    ) {
+        let root_data = fetch(s.root);
+        let root_kind = root_data
+            .as_ref()
             .map_or(NodeKind::Chapter, |d| d.kind.clone());
         let mut tree = Tree::with_root(root_kind);
         let new_root = tree.root();
-        if let Some(d) = s.nodes.get(s.root) {
+        if let Some(d) = &root_data {
             tree.set_tag(new_root, d.tag);
             if let Some(n) = tree.get_mut(new_root) {
                 n.flags = d.flags & !NodeFlags::DETACHED;
             }
         }
 
-        let mut map: HashMap<NodeId, NodeId> = HashMap::new();
+        let mut map: SecondaryMap<NodeId, NodeId> = SecondaryMap::with_capacity(count);
         map.insert(s.root, new_root);
         if let Some(b) = s.foreign.get(s.root) {
             tree.set_foreign(new_root, Some(Arc::clone(b)));
         }
         let mut stack = vec![s.root];
+        let mut first_child = SecondaryMap::new();
+        if let Some(d) = &root_data {
+            first_child.insert(s.root, d.links.first_child);
+        }
         while let Some(old) = stack.pop() {
-            let Some(parent_new) = map.get(&old).copied() else {
+            let Some(parent_new) = map.get(old).copied() else {
                 continue;
             };
-            let Some(old_data) = s.nodes.get(old) else {
-                continue;
-            };
-            let mut child = old_data.links.first_child;
+            let mut child = first_child.remove(old).flatten();
             while let Some(oc) = child {
-                let Some(cd) = s.nodes.get(oc) else { break };
-                let n = tree.create(cd.kind.clone());
+                let Some(cd) = fetch(oc) else { break };
+                let n = tree.create(cd.kind);
                 tree.set_tag(n, cd.tag);
                 let _ = tree.attach(n, parent_new, Attach::LastChild);
                 if let Some(nd) = tree.get_mut(n) {
@@ -144,6 +168,7 @@ impl Document {
                     tree.set_foreign(n, Some(Arc::clone(b)));
                 }
                 map.insert(oc, n);
+                first_child.insert(oc, cd.links.first_child);
                 stack.push(oc);
                 child = cd.links.next;
             }

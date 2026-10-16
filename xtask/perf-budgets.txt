@@ -89,7 +89,7 @@ leak-first       nightly    growth_from_first_pct 35 none 5 18.4 -- leak --nodes
 # ── The corpus, nightly.
 probex16-open     nightly   median_ms     1500 st   500  760  -- open --doc $CORPUS/testfiles/ProbeX16.xar --runs 7 # XARA-T-0009
 probex16-open-rss nightly   peak_rss_mib  640  none -    508  -- open --doc $CORPUS/testfiles/ProbeX16.xar --runs 7
-probex16-save     nightly   median_ms     2200 st   1000 1100 -- save --doc $CORPUS/testfiles/ProbeX16.xar --runs 5 # XARA-T-0215
+probex16-save     nightly   median_ms     2200 st   1000 1050 -- save --doc $CORPUS/testfiles/ProbeX16.xar --runs 5 # XARA-T-0215
 spitfire-first    nightly   first_ms      200  st   -    100  -- open --doc $CORPUS/Designs/Spitfire.xar --runs 5 # the first text document of a process waits for font enumeration (XARA-T-0288)
 
 # ── Live effects (phase 13 B9, XARA-T-0314): whole Final frames of the
