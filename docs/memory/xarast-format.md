@@ -653,6 +653,10 @@ embedding"); this crate only places them.
   and `app_save` (59/59) pass with embedding on.
 - **`meta.xml`**: `xarast:fonts="N"` in `<xarast:statistics>`, written
   only when N > 0 so documents without text keep their pinned bytes.
+- **`meta.xml` export hints** (T11.1.5, XARA-T-0350): `DocumentMeta::export_hints`
+  (an opaque JSON string; `xarast-doc` does not know the export crate) is
+  written as `<xarast:export-hints>` after `origin` and read back, only when
+  set; see `export.md` "File › Export".
 - The document keeps the files, the app decides: the writer does not
   write `DocumentResources::fonts()` itself. A re-save embeds what the
   placer reports, and the app's placer lays a document out with its

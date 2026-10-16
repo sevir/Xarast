@@ -14,7 +14,7 @@ export, with the fidelity ladder (section "PDF" below). Round 3
 mapper in its `Interchange` dialect (section "SVG" below). Round 4
 (2026-09-24, XARA-US-0060): **colour fidelity and the export regression
 harness** (section "Colour fidelity and regression" below). Batch export
-(T11.1.6), export hints in the document (T11.1.5), palette quantisation
+(T11.1.6), palette quantisation
 (T11.2.8) and AVIF (T11.2.7) are not built yet. Round 6 (2026-10-16,
 XARA-T-0192): **File › Export** — `impl ExportSource for Session` in
 `xarast-app`, exports off the interface thread with cancel, and the
@@ -365,10 +365,53 @@ partly transparent object glows weaker in SVG (no corpus glows).
   dpi: WebP stores none); PDF and SVG = background only. After the export
   the dialog shows the summary and every `ExportReport::compromises` line.
   Defaults are the CLI's (PNG, drawing, 96 dpi, transparent, `Final`).
-- Not in the dialog yet: bleed, explicit rectangles, a background colour,
-  PNG depth/colour/interlace, JPEG progressive/subsampling, PDF and SVG
-  options (all reachable from the CLI); the dialog only edits what
-  `Capabilities` describes plus quality.
+- **Every CLI option is in the dialog now (XARA-T-0350)** except
+  `--draft` and PNG `--optimise` (a build feature). Format-independent:
+  **Bleed** (`SetBleed`, never negative; the sizing fields resolve against
+  the *bled* area, as the exporters do) and the **Rectangle** area
+  (`AreaChoice::Rectangle`, `SetRectangle`, document units y up; an empty
+  one disables Export). Background gains **Colour** (`SetBackgroundColour`,
+  RGBA; offered only where `Capabilities::alpha`, so JPEG still has none).
+  Per format the view carries `png` / `jpeg` / `pdf` / `svg:
+  Option<…Options>` which is `Some` exactly for the chosen format, and the
+  op replaces the **whole** options struct (`SetPng(PngOptions)` …) after
+  sanitising (JPEG quality 1–100, PDF raster dpi within
+  `PDF_RASTERISE_DPI`, palette 1–256); an op for another format is
+  ignored. Options are kept per format while the dialog is open.
+- **Byte identity grew**: `xarast-cli/tests/file_export.rs` has 11 cases
+  (the 7 above + PNG with bleed, colour background, 16-bit grey,
+  interlace, no dpi; PNG with an explicit rectangle and a translucent
+  colour; JPEG progressive 4:4:4 with bleed; PDF with raster dpi, native
+  blends, no compression, outlines and bleed; SVG minified, outlines, page)
+  × 5 files = **55 comparisons, all identical**.
+- **Export hints (T11.1.5).** After a *successful* export the app stores
+  `ExportDialog::hints()` in `Document::meta.export_hints` (a JSON string:
+  version, format, area, rectangle, bleed, dpi, lock_aspect, background,
+  colour and the options of every format; keys sorted, so deterministic).
+  `ExportDialog::open` restores it leniently (`restore`: anything missing,
+  unreadable or invalid keeps its default; a selection area is not
+  restored). Storing is **not an edit**: no undo step and the document does
+  not become modified; the hints reach disk at the next save. `meta.xml`
+  gets `<xarast:export-hints>JSON</xarast:export-hints>` **only when set**,
+  so documents without it keep their bytes (`xarast-format/tests/
+  export_hints.rs`: no element without hints, round trip, fixed point
+  through `save_opened_to`). `xarast-doc` cannot name the export crate's
+  types, hence the opaque string. A reader that does not know the element
+  ignores it (the element is `xarast:`-namespaced, `meta.xml` is rewritten
+  from the model on every save).
+- **Proxy level by output dpi: not a bug.** The note that a 300 dpi export
+  of a photo-adjusted bitmap might use a reduced proxy was checked against
+  `walker.rs`: `proxy_level_of` is reached only from `proxy_image` (a
+  slider drag's preview chain) and `standin` (the stand-in of a *deferred*
+  derived image, `with_deferred_derived`, which only the session's
+  interactive walker enables). The export walker has no preview and no
+  deferral, so `derived_image` evaluates the chain at full resolution, and
+  a deferred image found in the shared cache is made in place under
+  `MissingLevels::Materialise`. `tests/export_proxy.rs` pins it (a
+  4000 × 3000 adjusted photo keeps its full size in the export scene). A
+  scale parameter on `build_scene` was written, found to change nothing,
+  and dropped: do not re-add it unless an export path ever walks with
+  previews or deferral.
 
 ## Colour fidelity and regression (W11.5, W11.6, XARA-US-0060)
 
@@ -876,18 +919,15 @@ with it.
 
 ## Open TODOs
 
-- ~~XARA-T-0192~~ (done, "File › Export"). Follow-ups: the dialog's
-  missing options (bleed, a background colour, PNG/JPEG/PDF/SVG options),
-  remembering the last options per document (T11.1.5 export hints), a
-  preview; the photo-proxy level of an export follows the fixed export
-  view, not the export's dpi (a photo-adjusted bitmap exported at 300 dpi
-  may use a reduced proxy) — make `build_scene` take the output scale; the
-  live portal round trip (Export… → chooser → file) has not been driven on
-  a compositor.
+- ~~XARA-T-0192~~ (done, "File › Export"); XARA-T-0350 added the missing
+  dialog options and the per-document hints. Still open: an export
+  preview, the live portal round trip (Export… → chooser → file) on a
+  compositor, PNG `--optimise` in the dialog, a Draft/Final choice, and
+  the export hints for documents that are never saved after exporting
+  (they are lost on close, by design: exporting is not an edit).
 - XARA-T-0038 remainder: the per-pixel cost of gradient fills (~30 ns/px)
   and the on-screen/headless path's three bands; export itself is done.
-- T11.1.5 export hints in `meta.xml` (the option structs are serde-ready and
-  `#[serde(default)]`), T11.1.6 batch export, T11.2.8 palette quantisation
+- ~~T11.1.5 export hints in `meta.xml`~~ (done, XARA-T-0350), T11.1.6 batch export, T11.2.8 palette quantisation
   (PNG `Palette` is exact-only and refuses > N colours), T11.2.7 AVIF.
 - Colour follow-ups: XARA-T-0249 (PDF `DeviceCMYK` option, our own sRGB
   profile for the output intent and WebP, `icc-color()`/`DeviceN` once a

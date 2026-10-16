@@ -426,7 +426,12 @@ decisions 29 and 42); what matters on this side:
   copy"). The new file's name becomes the bitmap's name; size, dpi and
   format are the new file's, the placements' parallelograms and the fills'
   axes are **not** adjusted to the new aspect (the image is stretched to
-  the same box; a "keep the aspect" option is a possible follow-up). Save a copy writes
+  the same box; a "keep the aspect" option is a possible follow-up). A file
+  over the inline import limit (1 MiB) is read and decoded on the import
+  worker like an import (XARA-T-0350): `PendingImport::replace` marks the
+  job, the old image stays until it arrives, then `finish_replace` swaps it
+  as the same one undo step (a decode failure is a notice, nothing
+  changes; a document or bitmap gone meanwhile is a notice too). Save a copy writes
   the stored original **verbatim** when its format is PNG, JPEG, GIF or
   BMP (no re-encode, so no generation loss and any embedded ICC profile
   survives); a bitmap with no original, or whose "original" is a `.xar`

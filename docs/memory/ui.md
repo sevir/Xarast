@@ -525,12 +525,25 @@ Full note: [`tools.md`](tools.md). What the interface side owns:
   by `Workspace` before the prompt so a question stays on top): a grid of
   Format, Area, then only the fields the view carries — Width/Height in
   pixels, Keep proportions, Resolution (dpi), Printed width/height in the
-  document's unit, Background, Quality — then the flatten note and the
+  document's unit, Background (+ colour button when "Colour"), Quality,
+  then the chosen format's own options (`png_fields`, `jpeg_fields`,
+  `pdf_fields`, `svg_fields`; each edit sends the whole options struct) —
+  then the flatten note and the
   error line, then by phase: Export… / Cancel; "Choose where to save the
   file…"; a progress bar ("Export progress: Rendering") + Cancel (asks for
   a repaint every 100 ms); the summary and "Not reproduced exactly:" with
   one line per compromise + Close; "Export failed: …" + Close. Fields are
   disabled while choosing or running. Escape / click outside = `Cancel`.
+  The grid sits in a vertical `ScrollArea` (max 520 px) since PDF/PNG made
+  it tall. XARA-T-0350 added **Bleed** (all formats) and, for the
+  "Rectangle" area, Left/Bottom/Right/Top in the document's unit.
+  Accessible names added: "Bleed in millimetres", "Left in millimetres"
+  (…), "Export background colour", "Export depth", "Export colour type",
+  "Export compression", "Export chroma subsampling", "Export
+  transparency", "Export images", "Export text", "Resolution of
+  rasterised objects in dots per inch"; checkboxes are named by their
+  text ("Interlaced (Adam7)", "Progressive", "Minify", …). `combo` takes
+  `impl Fn` so an option combo can capture the struct it edits.
 - **Accessible names**: the combos are "Export format", "Export area",
   "Export background" (the grid's own label already says "Format"; two
   nodes with one name broke `get_by_label`); "Width in pixels",
@@ -543,7 +556,9 @@ Full note: [`tools.md`](tools.md). What the interface side owns:
   directory; `SaveChosen` → `Intent::ExportTo`, Cancelled/Failed →
   `ExportFileDialogClosed` (a failure also to the status bar and the
   problem list); `housekeeping` calls `poll_exports`.
-- Tests: `tests/export_dialog.rs` (7, kittest over AccessKit): the field
+- Tests: `tests/export_dialog.rs` (10, kittest over AccessKit; the last
+  three: per-format options appear only for their format, an option edit
+  sends the whole options, the rectangle fields follow the area): the field
   set per format against the capabilities (PNG, JPEG, WebP, PDF, SVG), the
   JPEG flatten note, ops from clicks, a typed resolution → `Sizing(Dpi)`,
   a disabled Export with the max-side message, Cancel while running, the
