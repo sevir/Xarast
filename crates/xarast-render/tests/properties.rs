@@ -32,6 +32,11 @@ enum Step {
     /// glow, 2 a floor (squashed and sheared), with a penumbra of `blur`
     /// points. Its pop is [`Step::PopFeather`]'s: both close an effect.
     PushShadow(u8, f64, f64, f64),
+    /// A bevel (XARA-T-0328): bit 0 of the flags outer, bit 1 an inner band
+    /// painted flat, bits 2 and 3 the join (mitre, bevel, round) and bit 4
+    /// the round cross-section instead of the flat one, with a band of
+    /// `indent` points. Its pop is [`Step::PopFeather`]'s.
+    PushBevel(u8, f64),
 }
 
 fn step() -> impl Strategy<Value = Step> {
@@ -50,6 +55,7 @@ fn step() -> impl Strategy<Value = Step> {
         Just(Step::PopFeather),
         (0u8..3, -15.0f64..15.0, -15.0f64..15.0, 0.0f64..12.0)
             .prop_map(|(k, x, y, b)| Step::PushShadow(k, x, y, b)),
+        (0u8..32, 0.5f64..10.0).prop_map(|(f, i)| Step::PushBevel(f, i)),
     ]
 }
 
@@ -83,6 +89,35 @@ fn shadow(kind: u8, dx: f64, dy: f64, blur: f64) -> LayerEffect {
             g: 10,
             b: 60,
             a: 170,
+        },
+    }))
+}
+
+/// The bevel a [`Step::PushBevel`] pushes.
+fn bevel(flags: u8, indent: f64) -> LayerEffect {
+    let outer = flags & 1 != 0;
+    LayerEffect::Bevel(Box::new(xarast_render::BevelEffect {
+        style: if flags & 16 != 0 {
+            xarast_geom::bevel::BevelType::Round
+        } else {
+            xarast_geom::bevel::BevelType::Flat
+        },
+        indent: indent * 1000.0,
+        outer,
+        light_angle: 300.0,
+        light_tilt: 32.0,
+        contrast: 0.7,
+        colour: Rgba8 {
+            r: 200,
+            g: 90,
+            b: 30,
+            a: 200,
+        },
+        paint_inner: flags & 2 != 0 && !outer,
+        join: match (flags >> 2) & 3 {
+            0 => xarast_geom::Join::Mitre,
+            1 => xarast_geom::Join::Bevel,
+            _ => xarast_geom::Join::Round,
         },
     }))
 }
@@ -180,8 +215,12 @@ fn record(steps: &[Step]) -> (Scene, Result<(), SceneError>) {
                     b.push_effect(shadow(*k, *dx, *dy, *blur));
                     depth.push(s.clone());
                 }
+                Step::PushBevel(flags, indent) => {
+                    b.push_effect(bevel(*flags, *indent));
+                    depth.push(s.clone());
+                }
                 Step::PopFeather => match depth.last() {
-                    Some(Step::PushFeather(..) | Step::PushShadow(..)) => {
+                    Some(Step::PushFeather(..) | Step::PushShadow(..) | Step::PushBevel(..)) => {
                         depth.pop();
                         b.pop_effect();
                     }
@@ -198,7 +237,9 @@ fn record(steps: &[Step]) -> (Scene, Result<(), SceneError>) {
                 Step::PushLayer(..) => b.pop_layer(),
                 Step::PushClip(..) => b.pop_clip(),
                 Step::PushTransparency(..) => b.pop_transparency(),
-                Step::PushFeather(..) | Step::PushShadow(..) => b.pop_effect(),
+                Step::PushFeather(..) | Step::PushShadow(..) | Step::PushBevel(..) => {
+                    b.pop_effect();
+                }
                 _ => unreachable!("only pushes are recorded as open"),
             }
         }
@@ -296,7 +337,9 @@ fn apply_edit(steps: &[Step], e: &Edit) -> Vec<Step> {
                 *a = f;
                 *b = t;
             }
-            Step::PushFeather(size) | Step::PushShadow(.., size) => *size = f64::from(t) / 16.0,
+            Step::PushFeather(size) | Step::PushShadow(.., size) | Step::PushBevel(_, size) => {
+                *size = f64::from(t) / 16.0;
+            }
             _ => {}
         },
     }
