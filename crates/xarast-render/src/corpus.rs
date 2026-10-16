@@ -1343,6 +1343,151 @@ pub fn fill_blend_cases() -> Vec<Case> {
     out
 }
 
+/// The three sources of a transparency, as phase 13 I1 names them.
+pub const TRANSPARENCY_SOURCES: [&str; 3] = ["flat", "gradient", "image"];
+
+/// A tinted grey ramp image, dark at the left and light at the right, with
+/// a white stripe: what a bitmap transparency reads its luminance from.
+fn transparency_image() -> ImageRef {
+    let (w, h) = (16u32, 16u32);
+    let mut data = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let v = if (6..8).contains(&y) {
+                255
+            } else {
+                (x * 17) as u8
+            };
+            // A tint, so that luminance (not one channel) is what is read.
+            data.extend_from_slice(&[v, v.saturating_sub(30), v / 2 + 40, 255]);
+        }
+    }
+    ImageRef::new(w, h, data)
+}
+
+/// Interns a transparency ramp the way the walker does: a colour-ramp id
+/// of its own, with the level table at that index.
+fn intern_transparency_ramp(
+    res: &mut Resolver,
+    stops: &[TranspStop],
+    profile: Profile,
+    tag: u8,
+) -> crate::ramp::RampId {
+    // A colour ramp nobody else interns, so that the id is this table's.
+    let marker = res.ramps.intern(
+        &[Stop::new(0.0, rgb(1, 2, 3)), Stop::new(1.0, rgb(4, 5, tag))],
+        profile,
+        EffectSpace::Rgb,
+        RampLength::Long,
+    );
+    let i = marker.index() as usize;
+    if res.transparency_ramps.len() <= i {
+        res.transparency_ramps.resize(i + 1, Vec::new());
+    }
+    res.transparency_ramps[i] = build_transparency_ramp(stops, profile, RampLength::Long);
+    marker
+}
+
+/// Phase 13 I1/I4: every one of the twelve families × every source: flat,
+/// a graduated multi-stop ramp under a bias/gain profile, and a bitmap
+/// mapped through a multi-stop level ramp under a profile. 36 scenes at
+/// [`FILL_BLEND_SIZE`], named `<family>_<source>`; the goldens are
+/// `tests/golden/transparency_family/`.
+#[must_use]
+pub fn transparency_family_cases() -> Vec<Case> {
+    let levels = [
+        TranspStop {
+            offset: 0.0,
+            level: 0,
+        },
+        TranspStop {
+            offset: 0.3,
+            level: 200,
+        },
+        TranspStop {
+            offset: 0.65,
+            level: 60,
+        },
+        TranspStop {
+            offset: 1.0,
+            level: 240,
+        },
+    ];
+    let mut out = Vec::new();
+    for family in ALL_FAMILIES {
+        for source in TRANSPARENCY_SOURCES {
+            let mut scene = Scene::new();
+            let mut res = Resolver::new();
+            let colour = res.ramps.intern(
+                &[
+                    Stop::new(0.0, rgb(250, 240, 20)),
+                    Stop::new(0.45, rgb(230, 30, 120)),
+                    Stop::new(1.0, rgb(20, 60, 200)),
+                ],
+                Profile::new(0.2, -0.3),
+                EffectSpace::Rgb,
+                RampLength::Long,
+            );
+            let (paint, _, _) = matrix_fill("linear", colour);
+            let transparency_source = match source {
+                "flat" => TranspSource::Flat(96),
+                "gradient" => TranspSource::Gradient {
+                    shape: GradShape::Linear,
+                    mapping: GradMapping::Affine {
+                        a: dpt(8.0, 48.0),
+                        b: dpt(8.0, 88.0),
+                        c: dpt(88.0, 48.0),
+                    },
+                    repeat: Repeat::Simple,
+                    ramp: intern_transparency_ramp(&mut res, &levels, Profile::new(0.35, -0.25), 7),
+                },
+                _ => {
+                    let image = res.images.insert(transparency_image());
+                    TranspSource::Image {
+                        image,
+                        mapping: GradMapping::Affine {
+                            a: dpt(8.0, 8.0),
+                            b: dpt(8.0, 88.0),
+                            c: dpt(88.0, 8.0),
+                        },
+                        repeat: Repeat::Simple,
+                        filter: crate::paint::Filter::Bilinear,
+                        ramp: Some(intern_transparency_ramp(
+                            &mut res,
+                            &levels,
+                            Profile::new(-0.3, 0.4),
+                            9,
+                        )),
+                    }
+                }
+            };
+            {
+                let mut b = SceneBuilder::begin(&mut scene, RenderQuality::Final);
+                backdrop(&mut b);
+                b.push_transparency(Transparency {
+                    family,
+                    source: transparency_source,
+                });
+                b.fill(SceneNodeId(10), &star_path(), FillRule::NonZero, paint);
+                b.pop_transparency();
+                b.finish().expect("balanced");
+            }
+            out.push(Case {
+                name: format!("{}_{source}", family_name(family)),
+                scene,
+                resolver: res,
+                view: ViewParams::new(
+                    FILL_BLEND_SIZE,
+                    FILL_BLEND_SIZE,
+                    Transform2D::scale(0.5 / f64::from(Mp::PER_PT)),
+                    RenderQuality::Final,
+                ),
+            });
+        }
+    }
+    out
+}
+
 fn feather(size_pt: f64, profile: Profile) -> LayerEffect {
     LayerEffect::Feather {
         size: size_pt * f64::from(Mp::PER_PT),
