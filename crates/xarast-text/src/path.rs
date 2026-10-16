@@ -25,7 +25,10 @@
 //!
 //! Everything is in story space, millipoints as `f64`, y up.
 
-use kurbo::{Affine, BezPath, ParamCurve, ParamCurveArclen, ParamCurveDeriv, PathSeg, Point, Vec2};
+use kurbo::{
+    Affine, BezPath, ParamCurve, ParamCurveArclen, ParamCurveDeriv, ParamCurveNearest, PathSeg,
+    Point, Vec2,
+};
 use xarast_geom::Mp;
 
 use crate::layout::{LaidCluster, LaidLine};
@@ -133,11 +136,67 @@ impl TextPath {
         (seg.eval(t), angle(tangent(seg, t)))
     }
 
+    /// The distance along the path (in its text direction) of the point of
+    /// the path nearest `p`, between 0 and [`TextPath::length`]: where a
+    /// dragged indent handle lands.
+    #[must_use]
+    pub fn project(&self, p: Point) -> f64 {
+        let mut best = (f64::INFINITY, 0.0);
+        for (seg, start) in self.segs.iter().zip(&self.starts) {
+            let near = seg.nearest(p, ARCLEN_ACCURACY);
+            if near.distance_sq < best.0 {
+                let t = refine_nearest(seg, p, near.t);
+                let along = seg.subsegment(0.0..t).arclen(ARCLEN_ACCURACY);
+                best = (near.distance_sq, start + along);
+            }
+        }
+        best.1.clamp(0.0, self.length)
+    }
+
     /// The unit normal to the left of the path's direction at its start:
     /// where lines above the first would go (they have positive baselines).
     #[must_use]
     pub fn start_normal(&self) -> Vec2 {
         Vec2::new(-self.start_dir.y, self.start_dir.x)
+    }
+}
+
+/// Polishes `t`, an estimate of the parameter of the point of `seg`
+/// nearest `p` (kurbo's is good to a few millipoints on a long curve), by
+/// Newton's method on the squared distance. Keeps the estimate if the
+/// polish does not bring the point closer.
+fn refine_nearest(seg: &PathSeg, p: Point, t0: f64) -> f64 {
+    let derivs = |t: f64| match seg {
+        PathSeg::Line(l) => (l.p1 - l.p0, Vec2::ZERO),
+        PathSeg::Quad(q) => {
+            let d = q.deriv();
+            (d.eval(t).to_vec2(), d.deriv().eval(t).to_vec2())
+        }
+        PathSeg::Cubic(c) => {
+            let d = c.deriv();
+            (d.eval(t).to_vec2(), d.deriv().eval(t).to_vec2())
+        }
+    };
+    let mut t = t0;
+    for _ in 0..16 {
+        let (d1, d2) = derivs(t);
+        let r = seg.eval(t) - p;
+        let f = r.dot(d1);
+        let fp = d1.dot(d1) + r.dot(d2);
+        if fp.is_nan() || fp.abs() <= 1e-18 {
+            break;
+        }
+        let next = (t - f / fp).clamp(0.0, 1.0);
+        let done = (next - t).abs() < 1e-15;
+        t = next;
+        if done {
+            break;
+        }
+    }
+    if t.is_finite() && (seg.eval(t) - p).hypot2() <= (seg.eval(t0) - p).hypot2() {
+        t
+    } else {
+        t0
     }
 }
 
@@ -297,6 +356,40 @@ mod tests {
         let (p, a) = t.at(10.0);
         assert!((p - Point::new(90.0, 0.0)).hypot() < 1e-9);
         assert!((a.abs() - std::f64::consts::PI).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_point_projects_to_its_distance_along_the_text_direction() {
+        let mut p = BezPath::new();
+        p.move_to((0.0, 0.0));
+        p.line_to((100.0, 0.0));
+        p.line_to((100.0, 100.0));
+        let t = TextPath::new(&p, false).unwrap();
+        assert!((t.project(Point::new(40.0, 7.0)) - 40.0).abs() < 1e-6);
+        assert!((t.project(Point::new(130.0, 60.0)) - 160.0).abs() < 1e-6);
+        assert!(t.project(Point::new(-50.0, 0.0)).abs() < 1e-9);
+        let r = TextPath::new(&p, true).unwrap();
+        assert!((r.project(Point::new(40.0, 7.0)) - 160.0).abs() < 1e-6);
+        assert!((r.project(Point::new(500.0, 500.0)) - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_point_on_a_curve_projects_back_to_its_own_distance() {
+        let mut p = BezPath::new();
+        p.move_to((0.0, 0.0));
+        p.curve_to(
+            (100_000.0, 160_000.0),
+            (300_000.0, 160_000.0),
+            (400_000.0, 0.0),
+        );
+        p.quad_to((500_000.0, -100_000.0), (600_000.0, 0.0));
+        let t = TextPath::new(&p, false).unwrap();
+        let mut d = 0.0;
+        while d < t.length() {
+            let (q, _) = t.at(d);
+            assert!((t.project(q) - d).abs() < 0.5, "{d}");
+            d += 997.0;
+        }
     }
 
     #[test]
