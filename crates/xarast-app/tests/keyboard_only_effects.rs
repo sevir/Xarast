@@ -22,10 +22,7 @@ use xarast_app::{
 };
 use xarast_color::{Colour, ColourValue};
 use xarast_doc::fill::FillGeometry;
-use xarast_doc::{
-    AttrValue, BevelParams, BlendParams, ContourParams, LiveKind, LiveRole, MouldParams, NodeId,
-    NodeKind, ShadowParams,
-};
+use xarast_doc::{AttrValue, LiveKind, LiveRole, MouldParams, NodeId, NodeKind};
 use xarast_geom::{Point, Rect};
 
 const RED: ColourValue = ColourValue::Rgbt {
@@ -85,20 +82,20 @@ fn state(tool: ToolId) -> Session {
     let edit = match tool {
         ToolId::Shadow => LiveEdit::Apply {
             targets: vec![n[0]],
-            kind: LiveKind::Shadow(Box::new(ShadowParams::default())),
+            kind: LiveKind::Shadow(Box::default()),
         },
         ToolId::Bevel => LiveEdit::Apply {
             targets: vec![n[0]],
-            kind: LiveKind::Bevel(Box::new(BevelParams::default())),
+            kind: LiveKind::Bevel(Box::default()),
         },
         ToolId::Contour => LiveEdit::Apply {
             targets: vec![n[0]],
-            kind: LiveKind::Contour(Box::new(ContourParams::default())),
+            kind: LiveKind::Contour(Box::default()),
         },
         ToolId::Blend => LiveEdit::Blend {
             start: n[0],
             end: n[1],
-            kind: LiveKind::Blend(Box::new(BlendParams::default())),
+            kind: LiveKind::Blend(Box::default()),
         },
         ToolId::Mould => {
             let attrs = xarast_doc::attr::resolve_uncached(&s.doc.tree, n[0], &s.doc.defaults);
