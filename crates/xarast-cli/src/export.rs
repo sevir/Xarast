@@ -2,24 +2,22 @@
 //! the export filters of `xarast-io` (phase 11 T11.1.7, W11.3, W11.4).
 //!
 //! The CLI builds an [`ExportRequest`] from flags and hands it, with a
-//! [`SessionSource`], to the same [`Registry`] the export dialog uses.
+//! [`Session`] (an [`ExportSource`](xarast_io::ExportSource) of
+//! `xarast-app`), to the same [`Registry`] the export dialog uses.
 //! `.xar` is refused with the permanent reason of architecture §3.5.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Instant;
 
-use xarast_app::viewport::{drawing_or_page_rect, page_rect, spread_rect};
 use xarast_app::{DocumentId, Session};
 use xarast_color::Rgba8;
 use xarast_geom::{Mp, Point, Rect};
 use xarast_io::{
-    Background, BlendFidelity, Compromise, ExportArea, ExportError, ExportRequest, ExportSizing,
-    ExportSource, FormatId, FormatOptions, NoProgress, PDF_RASTERISE_DPI, PngColour,
-    PngCompression, PngDepth, Registry, SourceScene, Subsampling, SvgResources, TextOutput,
-    WebPMode, XAR_EXPORT_REFUSAL,
+    Background, BlendFidelity, ExportArea, ExportError, ExportRequest, ExportSizing, FormatId,
+    FormatOptions, NoProgress, PDF_RASTERISE_DPI, PngColour, PngCompression, PngDepth, Registry,
+    Subsampling, SvgResources, TextOutput, WebPMode, XAR_EXPORT_REFUSAL,
 };
-use xarast_render::{RenderQuality, Scene};
+use xarast_render::RenderQuality;
 
 use crate::Exit;
 use crate::args::Args;
@@ -463,101 +461,6 @@ pub fn parse(argv: &[String]) -> Result<ExportArgs, String> {
     })
 }
 
-/// A session as an export source.
-///
-/// This adapter belongs in `xarast-app` (the app depends on `xarast-io`,
-/// so the impl can live next to `Session`); it is here until that move,
-/// tracked in gintrack with the export-dialog wiring.
-#[derive(Debug)]
-pub struct SessionSource<'a> {
-    /// The open document.
-    pub session: &'a Session,
-}
-
-impl ExportSource for SessionSource<'_> {
-    fn resolve_area(&self, area: &ExportArea) -> Result<Rect, ExportError> {
-        let doc = &self.session.doc;
-        let r = match *area {
-            ExportArea::Drawing => drawing_or_page_rect(doc),
-            ExportArea::Page(None) => page_rect(doc),
-            ExportArea::Page(Some(id)) => match doc.tree.kind(id) {
-                Some(xarast_doc::NodeKind::Page(p)) => p.rect,
-                _ => return Err(ExportError::Area(format!("{id:?} is not a page"))),
-            },
-            ExportArea::Spread => spread_rect(doc),
-            ExportArea::Selection => {
-                let r = self.session.edit.selection_bounds(doc);
-                if r.is_empty() {
-                    return Err(ExportError::Area("nothing is selected".into()));
-                }
-                r
-            }
-            ExportArea::Rect(r) => r,
-        };
-        if r.is_empty() || r.width().raw() <= 0 || r.height().raw() <= 0 {
-            return Err(ExportError::Area("the area is empty".into()));
-        }
-        Ok(r)
-    }
-
-    fn build_scene(&self, quality: RenderQuality) -> Result<SourceScene, ExportError> {
-        let s = self.session;
-        // The session's decoded bitmaps: a second export decodes nothing.
-        let mut walker = s.scene_walker();
-        let mut scene = Scene::new();
-        walker
-            .rebuild(&s.doc, &s.edit, &s.viewport, quality, None, &mut scene)
-            .map_err(|e| ExportError::Scene(e.to_string()))?;
-        let w = walker.stats();
-        let mut compromises: Vec<Compromise> = [
-            (
-                "text on a path (drawn on a straight baseline)",
-                w.text_on_path_pending,
-            ),
-            ("text (no font)", w.text_pending),
-            ("quick shapes", w.shapes_pending),
-            ("images (no pixels)", w.images_pending),
-            ("images (failed to decode)", w.images_failed),
-            ("live effects", w.live_pending),
-            ("clips (no clipping geometry)", w.clips_unsupported),
-        ]
-        .into_iter()
-        .filter(|(_, n)| *n > 0)
-        .map(|(what, count)| Compromise::NotRendered {
-            what: what.into(),
-            count,
-        })
-        .collect();
-        compromises.extend(walker.font_substitutions().iter().map(|f| {
-            Compromise::FontSubstituted {
-                requested: f.requested.clone(),
-                used: f.used.clone(),
-            }
-        }));
-        let text = walker.scene_text();
-        Ok(SourceScene {
-            scene,
-            resolver: walker.into_resolver(),
-            compromises,
-            text,
-        })
-    }
-
-    fn text_as_outlines(&self, all: bool) -> Option<(xarast_doc::Document, Vec<Arc<str>>)> {
-        let fonts = xarast_app::fonts::document(&self.session.doc);
-        xarast_app::convert::text_as_outlines(&self.session.doc, &fonts, all)
-    }
-
-    fn document(&self) -> Option<&xarast_doc::Document> {
-        Some(&self.session.doc)
-    }
-
-    fn svg_text_placer(&self) -> Option<xarast_format::svg::Placer> {
-        // Text placed where Xarast draws it (XARA-T-0172).
-        Some(xarast_app::svg_text::placer())
-    }
-}
-
 fn output_for(
     input: &Path,
     dir: &Path,
@@ -640,7 +543,7 @@ pub fn run_on(a: &ExportArgs, files: Vec<Input<'_>>) -> Exit {
             }
         };
         let t_open = ms(t0.elapsed());
-        match registry.export(&SessionSource { session: &session }, &req, &NoProgress) {
+        match registry.export(&session, &req, &NoProgress) {
             Ok(r) => {
                 done += 1;
                 open_ms += t_open;

@@ -32,7 +32,6 @@ use xarast_render::RenderQuality;
 
 use crate::Exit;
 use crate::args::Args;
-use crate::export::SessionSource;
 use crate::inputs::ms;
 
 /// Usage for `bench`.
@@ -746,7 +745,7 @@ fn export(a: &BenchArgs, r: &mut Report) -> Result<(), String> {
     for _ in 0..a.runs {
         let t = Instant::now();
         let rep = registry
-            .export(&SessionSource { session: &s }, &req, &NoProgress)
+            .export(&s, &req, &NoProgress)
             .map_err(|e| e.to_string())?;
         times.push(ms(t.elapsed()));
         r.info_num("width", f64::from(rep.pixels.0));

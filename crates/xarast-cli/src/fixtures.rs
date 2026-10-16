@@ -4,7 +4,7 @@
 //! The `.xar` corpus is not in the repository, so CI needs documents of
 //! its own to export. These are built in memory from our own geometry and
 //! colours — no corpus byte, no file — and go through exactly the path a
-//! file takes: a [`Session`] over the document, [`SessionSource`](crate::export::SessionSource), the
+//! file takes: a [`Session`] over the document (itself the export source), the
 //! export [`Registry`](xarast_io::Registry). What they are for:
 //!
 //! - **`colour-sheet`** (T11.5.5): flat patches in every colour model —

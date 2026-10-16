@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 
 use xarast_app::{DocumentId, Session};
-use xarast_cli::export::{SessionSource, parse};
+use xarast_cli::export::parse;
 use xarast_io::{NoProgress, Registry};
 
 fn corpus() -> Option<PathBuf> {
@@ -57,7 +57,7 @@ fn exporting_twice_decodes_each_bitmap_once() {
             let mut request = args.request;
             request.destination = dest.clone();
             registry
-                .export(&SessionSource { session: &session }, &request, &NoProgress)
+                .export(&session, &request, &NoProgress)
                 .expect("exports");
             files.push(std::fs::read(&dest).expect("written"));
             let s = cache.stats();
