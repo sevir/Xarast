@@ -359,12 +359,102 @@ fn shadow_body(s: &mut String, sh: &Shadow<'_>) {
     }
 }
 
-/// The height field's scale against the indent. `feDiffuseLighting`
-/// differentiates per filter pixel, so the lit slope depends on the
-/// resolution; 0.25 was the best of {0.1, 0.25, 0.3, 1} × σ ∈ {indent/2,
-/// /3, /5} on the corpus export at 72 dpi (Groucho2 svg 6.8 vs 8.2 at 1;
-/// testimp1 0.5 vs 0.6), `export.md` "Bevels in SVG".
-const SURFACE_SCALE: f64 = 0.25;
+/// The blur's deviation, against the indent: the band's edge is where the
+/// blurred silhouette is one half, and the ramp is read out to one
+/// indent past it, so a deviation of half the indent keeps the ramp's far
+/// end two deviations out, where the blur is flat enough to read.
+const SIGMA: f64 = 0.5;
+
+/// Half the span of the slope's central difference, against the indent
+/// (user units: the offsets scale with the drawing, unlike
+/// `feDiffuseLighting`'s per-pixel step).
+const DELTA: f64 = 0.3;
+
+/// The normal distribution's cumulative function (Abramowitz and Stegun
+/// 7.1.26, error below 1.5e-7).
+fn phi(x: f64) -> f64 {
+    let t = 1.0 / (1.0 + 0.327_591_1 * (x.abs() / std::f64::consts::SQRT_2));
+    let y = 1.0
+        - (((((1.061_405_429 * t - 1.453_152_027) * t) + 1.421_413_741) * t - 0.284_496_736) * t
+            + 0.254_829_592)
+            * t
+            * (-(x * x) / 2.0).exp();
+    if x >= 0.0 {
+        0.5 * (1.0 + y)
+    } else {
+        0.5 * (1.0 - y)
+    }
+}
+
+/// The `tableValues` turning a silhouette blurred by σ into a linear ramp
+/// of the distance from the edge: the edge is the blur's one half, and
+/// the ramp reaches 1 at `width_in_sigmas` deviations inside it, so a
+/// straight edge's slope is the same across the whole band (as the
+/// renderer's faces are) and zero beyond it.
+fn ramp_table(width_in_sigmas: f64) -> String {
+    const N: usize = 65;
+    let mut out = Vec::with_capacity(N);
+    for i in 0..N {
+        let v = i as f64 / (N - 1) as f64;
+        if v <= 0.5 {
+            out.push("0".to_owned());
+            continue;
+        }
+        // Bisect the inverse of `phi`.
+        let (mut lo, mut hi) = (0.0f64, 8.0f64);
+        for _ in 0..40 {
+            let mid = 0.5 * (lo + hi);
+            if phi(mid) < v {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        out.push(f64s(
+            (0.5 * (lo + hi) / width_in_sigmas).clamp(0.0, 1.0),
+            4,
+        ));
+    }
+    out.join(" ")
+}
+
+/// The slope of the faces the filter lights, in band widths per band
+/// width (the renderer's `Flat` section is 1; its S-curves peak above).
+const SLOPE: f64 = 0.8;
+
+/// The two `tableValues` that turn the slope towards the light into a
+/// paint: the multiplier of the dark side (`1 − contrast² · |v|`) and the
+/// share of white screened in on the light side (`contrast · v`), `v`
+/// being the renderer's shading of a face of slope [`SLOPE`] (`xarast_geom::
+/// bevel::shade`: Lambert against the flat plane, `1` facing the light,
+/// `-1` facing away). The input is `D = ½ + ½ (h⁻ − h⁺)`, in which a face
+/// turned straight to the light reads `2 δ / indent` away from the half
+/// (`reach`); the table clamps beyond it.
+fn light_tables(tilt: f64, contrast: f64, reach: f64) -> (String, String) {
+    const N: usize = 65;
+    let t = tilt.to_radians();
+    let (sin, cos) = (t.sin(), t.cos());
+    let slope = SLOPE;
+    let (mut dark, mut light) = (Vec::new(), Vec::new());
+    for i in 0..N {
+        let d = i as f64 / (N - 1) as f64;
+        let facing = ((2.0 * d - 1.0) / reach).clamp(-1.0, 1.0);
+        let lit = (slope * cos * facing + sin) / slope.hypot(1.0);
+        let v = if lit >= sin {
+            (lit - sin) / (1.0 - sin).max(1e-9)
+        } else {
+            (lit - sin) / (1.0 + sin)
+        };
+        let (a, w) = if v >= 0.0 {
+            (v * contrast, 1.0)
+        } else {
+            (0.0, 1.0 + v * contrast * contrast)
+        };
+        light.push(f64s(a, 4));
+        dark.push(f64s(w, 4));
+    }
+    (dark.join(" "), light.join(" "))
+}
 
 /// A bevel's parameters, in the user units of the element it is set on
 /// (points).
@@ -388,22 +478,31 @@ pub(crate) struct Bevel<'a> {
 }
 
 /// A bevel (`research/06 §6.8.2`; the renderer's `LayerEffect::Bevel`):
-/// a height field from the silhouette blurred across the band (σ = half
-/// the indent), lit by `feDiffuseLighting` from the light
-/// (azimuth in SVG's y-down frame, the light sitting opposite its stored
-/// direction of travel, `render.md` "Bevels"), and the result applied as
-/// a ratio to the flat plane's lighting, scaled by the contrast: the
-/// object's own colours for an inner bevel, a band of the bevel's colour
-/// under the object (the silhouette grown by a disc) for an outer one.
-/// An approximation: the faces' cross-section is a blur's, whatever the
-/// style.
+/// a height field read from the silhouette (blurred by σ, then mapped to
+/// a linear ramp across the band), its slope along the light taken as
+/// `D = ½ + ½ (h⁻ − h⁺)` from the field moved a fixed fraction of the
+/// indent towards and away from the light, and the paint lit as the
+/// renderer lights it: `D` maps through a table (`light_tables`) to a
+/// multiplier (`1 − contrast² |v|` on the dark side) and a share of
+/// white to screen in (`contrast · v` on the light side), `v` being the
+/// renderer's shading of a chamfer. The paint is the object's own colours
+/// for an inner bevel, a band of the bevel's colour under the object (the
+/// silhouette grown by a disc) for an outer one.
+///
+/// **Every length is a user unit** (a blur, an offset, a morphology
+/// radius), so the filter draws the same at any resolution:
+/// `feDiffuseLighting` differentiates per filter pixel, and its
+/// `kernelUnitLength`, which would fix that, is ignored by Chromium and
+/// resvg. An approximation: the faces' cross-section is a chamfer's,
+/// whatever the style, and corners are the blur's.
 pub(crate) fn bevel(b: &Bevel<'_>, region: Region) -> FilterChain {
     let mut f = FilterChain::new("bevel", region);
     let mut s = String::new();
-    let tilt = b.light_tilt.clamp(1.0, 90.0);
-    let flat = tilt.to_radians().sin();
-    let azimuth = (180.0 - b.light_angle).rem_euclid(360.0);
+    let tilt = b.light_tilt.clamp(1.0, 89.0);
+    let azimuth = (180.0 - b.light_angle).rem_euclid(360.0).to_radians();
+    let (uy, ux) = azimuth.sin_cos();
     let c = b.contrast.clamp(0.0, 1.0);
+    let delta = DELTA * b.indent;
     let height = if b.outer {
         morph_disc(
             &mut s,
@@ -419,42 +518,94 @@ pub(crate) fn bevel(b: &Bevel<'_>, region: Region) -> FilterChain {
     } else {
         "SourceAlpha"
     };
+    // The silhouette blurred, as an opaque grey, then mapped to the ramp.
     s.push_str("<feGaussianBlur");
     attr(&mut s, "in", height);
-    attr(&mut s, "stdDeviation", &f64s(b.indent / 2.0, 4));
-    attr(&mut s, "result", "h");
-    s.push_str("/><feDiffuseLighting");
+    attr(&mut s, "stdDeviation", &f64s(b.indent * SIGMA, 4));
+    s.push_str(
+        "/><feColorMatrix type=\"matrix\" values=\"0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 0 1\"/>",
+    );
+    let table = ramp_table(1.0 / SIGMA);
+    s.push_str("<feComponentTransfer result=\"h\">");
+    for ch in ["R", "G", "B"] {
+        s.push_str(&format!(
+            "<feFunc{ch} type=\"table\" tableValues=\"{table}\"/>"
+        ));
+    }
+    s.push_str("</feComponentTransfer>");
+    // The field at p + δu and p − δu, u pointing to the light: an offset
+    // by −δu samples the field ahead of p, towards the light.
+    //
+    // δ in whole user units plus a tenth: resvg moves a primitive by whole
+    // device pixels (a fractional offset is truncated), so a bare whole
+    // number sat on the edge of the truncation (a scale of 0.9999 lost a
+    // pixel), while a tenth over keeps it through scales to 5 and any
+    // rounding of the page's size. At least one unit.
+    let whole = |v: f64| v.round();
+    let (mut ox, mut oy) = (whole(delta * ux), whole(delta * uy));
+    if ox == 0.0 && oy == 0.0 {
+        if ux.abs() >= uy.abs() {
+            ox = ux.signum();
+        } else {
+            oy = uy.signum();
+        }
+    }
+    let (dx, dy) = (
+        if ox == 0.0 { 0.0 } else { ox + 0.1 * ox.signum() },
+        if oy == 0.0 { 0.0 } else { oy + 0.1 * oy.signum() },
+    );
+    s.push_str("<feOffset");
     attr(&mut s, "in", "h");
-    attr(&mut s, "surfaceScale", &f64s(b.indent * SURFACE_SCALE, 4));
-    attr(&mut s, "diffuseConstant", "1");
-    attr(&mut s, "lighting-color", "#ffffff");
-    attr(&mut s, "result", "l");
-    s.push_str("><feDistantLight");
-    attr(&mut s, "azimuth", &f64s(azimuth, 4));
-    attr(&mut s, "elevation", &f64s(tilt, 4));
-    s.push_str("/></feDiffuseLighting>");
-    // out = paint × (1 − c + c·L / L_flat): unchanged where the surface is
-    // flat.
-    let lit_input = if b.outer {
+    attr(&mut s, "dx", &f64s(-dx, 4));
+    attr(&mut s, "dy", &f64s(-dy, 4));
+    s.push_str("/><feColorMatrix type=\"matrix\" values=\"-1 0 0 0 1 0 -1 0 0 1 0 0 -1 0 1 0 0 0 0 1\" result=\"i\"/>");
+    s.push_str("<feOffset");
+    attr(&mut s, "in", "h");
+    attr(&mut s, "dx", &f64s(dx, 4));
+    attr(&mut s, "dy", &f64s(dy, 4));
+    s.push_str("/>");
+    // D = ½ + ½ (h⁻ − h⁺): ½ on a flat, above it facing the light.
+    s.push_str("<feComposite in2=\"i\" operator=\"arithmetic\" k2=\".5\" k3=\".5\" result=\"d\"/>");
+    let (dark, light) = light_tables(tilt, c, 2.0 * dx.hypot(dy) / b.indent);
+    for (name, table) in [("w", dark), ("a", light)] {
+        s.push_str(&format!("<feComponentTransfer in=\"d\" result=\"{name}\">"));
+        for ch in ["R", "G", "B"] {
+            s.push_str(&format!("<feFunc{ch} type=\"table\" tableValues=\"{table}\"/>"));
+        }
+        s.push_str("</feComponentTransfer>");
+    }
+    // Only the band is lit: a plateau (a ramp's end, the object's inside,
+    // the ground outside it) is the flat plane, whatever its D.
+    let band = format!("0 {}0", "1 ".repeat(63));
+    s.push_str("<feComponentTransfer in=\"h\" result=\"m\">");
+    for ch in ["R", "G", "B"] {
+        s.push_str(&format!("<feFunc{ch} type=\"table\" tableValues=\"{band}\"/>"));
+    }
+    s.push_str("</feComponentTransfer>");
+    s.push_str("<feComposite in=\"w\" in2=\"m\" operator=\"arithmetic\" k1=\"1\" k3=\"-1\" k4=\"1\" result=\"w\"/>");
+    s.push_str("<feComposite in=\"a\" in2=\"m\" operator=\"arithmetic\" k1=\"1\" result=\"a\"/>");
+    // The paint, opaque so that the products leave alpha to the cut below.
+    if b.outer {
         s.push_str("<feFlood");
         attr(&mut s, "flood-color", b.colour);
-        attr(&mut s, "flood-opacity", &f64s(b.opacity.clamp(0.0, 1.0), 4));
-        attr(&mut s, "result", "c");
-        s.push_str("/>");
-        "c"
+        s.push_str(" result=\"c\"/>");
     } else {
-        "SourceGraphic"
-    };
-    s.push_str("<feComposite");
-    attr(&mut s, "in", lit_input);
-    attr(&mut s, "in2", "l");
-    attr(&mut s, "operator", "arithmetic");
-    attr(&mut s, "k1", &f64s(c / flat, 4));
-    attr(&mut s, "k2", &f64s(1.0 - c, 4));
-    attr(&mut s, "result", "p");
-    s.push_str("/>");
+        s.push_str("<feColorMatrix in=\"SourceGraphic\" type=\"matrix\" values=\"1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 0 1\" result=\"c\"/>");
+    }
+    // Darkened by a multiply, then lightened by a screen with white.
+    s.push_str("<feComposite in=\"c\" in2=\"w\" operator=\"arithmetic\" k1=\"1\" result=\"q\"/>");
+    s.push_str("<feComposite in=\"q\" in2=\"a\" operator=\"arithmetic\" k1=\"-1\" k2=\"1\" k3=\"1\" result=\"p\"/>");
     if b.outer {
         s.push_str("<feComposite in=\"p\" in2=\"g\" operator=\"in\" result=\"s\"/>");
+        let o = b.opacity.clamp(0.0, 1.0);
+        if o < 1.0 {
+            s.push_str("<feFlood");
+            attr(&mut s, "flood-color", "#000000");
+            attr(&mut s, "flood-opacity", &f64s(o, 4));
+            s.push_str(
+                " result=\"o\"/><feComposite in=\"s\" in2=\"o\" operator=\"in\" result=\"s\"/>",
+            );
+        }
         s.push_str("<feMerge><feMergeNode in=\"s\"/><feMergeNode in=\"SourceGraphic\"/></feMerge>");
     } else {
         s.push_str("<feComposite in=\"p\" in2=\"SourceAlpha\" operator=\"in\"/>");
@@ -633,7 +784,7 @@ mod tests {
     }
 
     #[test]
-    fn a_bevel_lights_a_blurred_height_field_from_opposite_its_travel() {
+    fn a_bevel_lights_a_ramped_height_field_from_opposite_its_travel() {
         let b = Bevel {
             indent: 8.0,
             outer: false,
@@ -647,14 +798,54 @@ mod tests {
         assert!(s.contains("xarast:filter=\"bevel\""));
         assert!(s.contains("color-interpolation-filters=\"sRGB\""));
         assert!(s.contains("stdDeviation=\"4\""), "{s}");
-        assert!(s.contains("surfaceScale=\"2\""), "{s}");
-        // Travelling to the lower right, so lit from the upper left: an
-        // azimuth of 225° in SVG's y-down frame.
-        assert!(s.contains("azimuth=\"225\" elevation=\"45\""), "{s}");
-        // Unchanged where flat: k1·L_flat + k2 = 1.
-        assert!(s.contains("k1=\".7071\" k2=\".5\""), "{s}");
+        // No primitive that works per filter pixel.
+        assert!(!s.contains("feDiffuseLighting"), "{s}");
+        assert!(!s.contains("kernelUnitLength"), "{s}");
+        // Travelling to the lower right, so lit from the upper left (an
+        // azimuth of 225° in SVG's y-down frame): the field is sampled
+        // 2.1 units (δ = 0.3 indent, whole units and a tenth) towards the
+        // light and away from it.
+        assert!(
+            s.contains("<feOffset in=\"h\" dx=\"2.1\" dy=\"2.1\"/>"),
+            "{s}"
+        );
+        assert!(
+            s.contains("<feOffset in=\"h\" dx=\"-2.1\" dy=\"-2.1\"/>"),
+            "{s}"
+        );
+        // A chamfer facing across the light reads darker than the plane,
+        // so the band's mask (zero on both plateaus) restores the plane
+        // outside it.
+        let tables: Vec<&str> = s.split("tableValues=\"").skip(1).collect();
+        let mask = tables[9].split('"').next().unwrap();
+        assert!(mask.starts_with("0 1 1 ") && mask.ends_with(" 1 1 0"), "{mask}");
         assert!(s.contains("in2=\"SourceAlpha\" operator=\"in\""));
         assert!(!s.contains("<feMerge>"));
+    }
+
+    #[test]
+    fn the_ramp_is_zero_up_to_the_edge_and_one_by_the_band_s_end() {
+        let t = ramp_table(2.0);
+        let v: Vec<f64> = t.split(' ').map(|x| x.parse().unwrap()).collect();
+        assert_eq!(v.len(), 65);
+        assert!(v[..=32].iter().all(|x| *x == 0.0));
+        assert!(v.windows(2).all(|w| w[0] <= w[1]));
+        assert_eq!(v[64], 1.0);
+        // Two deviations in is Φ(2) = 0.977 of the way up the blur.
+        assert!(v[63] > 0.95, "{t}");
+    }
+
+    #[test]
+    fn a_face_turned_to_the_light_is_screened_and_one_turned_away_multiplied() {
+        let (dark, light) = light_tables(32.0, 0.5, 0.5);
+        let f = |t: &str, i: usize| -> f64 { t.split(' ').nth(i).unwrap().parse().unwrap() };
+        assert_eq!(f(&light, 64), f(&light, 56), "clamped beyond the reach");
+        assert!(f(&light, 56) > 0.3 && f(&dark, 56) == 1.0);
+        assert!(f(&dark, 8) < 0.95 && f(&light, 8) == 0.0);
+        // No contrast, no lighting.
+        let (dark, light) = light_tables(32.0, 0.0, 0.5);
+        assert!(dark.split(' ').all(|x| x == "1"));
+        assert!(light.split(' ').all(|x| x == "0"));
     }
 
     #[test]
