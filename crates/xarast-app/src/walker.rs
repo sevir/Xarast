@@ -2612,8 +2612,13 @@ fn bevel_of(
     let inner_colour = if p.outer {
         None
     } else {
-        p.flat_paint(&doc.tree, node, &doc.defaults)
-            .map(|c| c.resolve(&doc.resources.colours).to_rgba8())
+        // The first object's transparency, copied with the fill, fades it.
+        let opacity = u32::from(p.flat_paint_opacity(&doc.tree, node, &doc.defaults));
+        p.flat_paint(&doc.tree, node, &doc.defaults).map(|c| {
+            let mut v = c.resolve(&doc.resources.colours).to_rgba8();
+            v.a = u8::try_from((u32::from(v.a) * opacity + 127) / 255).unwrap_or(u8::MAX);
+            v
+        })
     };
     let indent = f64::from(p.indent.raw());
     // The join the bevel node finds applied to it (`Kernel/nodebev.cpp:
@@ -2731,6 +2736,87 @@ mod tests {
         assert_eq!(proxy_level(6000, 4000, (6000, 4000), (0.0, 0.0), 3), 2);
         // A small master shown at its size is its own proxy.
         assert_eq!(proxy_level(60, 40, (60, 40), (60.0, 40.0), 7), 0);
+    }
+
+    /// An inner bevel over a rectangle filled flat, with a flat mix
+    /// transparency of `level` on it when given.
+    fn bevelled_rectangle(level: Option<u8>) -> (Document, NodeId) {
+        use xarast_color::{Colour, ColourValue, Rgba8, Transparency};
+        use xarast_doc::fill::{FillGeometry, Paint};
+        use xarast_doc::{
+            AttrValue, BevelParams, BuildLimits, LiveKind, LiveNode, LiveRole, PathNode,
+            RegenState,
+        };
+        let mut b = xarast_doc::builder::skeleton(BuildLimits::default()).unwrap();
+        let kind = LiveKind::Bevel(Box::new(BevelParams {
+            indent: Mp::new(4_000),
+            outer: false,
+            ..BevelParams::default()
+        }));
+        let live = |role| {
+            NodeKind::Live(Box::new(LiveNode {
+                role,
+                kind: kind.clone(),
+                regen: RegenState::Clean,
+                name: None,
+            }))
+        };
+        b.node(live(LiveRole::Controller)).unwrap();
+        b.push_scope().unwrap();
+        b.node(live(LiveRole::Generated)).unwrap();
+        b.node(live(LiveRole::Source)).unwrap();
+        b.push_scope().unwrap();
+        let mut pb = Path::builder();
+        pb.move_to(Point::raw(0, 0))
+            .line_to(Point::raw(50_000, 0))
+            .line_to(Point::raw(50_000, 40_000))
+            .line_to(Point::raw(0, 40_000))
+            .close();
+        b.node(NodeKind::Path(Box::new(PathNode::new(pb.build()))))
+            .unwrap();
+        b.push_scope().unwrap();
+        let blue = Colour::Direct(ColourValue::from_rgba8(Rgba8 {
+            r: 40,
+            g: 80,
+            b: 220,
+            a: 255,
+        }));
+        b.attribute(AttrValue::Fill(Paint::Flat { value: blue }))
+            .unwrap();
+        if let Some(level) = level {
+            b.attribute(AttrValue::TranspFill(FillGeometry::Flat {
+                value: Transparency::mix(level),
+            }))
+            .unwrap();
+        }
+        b.pop_scope();
+        b.pop_scope();
+        b.pop_scope();
+        let doc = b.finish().unwrap().0;
+        let controller = doc
+            .tree
+            .preorder(doc.tree.root())
+            .find(|&n| {
+                matches!(doc.tree.kind(n), Some(NodeKind::Live(l)) if l.role == LiveRole::Controller)
+            })
+            .unwrap();
+        (doc, controller)
+    }
+
+    #[test]
+    fn a_painted_inner_band_is_as_transparent_as_the_object_it_copies() {
+        let alpha = |level| {
+            let (doc, c) = bevelled_rectangle(level);
+            let (LayerEffect::Bevel(b), _) = bevel_of(&doc, c, None).unwrap() else {
+                panic!("a bevel");
+            };
+            assert!(b.paint_inner);
+            b.colour.a
+        };
+        assert_eq!(alpha(None), 255);
+        // 128 of 255 transparent: 127 of 255 opaque.
+        assert_eq!(alpha(Some(128)), 127);
+        assert_eq!(alpha(Some(255)), 0);
     }
 
     #[test]

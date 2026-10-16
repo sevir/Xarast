@@ -2332,7 +2332,11 @@ impl<'d, 'b> Emitter<'d, 'b> {
         let (hex, opacity) = match &inner {
             Some(c) => {
                 let rgba = c.resolve(&self.doc.resources.colours).to_rgba8();
-                (self.shadow_colour(c).0, f64::from(rgba.a) / 255.0)
+                let fade = bv.flat_paint_opacity(&self.doc.tree, n, &self.doc.defaults);
+                (
+                    self.shadow_colour(c).0,
+                    f64::from(rgba.a) / 255.0 * f64::from(fade) / 255.0,
+                )
             }
             None => (hex, opacity),
         };

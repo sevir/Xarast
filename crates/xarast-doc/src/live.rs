@@ -554,6 +554,36 @@ impl BevelParams {
         }
     }
 
+    /// The opacity (`255` opaque) a painted inner band is drawn with: the
+    /// first object's flat transparency, which the original's bevel node
+    /// copies together with the fill (`tools/opbevel.cpp:1318-1341`). Only
+    /// an ordinary (mix) transparency is an opacity; any other mode, a
+    /// gradient or no transparency leaves the band opaque.
+    #[must_use]
+    pub fn flat_paint_opacity(
+        &self,
+        tree: &Tree,
+        controller: NodeId,
+        defaults: &crate::attr::DefaultAttrs,
+    ) -> u8 {
+        let Some(source) = parts(tree, controller).map(|p| p.source) else {
+            return 255;
+        };
+        let Some(first) = first_ink(tree, source) else {
+            return 255;
+        };
+        match crate::attr::resolve_uncached(tree, first, defaults)
+            .get(crate::attr::AttrSlot::TranspFillGeometry)
+        {
+            crate::attr::AttrValue::TranspFill(crate::fill::FillGeometry::Flat { value })
+                if value.mode == xarast_color::TranspMode::Mix =>
+            {
+                255 - value.level
+            }
+            _ => 255,
+        }
+    }
+
     /// How far an outer bevel reaches beyond its object; 0 for an inner
     /// one (and for a negative width).
     #[must_use]
@@ -566,14 +596,9 @@ impl BevelParams {
     }
 }
 
-/// The fill a live controller's source's first object is drawn with.
-pub(crate) fn first_fill(
-    tree: &Tree,
-    controller: NodeId,
-    defaults: &crate::attr::DefaultAttrs,
-) -> Option<crate::fill::Paint> {
-    let source = parts(tree, controller)?.source;
-    let first = tree.preorder(source).find(|&n| {
+/// The first object under `source`.
+fn first_ink(tree: &Tree, source: NodeId) -> Option<NodeId> {
+    tree.preorder(source).find(|&n| {
         matches!(
             tree.kind(n),
             Some(
@@ -583,7 +608,17 @@ pub(crate) fn first_fill(
                     | NodeKind::TextItem(_)
             )
         )
-    })?;
+    })
+}
+
+/// The fill a live controller's source's first object is drawn with.
+pub(crate) fn first_fill(
+    tree: &Tree,
+    controller: NodeId,
+    defaults: &crate::attr::DefaultAttrs,
+) -> Option<crate::fill::Paint> {
+    let source = parts(tree, controller)?.source;
+    let first = first_ink(tree, source)?;
     Some(
         crate::attr::resolve_uncached(tree, first, defaults)
             .fill()

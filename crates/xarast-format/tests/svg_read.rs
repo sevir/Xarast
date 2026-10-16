@@ -1942,6 +1942,15 @@ fn no_join_written_is_a_mitre_as_when_the_default_was_one() {
 /// One bevel controller over `shape`, with the join in force (None: the
 /// default) and the bevel's own colour.
 fn bake_bevel_doc(cases: &[(NodeKind, bool, Option<Join>, Option<Colour>)]) -> Document {
+    bake_bevel_doc_with(cases, None)
+}
+
+/// [`bake_bevel_doc`] with a flat mix transparency of `level` on every
+/// object.
+fn bake_bevel_doc_with(
+    cases: &[(NodeKind, bool, Option<Join>, Option<Colour>)],
+    transparency: Option<u8>,
+) -> Document {
     let mut b = xarast_doc::builder::skeleton(BuildLimits::default()).unwrap();
     for (shape, outer, join, colour) in cases {
         let kind = LiveKind::Bevel(Box::new(xarast_doc::BevelParams {
@@ -1972,6 +1981,12 @@ fn bake_bevel_doc(cases: &[(NodeKind, bool, Option<Join>, Option<Colour>)]) -> D
         b.node(shape.clone()).unwrap();
         b.push_scope().unwrap();
         b.attribute(flat(rgb(0.9, 0.5, 0.1))).unwrap();
+        if let Some(level) = transparency {
+            b.attribute(AttrValue::TranspFill(FillGeometry::Flat {
+                value: Transparency::mix(level),
+            }))
+            .unwrap();
+        }
         b.pop_scope();
         b.pop_scope();
         b.pop_scope();
@@ -2033,6 +2048,19 @@ fn an_inner_bevel_with_a_flat_paint_bakes_that_paint_over_the_object() {
     // object's fill when it is flat).
     assert!(filters[0].contains("<feFlood flood-color=\"#334de6\""), "{svg}");
     assert!(filters[1].contains("<feFlood flood-color=\"#e6801a\""), "{svg}");
+}
+
+#[test]
+fn a_painted_inner_band_takes_its_object_s_flat_transparency() {
+    let cases = [(rectangle(10_000, 10_000), false, None, None)];
+    let band = |doc: &Document| {
+        let svg = svg_of(&package(doc, SvgOptions::default()));
+        let i = svg.find("values=\"0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ").expect("{svg}");
+        svg[i + 38..].split(' ').next().unwrap().to_owned()
+    };
+    assert_eq!(band(&bake_bevel_doc(&cases)), "1");
+    // 128 of 255 transparent leaves 127 of 255 opaque.
+    assert_eq!(band(&bake_bevel_doc_with(&cases, Some(128))), ".498");
 }
 
 /// Contour controllers as the `.xar` importer builds them (XARA-T-0330):
