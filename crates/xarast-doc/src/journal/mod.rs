@@ -34,10 +34,10 @@
 //!
 //! # Addressing nodes: tags
 //!
-//! [`NodeId`](crate::NodeId)s depend on allocation order and are never
+//! [`NodeId`]s depend on allocation order and are never
 //! serialised. Entries name nodes by [`Tag`], which is unique within a
 //! document, survives [`Document::restore`] and the journal's
-//! [base](base) unchanged, and is recorded for every node a transaction
+//! [base] unchanged, and is recorded for every node a transaction
 //! creates, so replay gives each new node the tag the live one had.
 //!
 //! # Undo, redo and the base
