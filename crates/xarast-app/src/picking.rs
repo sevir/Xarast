@@ -184,7 +184,8 @@ fn parallelogram(origin: DocPoint, major: xarast_geom::Vector, minor: xarast_geo
 pub(crate) fn geometry_of(kind: &NodeKind) -> Option<Arc<Path>> {
     match kind {
         NodeKind::Path(p) => Some(Arc::clone(&p.data)),
-        NodeKind::QuickShape(q) => q.path.clone(),
+        // The cached path, else the one the parameters generate.
+        NodeKind::QuickShape(q) => q.path.clone().or_else(|| q.outline().map(Arc::new)),
         NodeKind::Shape(s) => Some(Arc::new(match s.shape {
             xarast_doc::ShapeKind::Rect => parallelogram(s.origin, s.major, s.minor),
             xarast_doc::ShapeKind::Ellipse => {

@@ -30,16 +30,22 @@
 //! | Drag | Constrain | Adjust |
 //! |---|---|---|
 //! | on the canvas: draw | a square or a circle (the pointer is put on the 45° diagonal) | from the centre |
+//! | on the canvas: draw | Adjust + Constrain: *radius* mode | |
 //! | the rectangle's radius handle | — | — |
 //!
 //! Adjust pressed *during* a drag re-centres on the middle of the box drawn
 //! so far, and releasing it goes back to drawing from a corner, as the
 //! original does. Held from the start, the press point is the centre.
 //!
-//! The shape being drawn is previewed as an overlay outline: the walker
-//! draws no phantom nodes yet, so the preview has no fill. Nothing is
-//! emitted before the button comes up; the drag is one "Create Rectangle"
-//! step.
+//! Adjust and Constrain together switch to the original's *radius* mode
+//! ([`ShapeKind::drawn_radius`]): the centre stays put and the shape turns
+//! with the pointer, which is kept on a multiple of the constrain angle.
+//!
+//! The shape being drawn is previewed as a filled phantom object
+//! ([`Preview::phantom`](crate::tool::Preview)), painted with the
+//! attributes the creation will give it, plus its outline as an overlay.
+//! Nothing is emitted before the button comes up; the drag is one "Create
+//! Rectangle" step.
 
 use std::f64::consts::SQRT_2;
 
@@ -49,9 +55,10 @@ use xarast_geom::{Mp, Point, Vector};
 use crate::edit::{EditState, SelectMode, ToolId};
 use crate::geometry::DocPoint;
 use crate::ops::EditCommand;
+use crate::selector::CONSTRAIN_ANGLE;
 use crate::tool::{
     CursorKind, GestureEvent, HandleShape, Infobar, InfobarField, InfobarItem, InfobarValue,
-    InteractionState, OverlayShape, Tool, ToolCtx, ToolView, outline_overlay,
+    InteractionState, OverlayShape, PhantomShape, Tool, ToolCtx, ToolView, outline_overlay,
 };
 
 /// Whether a quick shape is a rectangle: four sides, not circular, not a
@@ -255,6 +262,18 @@ impl ShapeKind {
         to: DocPoint,
         constrain: bool,
     ) -> Option<QuickShape> {
+        self.drawn_about(start, centre, to, constrain).0
+    }
+
+    /// [`ShapeKind::drawn`], and the centre the box has even when it is
+    /// too small to make a shape (radius mode turns about it).
+    fn drawn_about(
+        self,
+        start: DocPoint,
+        centre: Option<DocPoint>,
+        to: DocPoint,
+        constrain: bool,
+    ) -> (Option<QuickShape>, DocPoint) {
         let (px, py) = to.to_f64();
         let (c, hw, hh) = if let Some(r) = centre {
             let (rx, ry) = r.to_f64();
@@ -281,13 +300,49 @@ impl ShapeKind {
             )
         };
         if hw < 0.5 || hh < 0.5 {
-            return None;
+            return (None, c);
         }
-        Some(match self {
+        let shape = match self {
             ShapeKind::Rectangle => rectangle(c, hw, hh),
             ShapeKind::Ellipse => ellipse(c, hw, hh),
-        })
+        };
+        (Some(shape), c)
     }
+
+    /// The shape Adjust+Constrain draws: the original's *radius* mode
+    /// (`research/04 §4.10`). The centre stays where it is; the pointer,
+    /// put on the nearest multiple of the constrain angle about it, sets
+    /// the circumradius, and the shape turns with it. Both axes have the
+    /// pointer's distance as length: the major one points away from the
+    /// pointer, the minor one a quarter turn from the pointer (the major
+    /// turned clockwise, as in a drawn box), so a rectangle is a square
+    /// and an ellipse a circle. `None` when the pointer is on the centre.
+    #[must_use]
+    pub fn drawn_radius(self, centre: DocPoint, to: DocPoint) -> Option<QuickShape> {
+        let (cx, cy) = centre.to_f64();
+        let (dx, dy) = (to.to_f64().0 - cx, to.to_f64().1 - cy);
+        if dx.hypot(dy) < 0.5 {
+            return None;
+        }
+        let major = v(-dx, -dy);
+        let minor = v(-dy, dx);
+        Some(blank(centre, major, minor, self == ShapeKind::Ellipse))
+    }
+}
+
+/// The pointer put on the nearest multiple of the constrain angle about
+/// `centre`, at its true distance (the original truncates to whole units;
+/// so do we, by rounding to millipoints).
+#[must_use]
+pub fn constrain_about(centre: DocPoint, to: DocPoint) -> DocPoint {
+    let (cx, cy) = centre.to_f64();
+    let (dx, dy) = (to.to_f64().0 - cx, to.to_f64().1 - cy);
+    let r = dx.hypot(dy);
+    if r == 0.0 {
+        return to;
+    }
+    let a = (dy.atan2(dx) / CONSTRAIN_ANGLE).round() * CONSTRAIN_ANGLE;
+    Point::from_f64_round(cx + r * a.cos(), cy + r * a.sin())
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -296,6 +351,9 @@ enum ShapeDrag {
     Create {
         start: DocPoint,
         centre: Option<DocPoint>,
+        /// The centre of the shape as last drawn: radius mode turns
+        /// about it.
+        at: DocPoint,
         shape: Option<QuickShape>,
     },
     /// Dragging a rectangle's radius handle.
@@ -304,6 +362,19 @@ enum ShapeDrag {
         base: QuickShape,
         shape: QuickShape,
     },
+}
+
+/// Previews the shape being drawn as a filled phantom object of the
+/// active layer, with the attributes the creation will give it.
+fn show(cx: &mut ToolCtx<'_>, shape: Option<&QuickShape>) {
+    cx.preview.phantom = match (shape, cx.edit.active_layer()) {
+        (Some(shape), Some(layer)) => vec![PhantomShape {
+            layer,
+            shape: shape.clone(),
+            attrs: cx.edit.current.values().to_vec(),
+        }],
+        _ => Vec::new(),
+    };
 }
 
 /// The rectangle or the ellipse tool.
@@ -337,7 +408,9 @@ impl ShapeTool {
         let m = cx.modifiers;
         // The dragged corner snaps (`phase-07` T8.7); the radius handle
         // does not, it is a length along the edge.
-        let to = if matches!(self.drag, Some(ShapeDrag::Create { .. })) {
+        // Radius mode constrains first and snaps after, as the original.
+        let radius_mode = m.adjust && m.constrain;
+        let to = if matches!(self.drag, Some(ShapeDrag::Create { .. })) && !radius_mode {
             cx.snap_point(to)
         } else {
             to
@@ -346,8 +419,19 @@ impl ShapeTool {
             Some(ShapeDrag::Create {
                 start,
                 centre,
+                at,
                 shape,
             }) => {
+                if m.adjust && m.constrain {
+                    // Radius mode: the box state stays as it was, so
+                    // releasing Constrain goes on from there.
+                    let to = constrain_about(*at, to);
+                    let to = cx.snap_point(to);
+                    *shape = self.kind.drawn_radius(*at, to);
+                    show(cx, shape.as_ref());
+                    cx.requests.overlay_changed = true;
+                    return;
+                }
                 match (m.adjust, *centre) {
                     (true, None) => {
                         let (a, b) = (start.to_f64(), to.to_f64());
@@ -362,7 +446,10 @@ impl ShapeTool {
                     }
                     _ => {}
                 }
-                *shape = self.kind.drawn(*start, *centre, to, m.constrain);
+                let (drawn, c) = self.kind.drawn_about(*start, *centre, to, m.constrain);
+                *shape = drawn;
+                *at = c;
+                show(cx, shape.as_ref());
             }
             Some(ShapeDrag::Radius { node, base, shape }) => {
                 *shape = with_radius(base, radius_at(base, to));
@@ -412,6 +499,7 @@ impl Tool for ShapeTool {
                         ShapeDrag::Create {
                             start: from,
                             centre: cx.modifiers.adjust.then_some(from),
+                            at: from,
                             shape: None,
                         }
                     }

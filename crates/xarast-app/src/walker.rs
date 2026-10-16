@@ -476,6 +476,7 @@ impl SceneWalker {
         // Live controllers drawn with previewed parameters.
         let live_over: HashMap<NodeId, &xarast_doc::LiveKind> =
             preview.live.iter().map(|(n, k)| (*n, k)).collect();
+        let phantoms: &[crate::tool::PhantomShape] = &preview.phantom;
         let preview_xf = preview
             .transform
             .as_ref()
@@ -626,6 +627,13 @@ impl SceneWalker {
                         NodeKind::Layer(l) => {
                             if !l.visible || l.guide {
                                 walk.control(xarast_doc::Descend::Skip);
+                            } else if !phantoms.is_empty()
+                                && doc.tree.links(node).first_child.is_none()
+                            {
+                                // No scope event follows an empty layer.
+                                self.paint_phantoms(
+                                    doc, node, phantoms, &mut attrs, quality, &mut b,
+                                );
                             }
                             continue;
                         }
@@ -757,6 +765,11 @@ impl SceneWalker {
                     self.draft_ramps = overrides.contains_key(&parent);
                     self.paint(doc, edit, parent, &attrs, quality, &mut b);
                     self.draft_ramps = false;
+                    if !phantoms.is_empty()
+                        && matches!(doc.tree.kind(parent), Some(NodeKind::Layer(_)))
+                    {
+                        self.paint_phantoms(doc, parent, phantoms, &mut attrs, quality, &mut b);
+                    }
                     if let Some(f) = frames.pop() {
                         debug_assert_eq!(f.node, parent);
                         // In the reverse of `open`'s order: a ClipView
@@ -1239,7 +1252,7 @@ impl SceneWalker {
                 self.stats.text_pending += 1;
                 return;
             }
-            NodeKind::QuickShape(q) if q.path.is_none() => {
+            NodeKind::QuickShape(q) if quick_shape_path(q).is_none() => {
                 self.shapes_pending_inc();
                 return;
             }
@@ -1771,6 +1784,59 @@ impl SceneWalker {
         b.finish_node(id, content_hash(doc, node, mix64(self.scope, geom.version)));
     }
 
+    /// Draws the previewed shapes of `layer` on top of what it holds,
+    /// each as the creation command will add it: its own attributes over
+    /// the layer's scope.
+    fn paint_phantoms(
+        &mut self,
+        doc: &Document,
+        layer: NodeId,
+        phantoms: &[crate::tool::PhantomShape],
+        attrs: &mut AttrStack,
+        quality: RenderQuality,
+        b: &mut SceneBuilder<'_>,
+    ) {
+        for (i, ph) in phantoms
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.layer == layer)
+        {
+            let Some(path) = quick_shape_path(&ph.shape) else {
+                continue;
+            };
+            attrs.push_scope();
+            let mut scope = self.scope;
+            for a in &ph.attrs {
+                attrs.push(Arc::new(a.clone()));
+                scope = mix64(scope, value_fingerprint(a));
+            }
+            let shape_fp = {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                format!("{:?}", ph.shape).hash(&mut h);
+                h.finish()
+            };
+            let mut bytes = [0u8; 16];
+            bytes[..8].copy_from_slice(&shape_fp.to_le_bytes());
+            bytes[8..].copy_from_slice(&scope.to_le_bytes());
+            // Bits 63 and 62: no tag, no ring index and no preview group
+            // id reaches both.
+            let id = SceneNodeId((3 << 62) | i as u64);
+            self.paint_geometry(
+                doc,
+                id,
+                &path,
+                true,
+                true,
+                attrs,
+                quality,
+                b,
+                ContentHash(bytes),
+            );
+            attrs.pop_scope();
+        }
+    }
+
     fn shapes_pending_inc(&mut self) {
         self.stats.shapes_pending += 1;
     }
@@ -2287,9 +2353,8 @@ fn stroke_style_of<'a>(get: impl Fn(AttrSlot) -> &'a AttrValue) -> StrokeStyle {
 
 /// The geometry a node paints, in document space.
 ///
-/// `QuickShape` uses the path the importer cached; generating one from
-/// the parameters is Phase 7, and until then a quick shape with no cached
-/// path draws nothing rather than drawing something wrong.
+/// `QuickShape` uses the path the importer (or a creation command)
+/// cached, else generates one from its parameters.
 fn geometry_of(doc: &Document, node: NodeId) -> Option<PathRef> {
     match doc.tree.kind(node)? {
         NodeKind::Path(p) => Some(PathRef::from_arc(Arc::clone(&p.data))),
@@ -2297,8 +2362,17 @@ fn geometry_of(doc: &Document, node: NodeId) -> Option<PathRef> {
             xarast_doc::ShapeKind::Rect => parallelogram_path(s.origin, s.major, s.minor),
             xarast_doc::ShapeKind::Ellipse => ellipse_path(s.origin, s.major, s.minor),
         })),
-        NodeKind::QuickShape(q) => q.path.as_ref().map(|p| PathRef::from_arc(Arc::clone(p))),
+        NodeKind::QuickShape(q) => quick_shape_path(q),
         _ => None,
+    }
+}
+
+/// A quick shape's outline: the cached path, else the one its parameters
+/// generate (XARA-T-0169). `None` only when the parameters make none.
+fn quick_shape_path(q: &xarast_doc::QuickShape) -> Option<PathRef> {
+    match &q.path {
+        Some(p) => Some(PathRef::from_arc(Arc::clone(p))),
+        None => q.outline().map(PathRef::new),
     }
 }
 

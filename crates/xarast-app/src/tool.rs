@@ -214,6 +214,24 @@ pub struct Preview {
     /// shadow or a bevel being dragged or slid (phase 13 C7, D6). The
     /// value is exactly what the release commits.
     pub live: Vec<(NodeId, xarast_doc::LiveKind)>,
+    /// Objects drawn that are not in the document: the shape being drawn
+    /// (phase 7, XARA-T-0169). Each lands on top of its layer, painted with
+    /// its own attributes, exactly as the creation command will add it.
+    pub phantom: Vec<PhantomShape>,
+}
+
+/// A quick shape drawn in a layer without being in the document: a
+/// creation drag's live, filled preview ([`Preview::phantom`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PhantomShape {
+    /// The layer it would be created in; it is drawn on top of what the
+    /// layer holds.
+    pub layer: NodeId,
+    /// The shape.
+    pub shape: xarast_doc::QuickShape,
+    /// Its own attributes, as the creation command will write them; the
+    /// layer's and the document's defaults stand behind them.
+    pub attrs: Vec<xarast_doc::AttrValue>,
 }
 
 /// Text shown in a story as if it had been typed at `at`, without being
@@ -248,6 +266,7 @@ impl Preview {
         self.text = None;
         self.photo.clear();
         self.live.clear();
+        self.phantom.clear();
     }
 
     /// Whether there is nothing to apply.
@@ -259,6 +278,7 @@ impl Preview {
             && self.text.is_none()
             && self.photo.is_empty()
             && self.live.is_empty()
+            && self.phantom.is_empty()
     }
 
     /// The previewed nodes as a set, for the walker's lookups.

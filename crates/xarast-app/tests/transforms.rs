@@ -736,3 +736,216 @@ fn a_locked_layer_refuses_every_edit() {
     assert_eq!(s.doc.canonical_digest(), before);
     assert_eq!(s.bus.history().len(), steps);
 }
+
+// ─────────────────────────────── shape tool leftovers (XARA-T-0169)
+
+fn red_fill() -> AttrValue {
+    AttrValue::Fill(xarast_doc::fill::Paint::Flat {
+        value: xarast_color::Colour::Direct(xarast_color::ColourValue::rgbt(0.8, 0.1, 0.1, 0.0)),
+    })
+}
+
+fn pixels(s: &Session) -> Vec<u8> {
+    xarast_app::headless::render(
+        s,
+        &xarast_app::HeadlessOptions {
+            size: xarast_app::DeviceSize::new(200, 160),
+            frame: xarast_app::HeadlessFrame::Fit(xarast_geom::Rect::new(
+                Point::raw(0, 0),
+                Point::raw(400_000, 320_000),
+            )),
+            ..xarast_app::HeadlessOptions::default()
+        },
+    )
+    .unwrap()
+    .surface
+    .data()
+    .to_vec()
+}
+
+#[test]
+fn the_creation_preview_is_a_filled_phantom_and_the_commit_renders_it() {
+    for tool in [ToolId::Rectangle, ToolId::Ellipse] {
+        let mut s = Session::new_empty(DocumentId(1));
+        s.apply(Intent::SetCurrentAttribute(red_fill())).unwrap();
+        s.apply(Intent::ChooseTool(tool)).unwrap();
+        let blank = pixels(&s);
+        let before = s.doc.canonical_digest();
+        let (a, b) = (
+            dev(&s, Point::raw(100_000, 100_000)),
+            dev(&s, Point::raw(300_000, 220_000)),
+        );
+        press(&mut s, a, 0);
+        move_to(&mut s, DevicePoint::new(a.x + 20.0, a.y + 10.0));
+        move_to(&mut s, b);
+        assert_eq!(s.preview().phantom.len(), 1, "{tool:?}");
+        assert_eq!(s.doc.canonical_digest(), before, "nothing is written");
+        let previewed = pixels(&s);
+        assert_ne!(previewed, blank, "{tool:?}: the preview is drawn, filled");
+        release(&mut s, b, 10);
+        assert!(s.preview().is_empty(), "the release drops the phantom");
+        assert_eq!(
+            pixels(&s),
+            previewed,
+            "{tool:?}: the commit renders what the preview drew"
+        );
+        undo_redo_exact(&mut s, before);
+    }
+}
+
+#[test]
+fn escape_leaves_no_phantom() {
+    let mut s = Session::new_empty(DocumentId(1));
+    s.apply(Intent::ChooseTool(ToolId::Rectangle)).unwrap();
+    let a = dev(&s, Point::raw(100_000, 100_000));
+    press(&mut s, a, 0);
+    move_to(&mut s, DevicePoint::new(a.x + 30.0, a.y + 30.0));
+    assert_eq!(s.preview().phantom.len(), 1);
+    s.apply(Intent::Cancel).unwrap();
+    assert!(s.preview().phantom.is_empty());
+    assert_eq!(s.bus.history().len(), 0);
+}
+
+#[test]
+fn adjust_with_constrain_turns_the_shape_about_its_centre() {
+    for tool in [ToolId::Rectangle, ToolId::Ellipse] {
+        let mut s = Session::new_empty(DocumentId(1));
+        s.apply(Intent::ChooseTool(tool)).unwrap();
+        let before = s.doc.canonical_digest();
+        mods(&mut s, true, true);
+        // 100 000 mp away at about 53 degrees, which the constrain angle
+        // puts on 45 degrees.
+        let c = Point::raw(200_000, 150_000);
+        drag(&mut s, c, Point::raw(260_000, 230_000), 0);
+        let q = quick(&s, only_selected(&s));
+        assert!(
+            near(q.centre.x, 200_000, 2) && near(q.centre.y, 150_000, 2),
+            "{tool:?}: the centre stays at the press"
+        );
+        let (w, h) = size(&q);
+        assert!((w - h).abs() < 4.0, "{tool:?}: a square or a circle");
+        let reach = f64::hypot(60_000.0, 80_000.0);
+        let (mx, my) = q.major.to_f64();
+        assert!(
+            (mx.hypot(my) - reach).abs() < 4.0,
+            "the axes span the pointer"
+        );
+        // The major axis points away from the pointer, on the diagonal.
+        assert!(mx < -1000.0 && my < -1000.0, "{mx} {my}");
+        assert!((mx - my).abs() < 4.0, "on the diagonal: {mx} {my}");
+        if tool == ToolId::Rectangle {
+            // The sides run on the diagonals: its box is wider than a
+            // square's of the same sides, not the drawn box's.
+            let r = bounds(&s, only_selected(&s));
+            assert!(
+                f64::from(r.width().raw()) > reach * 1.4,
+                "a square turned half a quadrant: {r:?}"
+            );
+        }
+        assert_eq!(s.bus.history().len(), 1);
+        undo_redo_exact(&mut s, before);
+    }
+}
+
+#[test]
+fn radius_mode_turns_about_the_centre_of_the_box_drawn_so_far() {
+    let mut s = Session::new_empty(DocumentId(1));
+    s.apply(Intent::ChooseTool(ToolId::Ellipse)).unwrap();
+    let (a, b) = (
+        dev(&s, Point::raw(100_000, 100_000)),
+        dev(&s, Point::raw(300_000, 200_000)),
+    );
+    press(&mut s, a, 0);
+    move_to(&mut s, b);
+    mods(&mut s, true, true);
+    let e = dev(&s, Point::raw(250_000, 150_000));
+    move_to(&mut s, e);
+    release(&mut s, e, 10);
+    let q = quick(&s, only_selected(&s));
+    // The box drawn so far was centred on (200 000, 150 000).
+    assert!(
+        near(q.centre.x, 200_000, 1500) && near(q.centre.y, 150_000, 1500),
+        "{:?}",
+        q.centre
+    );
+    let (w, h) = size(&q);
+    assert!((w - 100_000.0).abs() < 2000.0 && (h - w).abs() < 4.0);
+}
+
+#[test]
+fn convert_to_shapes_makes_plain_paths_of_quick_shapes_in_one_exact_step() {
+    let mut s = Session::new_empty(DocumentId(1));
+    s.apply(Intent::SetCurrentAttribute(red_fill())).unwrap();
+    for tool in [ToolId::Rectangle, ToolId::Ellipse] {
+        s.apply(Intent::ChooseTool(tool)).unwrap();
+        drag(
+            &mut s,
+            Point::raw(100_000, 100_000),
+            Point::raw(200_000, 160_000),
+            0,
+        );
+    }
+    let objs: Vec<NodeId> = xarast_app::edit::selectable_objects(&s.doc).collect();
+    assert_eq!(objs.len(), 2);
+    s.apply(Intent::Select {
+        nodes: objs.clone(),
+        mode: xarast_app::SelectMode::Replace,
+    })
+    .unwrap();
+    let before = s.doc.canonical_digest();
+    let len = s.bus.history().len();
+    let px = pixels(&s);
+    s.apply(Intent::ConvertToShapes).unwrap();
+    assert_eq!(s.bus.history().len(), len + 1, "one undo step");
+    for o in &objs {
+        assert!(
+            matches!(s.doc.tree.kind(*o), Some(NodeKind::Path(_))),
+            "{o:?} is a plain path"
+        );
+    }
+    assert_eq!(pixels(&s), px, "it looks the same");
+    undo_redo_exact(&mut s, before);
+    // Nothing left to convert after a redo: no further step.
+    let len = s.bus.history().len();
+    s.apply(Intent::ConvertToShapes).unwrap();
+    assert_eq!(s.bus.history().len(), len);
+}
+
+/// A quick shape without a cached path is generated from its parameters
+/// by the walker and by Convert.
+#[test]
+fn a_quick_shape_with_no_cached_path_is_generated() {
+    #[derive(Debug)]
+    struct AddBare(QuickShape);
+    impl Command for AddBare {
+        fn label(&self) -> &'static str {
+            "Fixture"
+        }
+        fn run(&self, tx: &mut Tx<'_>) -> Result<(), EditError> {
+            let spread = tx.doc().active_spread();
+            let layer = tx.doc().active_layer(spread).expect("a layer");
+            let n = tx.create(NodeKind::QuickShape(Box::new(self.0.clone())))?;
+            tx.attach(n, layer, Attach::LastChild)?;
+            let fill = tx.create(NodeKind::Attr(Box::new(xarast_doc::AttrNode::new(
+                red_fill(),
+            ))))?;
+            tx.attach(fill, n, Attach::LastChild)
+        }
+    }
+    let mut s = Session::new_empty(DocumentId(1));
+    let bare = xarast_app::shapes::ellipse(Point::raw(200_000, 160_000), 80_000.0, 50_000.0);
+    assert!(bare.path.is_none());
+    let blank = pixels(&s);
+    s.dispatch(&AddBare(bare)).unwrap();
+    s.rebuild_scene(None).unwrap();
+    assert_eq!(s.walk_stats().shapes_pending, 0);
+    assert_ne!(pixels(&s), blank, "it is drawn");
+    let n = xarast_app::edit::selectable_objects(&s.doc).next().unwrap();
+    s.apply(Intent::Select {
+        nodes: vec![n],
+        mode: xarast_app::SelectMode::Replace,
+    })
+    .unwrap();
+    s.apply(Intent::ConvertToShapes).unwrap();
+    assert!(matches!(s.doc.tree.kind(n), Some(NodeKind::Path(_))));
+}

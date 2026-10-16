@@ -700,6 +700,17 @@ impl Session {
                 };
             }
         }
+        // A shape being drawn lies outside the committed bounds too.
+        for ph in &self.preview.phantom {
+            if let Some(p) = ph.shape.outline() {
+                let r = p.tight_bounds().inflated(xarast_geom::Mp::new(1_000));
+                self.scene_ink = if self.scene_ink.is_empty() {
+                    r
+                } else {
+                    self.scene_ink.union(r)
+                };
+            }
+        }
         // A previewed outer contour reaches as far as its previewed width.
         for (c, kind) in &self.preview.live {
             // A previewed cage moves the mould's copy anywhere: the image
