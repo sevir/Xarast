@@ -320,7 +320,15 @@ pub fn regenerate_with(
         },
         // Geometry too: the source's outlines through the cage. Text is
         // laid out by the caller that has fonts (`mould::generate_with`).
-        LiveKind::Mould(_) => match crate::mould::generate(doc, controller) {
+        LiveKind::Mould(_) => match crate::mould::generate_preview(
+            doc,
+            controller,
+            match over.kind {
+                Some(LiveKind::Mould(p)) => Some(p),
+                _ => None,
+            },
+            &mut |_, _| None,
+        ) {
             Some(shapes) => LiveOutput::Shapes(Arc::from(shapes)),
             None => LiveOutput::Stored,
         },

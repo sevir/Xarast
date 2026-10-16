@@ -75,16 +75,30 @@ pub fn generate_with(
     controller: NodeId,
     text: &mut TextOutlines<'_>,
 ) -> Option<Vec<GeneratedShape>> {
+    generate_preview(doc, controller, None, text)
+}
+
+/// [`generate_with`] with `params` in place of the controller's own (a
+/// mould tool drag, `regen::RegenOverride`): the cage being dragged. The
+/// source is the controller's, through the previewed cage.
+#[must_use]
+pub fn generate_preview(
+    doc: &Document,
+    controller: NodeId,
+    params: Option<&MouldParams>,
+    text: &mut TextOutlines<'_>,
+) -> Option<Vec<GeneratedShape>> {
     let tree = &doc.tree;
     let Some(NodeKind::Live(l)) = tree.kind(controller) else {
         return None;
     };
-    let LiveKind::Mould(params) = &l.kind else {
+    let LiveKind::Mould(own) = &l.kind else {
         return None;
     };
     if l.role != LiveRole::Controller {
         return None;
     }
+    let params: &MouldParams = params.unwrap_or(own);
     let p = parts(tree, controller)?;
     let source = source_rect(doc, params, p.source);
     let g = params.geometry(source);
