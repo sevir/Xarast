@@ -567,8 +567,10 @@ pub fn silhouette_of(
     }
 }
 
-/// An object's outline in document space.
-pub(crate) fn geometry(doc: &Document, node: NodeId) -> Option<Path> {
+/// An object's outline in document space: a path's own, a shape's or a
+/// quick shape's outline; `None` for anything else.
+#[must_use]
+pub fn geometry(doc: &Document, node: NodeId) -> Option<Path> {
     match doc.tree.kind(node)? {
         NodeKind::Path(p) => Some((*p.data).clone()),
         NodeKind::Shape(s) => {
@@ -701,9 +703,20 @@ pub(crate) fn visible(doc: &Document, p: &crate::fill::Paint) -> bool {
     }
 }
 
+/// How far a ring's fill points that the other end lacks move: not at
+/// all. The original blends a contour's attribute maps with the same calls
+/// as a blend's (`Kernel/nodecntr.cpp:490-600` calls the attributes'
+/// `Blend`), whose missing points move by the two objects' box-centre
+/// shift; a contour's rings and its object share a centre, so the shift
+/// is nothing (Xarast's reading).
+const NO_SHIFT: (f64, f64) = (0.0, 0.0);
+
 /// The attributes a ring at `ratio` is drawn with, on top of the start
 /// attributes: one value per blended slot whose blend differs from the
-/// start's.
+/// start's. Fills of any two kinds blend as a blend's do
+/// (`blend_fill`, XARA-T-0343): the start's kind, colours and points
+/// blended, ramps of different stop counts over the union of their
+/// positions.
 #[must_use]
 pub fn blend_attrs(
     doc: &Document,
@@ -731,11 +744,11 @@ pub fn blend_attrs(
                 blend_colour_paint(doc, a, b, t, effect).map(AttrValue::StrokeColour)
             }
             (AttrValue::TranspFill(a), AttrValue::TranspFill(b)) => {
-                blend_paint(a, b, t, effect).map(AttrValue::TranspFill)
+                Some(AttrValue::TranspFill(blend_fill(a, b, t, effect, NO_SHIFT)))
             }
-            (AttrValue::StrokeTransp(a), AttrValue::StrokeTransp(b)) => {
-                blend_paint(a, b, t, effect).map(AttrValue::StrokeTransp)
-            }
+            (AttrValue::StrokeTransp(a), AttrValue::StrokeTransp(b)) => Some(
+                AttrValue::StrokeTransp(blend_fill(a, b, t, effect, NO_SHIFT)),
+            ),
             (AttrValue::LineWidth(a), AttrValue::LineWidth(b)) => {
                 Some(AttrValue::LineWidth(lerp_mp(*a, *b, t)))
             }
@@ -750,9 +763,10 @@ pub fn blend_attrs(
     out
 }
 
-/// Blends two colour paints. "No colour" does not blend (the ring keeps
-/// the start's); palette colours are resolved first, since a colour
-/// between two palette entries is in no palette.
+/// Blends two colour paints of any kinds (`blend_fill`). "No colour"
+/// does not blend (the ring keeps the start's); palette colours are
+/// resolved first, since a colour between two palette entries is in no
+/// palette.
 fn blend_colour_paint(
     doc: &Document,
     a: &crate::fill::Paint,
@@ -772,7 +786,7 @@ fn blend_colour_paint(
         p.for_each_value_mut(&mut |c| *c = c.to_direct(table));
         p
     };
-    blend_paint(&direct(a), &direct(b), t, effect)
+    Some(blend_fill(&direct(a), &direct(b), t, effect, NO_SHIFT))
 }
 
 /// Blends two fills of the same family, or a flat one with a graduated one
