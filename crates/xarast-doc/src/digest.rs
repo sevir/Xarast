@@ -232,6 +232,7 @@ impl Canon for Colour {
                 h.u8(0);
                 h.add(v);
             }
+            Colour::None => h.u8(2),
             Colour::Indexed { id, tint } => {
                 h.u8(1);
                 // The slot index is allocation order, so hash the resolved

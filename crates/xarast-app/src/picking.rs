@@ -216,11 +216,15 @@ pub(crate) fn geometry_of(kind: &NodeKind) -> Option<Arc<Path>> {
     }
 }
 
-/// Whether a colour attribute paints anything.
+/// Whether a colour attribute paints anything, for hit testing: an
+/// interior or line whose colour is "no colour" cannot be hit (`tools.md`
+/// decision 25), nor can one in a fully transparent flat colour (it draws
+/// nothing either; the importer stored "no colour" that way before
+/// `Colour::None` existed, and older `.xarast` files read it back so).
 fn paints(doc: &Document, paint: &xarast_doc::fill::Paint) -> bool {
     match paint {
         xarast_doc::fill::FillGeometry::Flat { value } => {
-            value.resolve(&doc.resources.colours).to_rgba8().a != 0
+            !value.is_none() && value.resolve(&doc.resources.colours).to_rgba8().a != 0
         }
         _ => true,
     }

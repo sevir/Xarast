@@ -102,6 +102,7 @@ fn is_cmyk(c: &Colour, table: &ColourTable) -> bool {
     match c {
         Colour::Direct(v) => v.model() == ColourModel::Cmyk,
         Colour::Indexed { id, .. } => table.get(*id).is_some_and(|d| d.model == ColourModel::Cmyk),
+        Colour::None => false,
     }
 }
 

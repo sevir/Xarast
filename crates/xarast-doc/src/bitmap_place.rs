@@ -17,7 +17,7 @@
 //! Its natural size is `pixels × 72 000 / dpi` millipoints per axis
 //! ([`crate::bitmap_fill::natural_length`]).
 
-use xarast_color::{Colour, ColourValue};
+use xarast_color::Colour;
 use xarast_geom::{Mp, Point, Vector};
 
 use crate::attr::{AttrNode, AttrValue};
@@ -27,10 +27,9 @@ use crate::kind::{BitmapNode, NodeKind};
 use crate::resources::BitmapId;
 use crate::tree::{Attach, NodeId};
 
-/// "No colour": fully transparent, which the renderer, the picker and the
-/// `.xar` importer all read as "paint nothing".
+/// "No colour": paint nothing.
 fn no_colour() -> Colour {
-    Colour::Direct(ColourValue::rgbt(0.0, 0.0, 0.0, 1.0))
+    Colour::None
 }
 
 /// The attributes every new bitmap object carries as its own children: no

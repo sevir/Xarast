@@ -52,7 +52,7 @@ fn centre(b: &xarast_doc::BitmapNode) -> (f64, f64) {
 }
 
 fn is_none(c: &Colour) -> bool {
-    matches!(c, Colour::Direct(v) if v.transparency() == 1.0)
+    c.is_none()
 }
 
 #[test]

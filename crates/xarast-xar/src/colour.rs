@@ -216,34 +216,38 @@ impl ColourRegistry {
 
     /// Resolves a colour reference read from a fill or line attribute.
     ///
-    /// * a negative value is one of the ten built-ins;
+    /// * a negative value is one of the ten built-ins, −1 being "no
+    ///   colour";
     /// * zero is "no colour";
     /// * a positive value is a record number, and a number that names no
     ///   definition is a diagnostic plus black, never a failure.
-    pub fn resolve(&self, reference: Ref, diags: &mut DiagSink, at: (u32, u32)) -> Option<Colour> {
+    ///
+    /// "No colour" is [`Colour::None`], and so is an unknown built-in
+    /// (with a diagnostic): painting nothing is safer than inventing one.
+    pub fn resolve(&self, reference: Ref, diags: &mut DiagSink, at: (u32, u32)) -> Colour {
         match reference {
-            Ref::None => None,
+            Ref::None => Colour::None,
             Ref::Builtin(v) => match BuiltinColour::from_ref(v) {
-                Some(BuiltinColour::None) => None,
-                Some(b) => b.value().map(Colour::Direct),
+                Some(BuiltinColour::None) => Colour::None,
+                Some(b) => b.value().map_or(Colour::None, Colour::Direct),
                 None => {
                     diags.push(
                         Diagnostic::new(DiagCode::UnknownEnumValue)
                             .at(at.0, at.1)
                             .with_detail(v.unsigned_abs().into()),
                     );
-                    None
+                    Colour::None
                 }
             },
             Ref::Record(n) => match self.by_record.get(&n) {
-                Some(&id) => Some(Colour::Indexed { id, tint: None }),
+                Some(&id) => Colour::Indexed { id, tint: None },
                 None => {
                     diags.push(
                         Diagnostic::new(DiagCode::DanglingReference)
                             .at(at.0, at.1)
                             .with_detail(u64::from(n)),
                     );
-                    Some(Colour::Direct(ColourValue::BLACK))
+                    Colour::Direct(ColourValue::BLACK)
                 }
             },
         }
@@ -380,7 +384,7 @@ mod tests {
         let reg = ColourRegistry::new();
         let mut d = DiagSink::new();
         assert!(reg.resolve(Ref::parse(-1), &mut d, (1, 150)).is_none());
-        assert!(reg.resolve(Ref::parse(-2), &mut d, (1, 150)).is_some());
+        assert!(!reg.resolve(Ref::parse(-2), &mut d, (1, 150)).is_none());
         assert!(reg.resolve(Ref::parse(0), &mut d, (1, 150)).is_none());
         assert_eq!(d.total(), 0);
     }
@@ -390,7 +394,7 @@ mod tests {
         let reg = ColourRegistry::new();
         let mut d = DiagSink::new();
         let c = reg.resolve(Ref::parse(999), &mut d, (1, 150));
-        assert_eq!(c, Some(Colour::Direct(ColourValue::BLACK)));
+        assert_eq!(c, Colour::Direct(ColourValue::BLACK));
         assert_eq!(d.count(crate::Severity::Warning), 1);
     }
 

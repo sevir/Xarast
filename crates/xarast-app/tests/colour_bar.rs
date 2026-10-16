@@ -183,7 +183,7 @@ fn a_click_sets_the_fill_and_a_right_click_the_line_each_one_step() {
         let FillGeometry::Flat { value } = fill(&s, n, PaintSlot::Stroke) else {
             panic!("a flat line colour")
         };
-        assert_eq!(value, Colour::Direct(xarast_app::colour_bar::no_colour()));
+        assert_eq!(value, Colour::None);
     }
     s.apply(Intent::Undo).unwrap();
     s.apply(Intent::Undo).unwrap();

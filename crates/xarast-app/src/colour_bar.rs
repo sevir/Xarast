@@ -82,20 +82,12 @@ pub enum ColourSource {
     Named(ColourId),
 }
 
-/// The value "no colour" is stored as: a fully transparent colour, which
-/// the renderer and the picker already treat as "paint nothing" (the
-/// `.xar` importer writes the same).
-#[must_use]
-pub fn no_colour() -> ColourValue {
-    ColourValue::rgbt(0.0, 0.0, 0.0, 1.0)
-}
-
 impl ColourSource {
     /// The document colour it applies.
     #[must_use]
     pub fn colour(self) -> Colour {
         match self {
-            ColourSource::NoColour => Colour::Direct(no_colour()),
+            ColourSource::NoColour => Colour::None,
             ColourSource::Direct(v) => Colour::Direct(v),
             ColourSource::Named(id) => Colour::Indexed { id, tint: None },
         }

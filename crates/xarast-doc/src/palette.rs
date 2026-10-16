@@ -320,6 +320,13 @@ impl PaletteResolver {
     pub fn resolve(&mut self, c: &Colour, table: &ColourTable) -> Rgba8 {
         match c {
             Colour::Direct(v) => self.ctx.srgb_of(*v),
+            // "No colour" paints nothing: transparent.
+            Colour::None => Rgba8 {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0,
+            },
             Colour::Indexed { id, tint } => {
                 if self.epoch != Some(table.epoch()) {
                     self.memo.clear();

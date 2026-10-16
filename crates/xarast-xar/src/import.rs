@@ -2535,15 +2535,10 @@ impl<'o> Mapper<'o> {
         }
     }
 
-    /// A colour reference as a paintable value.
-    ///
-    /// "No colour" is the fully transparent one: the model's [`Paint`] is
-    /// always a colour, and `TAG_FLATFILL_NONE` means *do not paint*, which a
-    /// transparent flat fill expresses exactly.
+    /// A colour reference as a paintable value; "no colour" is
+    /// [`Colour::None`].
     fn colour(&mut self, r: Ref, at: (u32, u32)) -> Colour {
-        self.colours
-            .resolve(r, &mut self.diags, at)
-            .unwrap_or(Colour::Direct(ColourValue::rgbt(0.0, 0.0, 0.0, 1.0)))
+        self.colours.resolve(r, &mut self.diags, at)
     }
 
     // ── Fills ───────────────────────────────────────────────────────────────
@@ -2641,7 +2636,7 @@ impl<'o> Mapper<'o> {
                         profile: BiasGain::new(g.profile.0, g.profile.1),
                     },
                     None => Paint::Flat {
-                        value: Colour::Direct(ColourValue::rgbt(0.0, 0.0, 0.0, 1.0)),
+                        value: Colour::None,
                     },
                 }
             }
@@ -4098,9 +4093,11 @@ mod tests {
         assert_eq!(p.scale, 0.37);
         assert!((p.tilt - 0.785_397).abs() < 1e-6);
         assert_eq!(p.glow_width, Mp::new(3_000));
-        let built_in = crate::colour::ColourRegistry::new()
-            .resolve(Ref::parse(-2), &mut DiagSink::new(), (1, 150))
-            .unwrap();
+        let built_in = crate::colour::ColourRegistry::new().resolve(
+            Ref::parse(-2),
+            &mut DiagSink::new(),
+            (1, 150),
+        );
         assert_eq!(p.colour, built_in);
         // The shadow's transparency and colour are folded into the
         // parameters, not left as attributes anywhere.
@@ -4313,9 +4310,11 @@ mod tests {
         assert_eq!(bevel_diags(&report), [0, 3, 2, 1]);
         let got = bevels(&doc);
         assert_eq!(got.len(), 3);
-        let built_in = crate::colour::ColourRegistry::new()
-            .resolve(Ref::parse(-2), &mut DiagSink::new(), (1, 150))
-            .unwrap();
+        let built_in = crate::colour::ColourRegistry::new().resolve(
+            Ref::parse(-2),
+            &mut DiagSink::new(),
+            (1, 150),
+        );
         assert_eq!(got[0].bevel_type, xarast_doc::BevelType::Point1);
         assert!(got[0].outer);
         assert_eq!(got[0].colour, Some(built_in));
@@ -4479,7 +4478,7 @@ mod tests {
         let stray_fill = doc.tree.preorder(doc.tree.root()).any(|id| {
             matches!(doc.tree.kind(id), Some(NodeKind::Attr(a))
                 if a.value == AttrValue::Fill(Paint::Flat { value: crate::colour::ColourRegistry::new()
-                    .resolve(Ref::parse(-3), &mut DiagSink::new(), (1, 150)).unwrap() }))
+                    .resolve(Ref::parse(-3), &mut DiagSink::new(), (1, 150)) }))
         });
         assert!(!stray_fill);
     }
@@ -4776,7 +4775,7 @@ mod tests {
         let stray_fill = doc.tree.preorder(doc.tree.root()).any(|id| {
             matches!(doc.tree.kind(id), Some(NodeKind::Attr(a))
                 if a.value == AttrValue::Fill(Paint::Flat { value: crate::colour::ColourRegistry::new()
-                    .resolve(Ref::parse(-3), &mut DiagSink::new(), (1, 150)).unwrap() }))
+                    .resolve(Ref::parse(-3), &mut DiagSink::new(), (1, 150)) }))
         });
         assert!(!stray_fill);
         // The flat cage draws the square where it is.

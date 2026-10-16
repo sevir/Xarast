@@ -44,7 +44,7 @@ fn live(role: LiveRole, params: &MouldParams) -> NodeKind {
 }
 
 fn none() -> Colour {
-    Colour::Direct(ColourValue::rgbt(0.0, 0.0, 0.0, 1.0))
+    Colour::None
 }
 
 fn rgb(r: f32, g: f32, b: f32) -> Colour {

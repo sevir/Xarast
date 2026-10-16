@@ -398,12 +398,23 @@ impl ColourTable {
     }
 }
 
-/// A colour as a document attribute: either a literal value or a live
-/// reference into the palette.
+/// A colour as a document attribute: a literal value, a live reference
+/// into the palette, or "no colour".
 ///
-/// The distinction matters for editing, not for rendering: changing a palette
-/// entry must change every object that references it, and only an
-/// [`Colour::Indexed`] carries that relationship.
+/// The distinction between the first two matters for editing, not for
+/// rendering: changing a palette entry must change every object that
+/// references it, and only an [`Colour::Indexed`] carries that
+/// relationship.
+///
+/// [`Colour::None`] is the original's "no colour" (a flag on its colour
+/// value, independent of the components): a fill or line that paints
+/// nothing at all. It is **not** transparent black. Both paint nothing, but
+/// an interior whose fill is "no colour" cannot be hit (`tools.md`
+/// decision 25) while a fully transparent colour is still a colour; and a
+/// palette entry can never be "no colour", so no palette edit produces it.
+/// Where a value is needed — a gradient key, a blend step — it stands for
+/// transparent black ([`Colour::NONE_VALUE`]), which is what the importer
+/// used to store and what every renderer path already draws as nothing.
 #[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Colour {
     /// A value that belongs to this attribute alone.
@@ -416,12 +427,34 @@ pub enum Colour {
         /// reference without defining a new palette entry.
         tint: Option<f32>,
     },
+    /// "No colour": paint nothing. `TAG_FLATFILL_NONE`,
+    /// `TAG_LINECOLOUR_NONE` and colour reference 0 or −1 in `.xar`;
+    /// `none` in `.xarast`.
+    None,
 }
 
 impl Colour {
+    /// The value [`Colour::None`] resolves to where a value is needed:
+    /// fully transparent black.
+    pub const NONE_VALUE: ColourValue = ColourValue::Rgbt {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        t: 1.0,
+    };
+
+    /// Whether this is "no colour".
+    #[inline]
+    #[must_use]
+    pub const fn is_none(&self) -> bool {
+        matches!(self, Colour::None)
+    }
+
     /// Resolves against a palette. An unknown reference resolves to the
     /// table's own fallback rather than failing, for the same reason
-    /// [`ColourTable::resolve`] does.
+    /// [`ColourTable::resolve`] does. "No colour" resolves to
+    /// [`Colour::NONE_VALUE`]; a caller that must tell it apart from a
+    /// transparent colour asks [`Colour::is_none`] first.
     #[must_use]
     pub fn resolve(&self, table: &ColourTable) -> ColourValue {
         match self {
@@ -435,6 +468,19 @@ impl Colour {
                     Some(f) => base.tinted(*f),
                 }
             }
+            Colour::None => Colour::NONE_VALUE,
+        }
+    }
+
+    /// The colour as a literal: a palette reference becomes
+    /// [`Colour::Direct`] of what it resolves to now; a literal and "no
+    /// colour" stay as they are (resolving "no colour" would turn it into
+    /// a transparent colour).
+    #[must_use]
+    pub fn to_direct(&self, table: &ColourTable) -> Colour {
+        match self {
+            Colour::None => Colour::None,
+            c => Colour::Direct(c.resolve(table)),
         }
     }
 }
@@ -448,12 +494,21 @@ impl crate::Stop for Colour {
     /// Two [`Colour::Indexed`] stops cannot be interpolated without a table,
     /// so they fall back to whichever end `t` is nearer — the same rule
     /// [`Transparency`](crate::Transparency) uses for its mode.
+    ///
+    /// "No colour" against a literal interpolates as
+    /// [`Colour::NONE_VALUE`] (it fades out); against itself it stays "no
+    /// colour", as the original's colour mixing returns no colour when
+    /// both ends are.
     fn lerp(&self, other: &Self, t: f32, effect: crate::FillEffect) -> Colour {
         let t = if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) };
-        match (self, other) {
-            (Colour::Direct(a), Colour::Direct(b)) => {
-                Colour::Direct(crate::interpolate(*a, *b, t, effect))
-            }
+        let literal = |c: &Colour| match c {
+            Colour::Direct(v) => Some(*v),
+            Colour::None => Some(Colour::NONE_VALUE),
+            Colour::Indexed { .. } => None,
+        };
+        match (self, other, literal(self), literal(other)) {
+            (Colour::None, Colour::None, _, _) => Colour::None,
+            (_, _, Some(a), Some(b)) => Colour::Direct(crate::interpolate(a, b, t, effect)),
             _ => {
                 if t < 0.5 {
                     self.clone()

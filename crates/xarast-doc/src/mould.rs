@@ -45,7 +45,7 @@
 
 use std::sync::Arc;
 
-use xarast_color::{Colour, ColourValue, Stop};
+use xarast_color::{Colour, Stop};
 use xarast_geom::mould::MouldGeometry;
 use xarast_geom::{BiasGain, BoolOp, FillRule, Join, Mp, Path, Point, Rect, boolean, contour};
 
@@ -422,10 +422,9 @@ pub fn source_rect(doc: &Document, params: &MouldParams, source: NodeId) -> Rect
     }
 }
 
-/// "No colour", which the renderer and the writers read as "paint
-/// nothing": how a shape says it is not filled or not stroked.
+/// "No colour": how a shape says it is not filled or not stroked.
 fn no_colour() -> Colour {
-    Colour::Direct(ColourValue::rgbt(0.0, 0.0, 0.0, 1.0))
+    Colour::None
 }
 
 /// Every slot of `attrs`, `over` on top, the fills moulded through `g`,

@@ -27,7 +27,7 @@
 
 use std::sync::Arc;
 
-use xarast_color::{Colour, FillEffect, Stop};
+use xarast_color::{FillEffect, Stop};
 use xarast_geom::{
     BiasGain, Cap, FillRule, Join, Mp, Path, Point, StrokeStyle, Tolerance, contour, self_union,
     stroke_to_path,
@@ -448,11 +448,13 @@ fn visible_stroke(doc: &Document, attrs: &ResolvedAttrs) -> Option<StrokeStyle> 
     })
 }
 
-/// Whether a paint shows anything: "no colour" is a flat colour with zero
-/// alpha.
+/// Whether a paint shows anything: not "no colour", and not a fully
+/// transparent flat colour either.
 pub(crate) fn visible(doc: &Document, p: &crate::fill::Paint) -> bool {
     match p {
-        FillGeometry::Flat { value } => value.resolve(&doc.resources.colours).to_rgba8().a > 0,
+        FillGeometry::Flat { value } => {
+            !value.is_none() && value.resolve(&doc.resources.colours).to_rgba8().a > 0
+        }
         _ => true,
     }
 }
@@ -525,7 +527,7 @@ fn blend_colour_paint(
     let table = &doc.resources.colours;
     let direct = |p: &crate::fill::Paint| {
         let mut p = p.clone();
-        p.for_each_value_mut(&mut |c| *c = Colour::Direct(c.resolve(table)));
+        p.for_each_value_mut(&mut |c| *c = c.to_direct(table));
         p
     };
     blend_paint(&direct(a), &direct(b), t, effect)
@@ -716,7 +718,7 @@ fn lerp_ramp<S: Stop>(a: &Ramp<S>, b: &Ramp<S>, t: f64, effect: FillEffect) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xarast_color::ColourValue;
+    use xarast_color::{Colour, ColourValue};
 
     fn rgb(r: f32, g: f32, b: f32) -> Colour {
         Colour::Direct(ColourValue::Rgbt { r, g, b, t: 0.0 })

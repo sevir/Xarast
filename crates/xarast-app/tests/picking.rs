@@ -253,3 +253,45 @@ fn the_index_follows_edits_undo_and_redo_without_rebuilding() {
     assert!(f.s.picker().dump(&f.s.doc).is_empty());
     let _ = (f.a, f.b);
 }
+
+/// An interior whose fill is explicitly "no colour" (`Colour::None`,
+/// XARA-T-0204) is not hit-testable (`tools.md` decision 25); its outline
+/// still is.
+#[test]
+fn an_interior_in_no_colour_does_not_pick() {
+    #[derive(Debug)]
+    struct Unfilled;
+    impl Command for Unfilled {
+        fn label(&self) -> &'static str {
+            "Fixture"
+        }
+        fn run(&self, tx: &mut Tx<'_>) -> Result<(), EditError> {
+            let layer = tx.doc().active_layer(tx.doc().active_spread()).unwrap();
+            let n = square(tx, 0, 0, 100_000, false)?;
+            let fill = tx.create(NodeKind::Attr(Box::new(AttrNode::new(AttrValue::Fill(
+                xarast_doc::fill::Paint::Flat {
+                    value: xarast_color::Colour::None,
+                },
+            )))))?;
+            tx.attach(fill, n, Attach::LastChild)?;
+            tx.attach(n, layer, Attach::LastChild)?;
+            Ok(())
+        }
+    }
+    let mut s = Session::new_empty(DocumentId(2));
+    s.dispatch(&Unfilled).unwrap();
+    let n = xarast_app::edit::selectable_objects(&s.doc).next().unwrap();
+    let at = |x, y| {
+        Picker::new()
+            .pick(
+                &s.doc,
+                Point::raw(x, y),
+                PICK_TOLERANCE_PX,
+                100.0,
+                PickMode::TopGroup,
+            )
+            .map(|h| h.node)
+    };
+    assert_eq!(at(50_000, 50_000), None, "the interior");
+    assert_eq!(at(200, 50_000), Some(n), "the outline");
+}

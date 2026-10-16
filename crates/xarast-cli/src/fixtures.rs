@@ -233,7 +233,7 @@ fn ellipse_node(r: Rect) -> NodeKind {
 
 fn no_colour() -> Paint {
     Paint::Flat {
-        value: Colour::Direct(ColourValue::rgbt(0.0, 0.0, 0.0, 1.0)),
+        value: Colour::None,
     }
 }
 

@@ -31,15 +31,27 @@ use xarast_doc::fill::{
 };
 use xarast_geom::{Cap, DashPattern, FillRule};
 
+/// What a key colour's token in a refs list names.
+#[derive(Clone, Copy, Debug, Default)]
+enum KeyRef {
+    /// `-`, an unknown token or no list: the written colour.
+    #[default]
+    Literal,
+    /// `#c-N`: a palette colour.
+    Palette(ColourId),
+    /// `none`: "no colour".
+    NoColour,
+}
+
 /// An opaque colour, as a literal paint.
 fn direct(c: Rgba8) -> Colour {
     Colour::Direct(ColourValue::from_rgba8(c))
 }
 
-/// A paint that draws nothing: what `none` reads as.
+/// A paint that draws nothing: what `none` reads as, "no colour".
 fn transparent() -> Paint {
     Paint::Flat {
-        value: Colour::Direct(ColourValue::rgbt(0.0, 0.0, 0.0, 1.0)),
+        value: Colour::None,
     }
 }
 
@@ -473,28 +485,35 @@ impl<'d> Reader<'d, '_, '_> {
     }
 
     /// `xarast:stop-refs` / `xarast:colour-refs` / `xarast:contone-refs`:
-    /// per key colour, the palette colour it names (`#c-N`), or `None`
-    /// (`-`, an unknown id, or no list).
-    fn key_refs(&self, v: Option<&str>) -> Vec<Option<ColourId>> {
+    /// per key colour, the palette colour it names (`#c-N`), "no colour"
+    /// (`none`), or a literal (`-`, an unknown id, or no list).
+    fn key_refs(&self, v: Option<&str>) -> Vec<KeyRef> {
         v.unwrap_or("")
             .split_ascii_whitespace()
             .map(|t| {
+                if t == "none" {
+                    return KeyRef::NoColour;
+                }
                 t.strip_prefix('#')
                     .and_then(|p| self.palette.get(p).copied())
+                    .map_or(KeyRef::Literal, KeyRef::Palette)
             })
             .collect()
     }
 
     /// A key colour: the palette colour its reference names when that
     /// resolves to the colour written (an editor that changed the colour
-    /// without the reference gets its new colour), a literal otherwise.
-    fn keyed(&self, c: Rgba8, r: Option<ColourId>) -> Colour {
-        if let Some(id) = r
-            && self.b.document().resources.colours.resolve_rgba8(id) == c
-        {
-            return Colour::Indexed { id, tint: None };
+    /// without the reference gets its new colour), "no colour" when the
+    /// token says so and the written colour is the transparent one it is
+    /// spelled as, a literal otherwise.
+    fn keyed(&self, c: Rgba8, r: KeyRef) -> Colour {
+        match r {
+            KeyRef::Palette(id) if self.b.document().resources.colours.resolve_rgba8(id) == c => {
+                Colour::Indexed { id, tint: None }
+            }
+            KeyRef::NoColour if c.a == 0 => Colour::None,
+            _ => direct_alpha(c),
         }
-        direct_alpha(c)
     }
 
     /// A shadow's colour from `xarast:colour` and `xarast:colour-ref`, read
@@ -594,7 +613,7 @@ impl<'d> Reader<'d, '_, '_> {
             .split_ascii_whitespace()
             .filter_map(parse::colour)
             .enumerate()
-            .map(|(i, c)| self.keyed(c, refs.get(i).copied().flatten()))
+            .map(|(i, c)| self.keyed(c, refs.get(i).copied().unwrap_or_default()))
             .collect();
         let c = |i: usize| colours.get(i).cloned();
         // The keyed ramp of a conical or diamond twin.
@@ -609,7 +628,7 @@ impl<'d> Reader<'d, '_, '_> {
             let k: Vec<(f32, Colour)> = keys(g("stops")?)?
                 .into_iter()
                 .enumerate()
-                .map(|(i, (p, c))| (p, s.keyed(c, refs.get(i).copied().flatten())))
+                .map(|(i, (p, c))| (p, s.keyed(c, refs.get(i).copied().unwrap_or_default())))
                 .collect();
             ramp_of(k, profile, mapping)
         };
@@ -1020,7 +1039,7 @@ impl<'d> Reader<'d, '_, '_> {
             .unwrap_or_else(|| g.stops.clone())
             .into_iter()
             .enumerate()
-            .map(|(i, (p, c))| (p, self.keyed(c, refs.get(i).copied().flatten())))
+            .map(|(i, (p, c))| (p, self.keyed(c, refs.get(i).copied().unwrap_or_default())))
             .collect();
         let key_list = if key_list.len() == 1 {
             let only = key_list.first().cloned()?;
@@ -1142,7 +1161,7 @@ impl<'d> Reader<'d, '_, '_> {
         let href = attr(image, "", "href").or_else(|| attr(image, NS_XLINK, "href"));
         let bitmap = self.bitmap_for(href, xa(image, "palette"), None, p.start);
         let refs = self.key_refs(xa(p, "contone-refs"));
-        let r = |i: usize| refs.get(i).copied().flatten();
+        let r = |i: usize| refs.get(i).copied().unwrap_or_default();
         let contone = xa(p, "contone").and_then(|v| {
             let c: Vec<Rgba8> = v
                 .split_ascii_whitespace()

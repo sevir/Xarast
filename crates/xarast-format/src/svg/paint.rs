@@ -160,17 +160,31 @@ fn pt_pair(ctx: &PaintCtx<'_>, p: Point) -> String {
 /// stops, a flat approximation) is computed from this value, never from
 /// the model's own `f32` colour, so that a reload re-derives the same
 /// bytes (XARA-T-0110).
+///
+/// "No colour" is written as transparent black with the token `none` in
+/// the refs list, so it reads back as [`Colour::None`] (a reader that
+/// does not know the token reads transparent black, which paints the
+/// same).
 fn key_colour(c: &Colour, ctx: &PaintCtx<'_>) -> (ColourValue, Option<String>) {
     let v = c.resolve(ctx.colours);
-    match palette_ref(c, ctx) {
+    match key_ref(c, ctx) {
         Some(r) => (v, Some(r)),
         None => (ColourValue::from_rgba8(v.to_rgba8()), None),
     }
 }
 
+/// A key colour's token in a refs list: `#c-N` for an untinted palette
+/// colour, `none` for "no colour", nothing for a literal.
+fn key_ref(c: &Colour, ctx: &PaintCtx<'_>) -> Option<String> {
+    match c {
+        Colour::None => Some("none".into()),
+        _ => palette_ref(c, ctx),
+    }
+}
+
 /// `xarast:stop-refs` / `xarast:colour-refs`: one token per key colour,
-/// `#c-N` for a palette colour and `-` for a literal one; omitted when no
-/// key is a palette colour.
+/// `#c-N` for a palette colour, `none` for "no colour" and `-` for a
+/// literal one; omitted when every key is a literal.
 fn refs_attr(out: &mut String, name: &str, refs: &[Option<String>]) {
     if refs.iter().all(Option::is_none) {
         return;
@@ -1212,7 +1226,7 @@ fn ramp_twin(side: &mut String, k: &KeyRamp, tiling: Tiling) {
 
 /// The palette references of a twin's colours.
 fn colour_refs(cs: &[&Colour], ctx: &PaintCtx<'_>) -> Vec<Option<String>> {
-    cs.iter().map(|c| palette_ref(c, ctx)).collect()
+    cs.iter().map(|c| key_ref(c, ctx)).collect()
 }
 
 fn join_hex(cs: &[Rgba8]) -> String {

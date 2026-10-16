@@ -685,8 +685,10 @@ pub fn default_for(slot: AttrSlot) -> AttrValue {
         AttrSlot::StrokeTransp => AttrValue::StrokeTransp(TranspPaint::Flat {
             value: Transparency::OPAQUE,
         }),
+        // The factory default fill is "no colour" (`research/02 §4.4`): an
+        // unattributed filled path is not filled.
         AttrSlot::FillGeometry => AttrValue::Fill(Paint::Flat {
-            value: Colour::Direct(ColourValue::rgbt(1.0, 1.0, 1.0, 1.0)),
+            value: Colour::None,
         }),
         AttrSlot::TranspFillGeometry => AttrValue::TranspFill(TranspPaint::Flat {
             value: Transparency::OPAQUE,

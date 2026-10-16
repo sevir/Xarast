@@ -405,12 +405,7 @@ fn canonical(doc: &Document, out: &mut [AttrValue], filled: bool, stroked: bool)
         }
     };
     let none = || FillGeometry::Flat {
-        value: Colour::Direct(ColourValue::Rgbt {
-            r: 0.0,
-            g: 0.0,
-            b: 0.0,
-            t: 1.0,
-        }),
+        value: Colour::None,
     };
     if !stroke_shows {
         set(out, AttrSlot::StrokeColour, AttrValue::StrokeColour(none()));
@@ -523,7 +518,7 @@ fn colour_paint(
             };
         }
         let mut p = p.clone();
-        p.for_each_value_mut(&mut |c| *c = Colour::Direct(c.resolve(table)));
+        p.for_each_value_mut(&mut |c| *c = c.to_direct(table));
         p
     };
     if !visible(doc, a) && !visible(doc, b) {

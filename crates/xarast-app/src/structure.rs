@@ -886,7 +886,7 @@ impl PasteFragment {
             if let Colour::Indexed { id, .. } = c
                 && !same(*id)
             {
-                *c = Colour::Direct(c.resolve(table));
+                *c = c.to_direct(table);
             }
         };
         let map_bitmap = |b: Option<&mut BitmapId>| {
