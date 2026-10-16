@@ -1,12 +1,12 @@
 # Fuzzing
 
-Fifteen `cargo-fuzz` targets, in their own workspace so that the main one
+Eighteen `cargo-fuzz` targets, in their own workspace so that the main one
 stays on stable. Six cover the `.xar` importer — a legacy binary format
 parser is attack surface, so fuzzing is part of Phase 3 rather than a
 follow-up (`docs/phases/phase-03-xar-importer.md` W3.11) — six cover
-the geometry, render and document-model layers the importer feeds, three
-cover the native `.xarast` container (Phase 6), and one covers image
-decoding (Phase 10).
+the geometry, render and document-model layers the importer feeds, four
+cover the native `.xarast` container (Phase 6), one the operation
+journal (Phase 6) and one image decoding (Phase 10).
 
 | Target | Crate | What it drives |
 |---|---|---|
@@ -22,6 +22,7 @@ decoding (Phase 10).
 | `fuzz_display_list` | `xarast-render` | scenes through `DisplayList::build` and the CPU backend |
 | `fuzz_ramp` | `xarast-render` | ramp tables, profiles, gradient evaluation |
 | `fuzz_doc_builder` | `xarast-doc` | arbitrary build scripts: "valid or nothing" |
+| `fuzz_journal_read` | `xarast-doc` | the operation journal's NDJSON reader, its base reader and replay of whatever it accepts: never panic, a refused entry changes nothing |
 | `fuzz_xarast_open` | `xarast-format` | `XarastReader::open`, every read path, and a re-save of whatever opens |
 | `fuzz_xarast_repair` | `xarast-format` | `repair` over arbitrary bytes (a rebuilt package must open strictly and repair again), `open_recovering`, the partial-XML closer |
 | `fuzz_xarast_manifest` | `xarast-format` | the manifest parser and its write–parse fixed point |

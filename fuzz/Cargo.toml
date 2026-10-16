@@ -25,6 +25,8 @@ xarast-image = { path = "../crates/xarast-image" }
 arbitrary = { version = "1", features = ["derive"] }
 # Only to forge dangling resource keys for `fuzz_doc_builder`.
 slotmap = "1.0"
+# The journal's base is JSON (`fuzz_journal_read`).
+serde_json = "1.0"
 
 [profile.release]
 debug = 1
@@ -127,6 +129,15 @@ bench = false
 [[bin]]
 name = "fuzz_xarast_open"
 path = "fuzz_targets/fuzz_xarast_open.rs"
+test = false
+doc = false
+bench = false
+
+# The operation journal's line reader, its base reader and replay (F6.6):
+# never panic, and a refused entry changes nothing.
+[[bin]]
+name = "fuzz_journal_read"
+path = "fuzz_targets/fuzz_journal_read.rs"
 test = false
 doc = false
 bench = false

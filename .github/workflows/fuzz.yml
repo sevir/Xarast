@@ -46,6 +46,7 @@ jobs:
           - fuzz_display_list
           - fuzz_ramp
           - fuzz_doc_builder
+          - fuzz_journal_read
           - fuzz_xarast_open
           - fuzz_xarast_manifest
           - fuzz_xarast_svg_read
