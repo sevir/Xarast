@@ -108,10 +108,16 @@ pub struct Patch {
     pub name: &'static str,
     /// Where it is, in document millipoints.
     pub rect: Rect,
-    /// The sRGB bytes every export must carry there: the colour resolved
-    /// through the palette and converted by `xarast_color`, the renderer's
-    /// own rule.
+    /// The sRGB bytes the vector exports (SVG, PDF) carry there: the
+    /// colour resolved through the palette and converted by `xarast_color`,
+    /// rounded to nearest.
     pub expected: Rgba8,
+    /// The sRGB bytes the raster exports carry there: the same value
+    /// quantised as the renderer quantises it, with the original's packing
+    /// (`ColourValue::to_rgba8_packed`, XARA-T-0203). It differs from
+    /// `expected` by one level where a channel falls in the narrow band
+    /// just above `k + 0.5` of 255ths.
+    pub raster: Rgba8,
     /// Whether the colour is in a model no format carries (CMYK, spot).
     pub print_colour: bool,
 }
@@ -252,6 +258,7 @@ pub fn colour_patches() -> Vec<Patch> {
                 name,
                 rect: Rect::new(Point::raw(x, y), Point::raw(x + pt(PATCH), y + pt(PATCH))),
                 expected: c.resolve(&table).to_rgba8(),
+                raster: c.resolve(&table).to_rgba8_packed(),
                 print_colour,
             }
         })

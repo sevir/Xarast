@@ -741,3 +741,147 @@ fn a_colour_drop_repaints_its_target_and_matches_a_full_render() {
     );
     assert_eq!(touched(&b, &fresh), [false, true, true], "{fresh:?}");
 }
+
+/// XARA-T-0203's acceptance on 5 000 users: redefining a palette entry
+/// that 5 000 objects use repaints all of them, the repainted area is the
+/// union of their bounds (none of the 500 objects that do not use it is
+/// touched), and the frame equals a full render. It also measures the
+/// alternative the contract sketches — a dirty region from
+/// `ColourUses::users_of(changed_between(..))` — against the scene diff
+/// the render thread already does (printed with `--nocapture`; the
+/// numbers in `docs/memory/colour.md` are from a release run).
+#[test]
+fn redefining_a_colour_used_by_5000_objects_repaints_exactly_its_users() {
+    use std::time::Instant;
+    use xarast_app::colour_editor::PaletteCommand;
+    use xarast_color::{ColourDef, ColourModel};
+    use xarast_doc::palette::{ColourUses, changed_between};
+    const USERS: i32 = 5_000;
+    const OTHERS: i32 = 500;
+    let mut s = Session::new_empty(DocumentId(6));
+    s.apply_edit(EditCommand::Palette(PaletteCommand::Create {
+        def: ColourDef::normal(ColourValue::rgbt(0.2, 0.4, 0.9, 0.0)).named("Sea"),
+    }))
+    .expect("palette");
+    let sea = s.doc.resources.colours.by_name("Sea").expect("named");
+    let spread = s.doc.active_spread();
+    let layer = s.doc.active_layer(spread).expect("a layer");
+    // Users in a 100 x 50 grid on the left of the page, the others in a
+    // 25 x 20 grid on the right; 1.5 pt squares.
+    let mut place = |x: i32, y: i32, value: Colour| {
+        s.apply_edit(EditCommand::CreateShape {
+            layer,
+            shape: Box::new(xarast_app::shapes::rectangle(
+                Point::raw(x, y),
+                1_500.0,
+                1_500.0,
+            )),
+            attrs: vec![xarast_doc::AttrValue::Fill(FillGeometry::Flat { value })],
+        })
+        .expect("shape");
+    };
+    for i in 0..USERS {
+        let value = Colour::Indexed {
+            id: sea,
+            tint: None,
+        };
+        place(
+            60_000 + (i % 100) * 1_600,
+            300_000 + (i / 100) * 4_000,
+            value,
+        );
+    }
+    for i in 0..OTHERS {
+        let value = Colour::Direct(ColourValue::rgbt(0.9, 0.2, 0.1, 0.0));
+        place(
+            420_000 + (i % 25) * 4_000,
+            300_000 + (i / 25) * 8_000,
+            value,
+        );
+    }
+    s.apply(Intent::Resize(DeviceSize::new(W, H)))
+        .expect("resize");
+    s.apply(Intent::ZoomTo(xarast_app::ZoomTarget::Page))
+        .expect("zoom");
+    let objs: Vec<NodeId> = xarast_app::edit::selectable_objects(&s.doc).collect();
+    assert_eq!(objs.len(), (USERS + OTHERS) as usize);
+    let (rt, woken) = thread();
+    let mut b = Bench {
+        s,
+        rt,
+        woken,
+        planner: TilePlanner::new(TS),
+        store: CpuTileStore::new(TS, xarast_shell::tiles::capacity_for(W, H, TS)),
+        draft: DeviceRect::EMPTY,
+    };
+    let mut tally = Tally::default();
+    b.check(RenderQuality::Final, "first", &mut tally);
+
+    let before = b.s.doc.resources.colours.clone();
+    let t = Instant::now();
+    b.s.apply_edit(EditCommand::Palette(PaletteCommand::Redefine {
+        id: sea,
+        components: [Some(0.1), Some(0.8), Some(0.3), Some(0.0)],
+        model: ColourModel::Rgbt,
+    }))
+    .expect("redefine");
+    let t_edit = t.elapsed();
+
+    // The contract's dirty region: the users of what changed, by bounds.
+    let t = Instant::now();
+    let uses = ColourUses::build(&b.s.doc);
+    let t_index = t.elapsed();
+    let t = Instant::now();
+    let changed = changed_between(&before, &b.s.doc.resources.colours);
+    let users = uses.users_of(&changed);
+    let dirty = xarast_app::viewport::device_rect_of(
+        &b.s.viewport,
+        xarast_app::viewport::nodes_rect(&b.s.doc, users.iter().copied()),
+    );
+    let t_dirty = t.elapsed();
+    assert_eq!(users.len(), USERS as usize, "every user, once");
+
+    // What the render thread does instead: rebuild, diff, repaint.
+    let t = Instant::now();
+    b.s.rebuild_scene(None).expect("scene");
+    let t_scene = t.elapsed();
+    let mut job = b.s.frame_job(BG, PAGE);
+    job.view.quality = RenderQuality::Final;
+    let t = Instant::now();
+    b.rt.submit(job.clone());
+    let f = next_frame(&b.rt, &b.woken);
+    let t_frame = t.elapsed();
+    assert_eq!(f.reuse, FrameReuse::Repainted);
+    let fin = reference(&job, RenderQuality::Final);
+    assert!(
+        f.surface == fin,
+        "the repainted frame differs from a full render in {} pixels",
+        diff_pixels(&f.surface, &fin)
+    );
+    let fresh = f.fresh.iter().fold(DeviceRect::EMPTY, |a, r| a.union(*r));
+    // The repaint covers every user and is the users' union (with the
+    // antialiasing slack of their edges), not the view.
+    assert!(
+        fresh.intersection(dirty.inflated(2)) == fresh
+            && dirty.intersection(fresh) == dirty.intersection(DeviceRect::from_size(W, H)),
+        "fresh {fresh:?}, users' bounds {dirty:?}"
+    );
+    for n in &objs[USERS as usize..] {
+        let r = xarast_app::viewport::device_rect_of(
+            &b.s.viewport,
+            xarast_app::viewport::nodes_rect(&b.s.doc, [*n]),
+        );
+        assert!(
+            f.fresh.iter().all(|x| x.intersection(r).is_empty()),
+            "a non-user at {r:?} was repainted: {:?}",
+            f.fresh
+        );
+    }
+    eprintln!(
+        "5000-user redefine: edit {t_edit:?}; ColourUses::build {t_index:?}, \
+         changed_between + users_of + bounds {t_dirty:?}; scene rebuild {t_scene:?}, \
+         repainted frame {t_frame:?} ({} px of {})",
+        f.fresh.iter().map(|r| r.area()).sum::<u64>(),
+        W * H
+    );
+}

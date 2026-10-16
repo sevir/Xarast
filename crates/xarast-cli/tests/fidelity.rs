@@ -98,7 +98,7 @@ fn check_raster(format: &str, img: &image::RgbaImage, patches: &[Patch], toleran
         for dy in 0..5 {
             for dx in 0..5 {
                 let px = img.get_pixel(x + dx - 2, y + dy - 2).0;
-                let want = rgb(p.expected);
+                let want = rgb(p.raster);
                 for c in 0..3 {
                     assert!(
                         px[c].abs_diff(want[c]) <= tolerance,
@@ -149,6 +149,18 @@ fn the_expected_colours_are_the_models_conversions() {
     assert_eq!(rgb(by("rgb steel")), [51, 102, 153]);
     assert_eq!(rgb(by("grey 25")), [64, 64, 64]);
     assert_eq!(colour_patches().len(), 20);
+    // The renderer packs as the original does (XARA-T-0203): a channel
+    // just above k + 0.5 rounds up but packs down. 0.9 x 255 = 229.5.
+    let raster = |n: &str| {
+        colour_patches()
+            .into_iter()
+            .find(|p| p.name == n)
+            .unwrap()
+            .raster
+    };
+    assert_eq!(rgb(by("rgb amber")), [230, 153, 26]);
+    assert_eq!(rgb(raster("rgb amber")), [229, 153, 25]);
+    assert_eq!(rgb(raster("rgb steel")), [51, 102, 153]);
 }
 
 #[test]
@@ -209,7 +221,9 @@ fn every_format_carries_the_colour_sheet() {
     let want: Vec<[u8; 3]> = patches.iter().map(|p| rgb(p.expected)).collect();
     assert_eq!(fills, want, "SVG fills");
 
-    // PDF, uncompressed: the `rg` operands, in order, round to the bytes.
+    // PDF, uncompressed: the `rg` operands, in order, round to the bytes
+    // the renderer's scene carries (the PDF writer reads the scene, so it
+    // has the packed quantisation; the SVG writer resolves colours itself).
     fixtures(&dir, "pdf", &["--no-compress"]);
     let pdf = std::fs::read(dir.join("colour-sheet.pdf")).unwrap();
     let text = String::from_utf8_lossy(&pdf);
@@ -226,7 +240,8 @@ fn every_format_carries_the_colour_sheet() {
             [0, 1, 2].map(|i| (v[i] * 255.0).round() as u8)
         })
         .collect();
-    assert_eq!(rg, want, "PDF fill colours");
+    let scene: Vec<[u8; 3]> = patches.iter().map(|p| rgb(p.raster)).collect();
+    assert_eq!(rg, scene, "PDF fill colours");
     assert!(!text.contains("DeviceCMYK"), "sRGB page, DeviceRGB only");
 }
 

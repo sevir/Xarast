@@ -44,8 +44,8 @@ use std::sync::Arc;
 use xarast_doc::fill::Tiling;
 use xarast_doc::resources::BitmapId;
 use xarast_doc::{
-    AttrSlot, AttrStack, AttrValue, Document, Epoch, NodeId, NodeKind, ResolvedAttrs, StoryText,
-    WalkEvent,
+    AttrSlot, AttrStack, AttrValue, Document, Epoch, NodeId, NodeKind, PaletteResolver,
+    ResolvedAttrs, StoryText, WalkEvent,
 };
 use xarast_geom::{Cap, FillRule, Join, Mp, Path, Point, Rect, StrokeStyle, Vector};
 use xarast_render::{
@@ -134,6 +134,11 @@ impl WalkStats {
 #[derive(Debug, Default)]
 pub struct SceneWalker {
     resolver: Resolver,
+    /// Every painted colour is resolved through this (XARA-T-0203): a
+    /// palette reference once per palette epoch, every colour quantised
+    /// with the original's packing. A walker belongs to one document, as
+    /// its other caches do; [`SceneWalker::reset`] clears it.
+    palette: PaletteResolver,
     /// Whether the node being painted is one a gesture previews: its
     /// ramps are built at draft length (256 entries) whatever the quality,
     /// since a new one is made every frame (`phase-08` T8.5.3). The frame
@@ -406,6 +411,7 @@ impl SceneWalker {
     /// Forgets every cache. Call it when the document is replaced.
     pub fn reset(&mut self) {
         self.resolver = Resolver::new();
+        self.palette = PaletteResolver::new();
         self.images.clear();
         self.image_src.clear();
         self.stale_slots.clear();
@@ -513,8 +519,12 @@ impl SceneWalker {
         let mut attrs = AttrStack::with_defaults(&doc.defaults);
         let mut frames: Vec<Frame> = Vec::new();
         // The scope fingerprint, pushed and popped with the attribute
-        // scopes; seeded with the resources' revision.
-        self.scope = mix64(SCOPE_SEED, doc.tree.resources_rev());
+        // scopes; seeded with the resources' revision and the palette
+        // epoch (every content hash depends on resolved colours).
+        self.scope = mix64(
+            mix64(SCOPE_SEED, doc.tree.resources_rev()),
+            doc.palette_epoch().0,
+        );
         let mut scopes: Vec<u64> = Vec::new();
 
         let root = doc.tree.root();
@@ -740,7 +750,13 @@ impl SceneWalker {
                     }
                     // A shadow controller's shadow, beneath its source,
                     // inside the controller's own feather.
-                    let shadow = shadow_of(doc, parent, &attrs, live_over.get(&parent).copied());
+                    let shadow = shadow_of(
+                        doc,
+                        parent,
+                        &attrs,
+                        live_over.get(&parent).copied(),
+                        &mut self.palette,
+                    );
                     let shadowed = shadow.is_some();
                     if let Some((effect, margin)) = shadow {
                         // Everything whose shadow can land in the area
@@ -754,7 +770,12 @@ impl SceneWalker {
                     }
                     // A bevel controller's bevel, over (inner) or beneath
                     // (outer) its source, inside its own feather.
-                    let bevel = bevel_of(doc, parent, live_over.get(&parent).copied());
+                    let bevel = bevel_of(
+                        doc,
+                        parent,
+                        live_over.get(&parent).copied(),
+                        &mut self.palette,
+                    );
                     let bevelled = bevel.is_some();
                     if let Some((effect, margin)) = bevel {
                         // An outer bevel reaches beyond its source; an
@@ -1371,6 +1392,7 @@ impl SceneWalker {
         self.check_transparency_image(attrs);
         let mut ctx = PaintCtx {
             colours: &doc.resources.colours,
+            palette: &mut self.palette,
             ramp_length: if self.draft_ramps {
                 xarast_render::RampLength::Short
             } else {
@@ -1816,6 +1838,7 @@ impl SceneWalker {
             }
             let mut ctx = PaintCtx {
                 colours: &doc.resources.colours,
+                palette: &mut self.palette,
                 ramp_length: quality.ramp_length(),
                 filter: quality.image_filter(),
                 resolver: &mut self.resolver,
@@ -1958,6 +1981,7 @@ impl SceneWalker {
         };
         let mut ctx = PaintCtx {
             colours: &doc.resources.colours,
+            palette: &mut self.palette,
             ramp_length: quality.ramp_length(),
             filter: quality.image_filter(),
             resolver: &mut self.resolver,
@@ -2564,7 +2588,9 @@ fn preview_id(doc: &Document, node: NodeId) -> SceneNodeId {
 ///    version of every attribute node the walk pushed on the way down, in
 ///    order, so that recolouring a group's fill attribute changes the hash
 ///    of every sibling it applies to and of nothing else;
-/// 3. the resources' revision, folded into the scope's seed.
+/// 3. the resources' revision and the palette epoch, folded into the
+///    scope's seed (a palette edit bumps both; the epoch is the key the
+///    contract names for anything that depends on resolved colours).
 ///
 /// Editing one object therefore changes that object's hash and leaves the
 /// rest of the document's alone, which is what lets a per-node cache pay
@@ -2665,6 +2691,7 @@ fn shadow_of(
     node: NodeId,
     attrs: &AttrStack,
     over: Option<&xarast_doc::LiveKind>,
+    palette: &mut PaletteResolver,
 ) -> Option<(LayerEffect, Mp)> {
     let Some(NodeKind::Live(l)) = doc.tree.kind(node) else {
         return None;
@@ -2703,7 +2730,7 @@ fn shadow_of(
         0.0
     };
     let blur = f64::from(p.blur.raw().max(0));
-    let mut colour = p.colour.resolve(&doc.resources.colours).to_rgba8();
+    let mut colour = palette.resolve(&p.colour, &doc.resources.colours);
     colour.a = u8::try_from((u32::from(colour.a) * u32::from(p.opacity_level()) + 127) / 255)
         .unwrap_or(u8::MAX);
     let margin = Mp::from_f64_round((displacement + spread + blur).ceil().min(1e9));
@@ -2729,6 +2756,7 @@ fn bevel_of(
     doc: &Document,
     node: NodeId,
     over: Option<&xarast_doc::LiveKind>,
+    palette: &mut PaletteResolver,
 ) -> Option<(LayerEffect, Mp)> {
     let Some(NodeKind::Live(l)) = doc.tree.kind(node) else {
         return None;
@@ -2746,7 +2774,7 @@ fn bevel_of(
             b: 0,
             a: 0,
         },
-        |c| c.resolve(&doc.resources.colours).to_rgba8(),
+        |c| palette.resolve(&c, &doc.resources.colours),
     );
     // An inner band in its first object's flat fill, as the original's
     // bevel node paints it over the objects.
@@ -2756,7 +2784,7 @@ fn bevel_of(
         // The first object's transparency, copied with the fill, fades it.
         let opacity = u32::from(p.flat_paint_opacity(&doc.tree, node, &doc.defaults));
         p.flat_paint(&doc.tree, node, &doc.defaults).map(|c| {
-            let mut v = c.resolve(&doc.resources.colours).to_rgba8();
+            let mut v = palette.resolve(&c, &doc.resources.colours);
             v.a = u8::try_from((u32::from(v.a) * opacity + 127) / 255).unwrap_or(u8::MAX);
             v
         })
@@ -2947,7 +2975,9 @@ mod tests {
     fn a_painted_inner_band_is_as_transparent_as_the_object_it_copies() {
         let alpha = |level| {
             let (doc, c) = bevelled_rectangle(level);
-            let (LayerEffect::Bevel(b), _) = bevel_of(&doc, c, None).unwrap() else {
+            let (LayerEffect::Bevel(b), _) =
+                bevel_of(&doc, c, None, &mut PaletteResolver::new()).unwrap()
+            else {
                 panic!("a bevel");
             };
             assert!(b.paint_inner);

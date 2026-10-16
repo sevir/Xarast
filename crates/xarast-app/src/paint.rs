@@ -24,6 +24,7 @@
 use std::collections::HashMap;
 
 use xarast_color::{Colour, ColourTable, FillEffect, Rgba8, TranspMode};
+use xarast_doc::PaletteResolver;
 use xarast_doc::fill::{FillGeometry, Perspective, Ramp, RampMapping, Tiling};
 use xarast_doc::resources::BitmapId;
 use xarast_geom::Point;
@@ -38,6 +39,8 @@ use xarast_render::{
 pub(crate) struct PaintCtx<'a> {
     /// The document palette, for [`Colour::Indexed`].
     pub colours: &'a ColourTable,
+    /// The walker's palette resolver: every painted colour goes through it.
+    pub palette: &'a mut PaletteResolver,
     /// Ramp length and image filter follow the quality.
     pub ramp_length: RampLength,
     /// How images are sampled.
@@ -239,18 +242,30 @@ fn family_of(m: TranspMode) -> BlendFamily {
     }
 }
 
-fn rgba(c: &Colour, table: &ColourTable) -> Rgba8 {
-    c.resolve(table).to_rgba8()
+impl PaintCtx<'_> {
+    /// A document colour as the renderer paints it: through the walker's
+    /// [`PaletteResolver`], so a palette reference is resolved once per
+    /// palette epoch and every colour is quantised with the original's
+    /// packing (`ColourValue::to_rgba8_packed`). A flat palette colour
+    /// therefore paints exactly the RGB its `.xar` record cached.
+    pub(crate) fn rgba(&mut self, c: &Colour) -> Rgba8 {
+        self.palette.resolve(c, self.colours)
+    }
 }
 
 /// Endpoint-plus-ramp into the flat stop list the renderer interns.
-fn colour_stops(from: &Colour, to: &Colour, ramp: &Ramp<Colour>, table: &ColourTable) -> Vec<Stop> {
+fn colour_stops(
+    from: &Colour,
+    to: &Colour,
+    ramp: &Ramp<Colour>,
+    ctx: &mut PaintCtx<'_>,
+) -> Vec<Stop> {
     let mut v = Vec::with_capacity(ramp.stops().len() + 2);
-    v.push(Stop::new(0.0, rgba(from, table)));
+    v.push(Stop::new(0.0, ctx.rgba(from)));
     for s in ramp.stops() {
-        v.push(Stop::new(s.pos, rgba(&s.value, table)));
+        v.push(Stop::new(s.pos, ctx.rgba(&s.value)));
     }
-    v.push(Stop::new(1.0, rgba(to, table)));
+    v.push(Stop::new(1.0, ctx.rgba(to)));
     v
 }
 
@@ -294,7 +309,7 @@ pub(crate) fn colour_paint(
 
     let paint = match fill {
         FillGeometry::Flat { value } => {
-            let c = rgba(value, ctx.colours);
+            let c = ctx.rgba(value);
             if c.a == 0 {
                 return None;
             }
@@ -316,7 +331,7 @@ pub(crate) fn colour_paint(
                 GradShape::Linear,
                 mapping,
                 repeat,
-                &colour_stops(from, to, ramp, ctx.colours),
+                &colour_stops(from, to, ramp, ctx),
                 ramp.profile,
                 ease_of(ramp.mapping),
                 space,
@@ -342,7 +357,7 @@ pub(crate) fn colour_paint(
                 GradShape::Radial,
                 mapping,
                 repeat,
-                &colour_stops(from, to, ramp, ctx.colours),
+                &colour_stops(from, to, ramp, ctx),
                 ramp.profile,
                 ease_of(ramp.mapping),
                 space,
@@ -360,7 +375,7 @@ pub(crate) fn colour_paint(
             GradShape::Conical,
             implied_frame(*centre, *zero_dir),
             repeat,
-            &colour_stops(from, to, ramp, ctx.colours),
+            &colour_stops(from, to, ramp, ctx),
             ramp.profile,
             ease_of(ramp.mapping),
             space,
@@ -384,7 +399,7 @@ pub(crate) fn colour_paint(
                 GradShape::Diamond,
                 mapping,
                 repeat,
-                &colour_stops(from, to, ramp, ctx.colours),
+                &colour_stops(from, to, ramp, ctx),
                 ramp.profile,
                 ease_of(ramp.mapping),
                 space,
@@ -403,11 +418,7 @@ pub(crate) fn colour_paint(
             shape: GradShape::Mesh3,
             mapping: affine(*origin, *axis1, *axis2),
             repeat: mesh_repeat(tiling),
-            ramp: GradRamp::Mesh3([
-                rgba(c0, ctx.colours),
-                rgba(c1, ctx.colours),
-                rgba(c2, ctx.colours),
-            ]),
+            ramp: GradRamp::Mesh3([ctx.rgba(c0), ctx.rgba(c1), ctx.rgba(c2)]),
         },
         FillGeometry::FourColour {
             origin,
@@ -427,12 +438,7 @@ pub(crate) fn colour_paint(
                 d: p64(*axis3),
             },
             repeat: mesh_repeat(tiling),
-            ramp: GradRamp::Mesh4([
-                rgba(c0, ctx.colours),
-                rgba(c1, ctx.colours),
-                rgba(c2, ctx.colours),
-                rgba(c3, ctx.colours),
-            ]),
+            ramp: GradRamp::Mesh4([ctx.rgba(c0), ctx.rgba(c1), ctx.rgba(c2), ctx.rgba(c3)]),
         },
         FillGeometry::Bitmap {
             image,
@@ -454,7 +460,7 @@ pub(crate) fn colour_paint(
                 filter: ctx.filter,
                 contone: contone
                     .as_ref()
-                    .map(|(a, b)| (rgba(a, ctx.colours), rgba(b, ctx.colours), space)),
+                    .map(|(a, b)| (ctx.rgba(a), ctx.rgba(b), space)),
                 adjust: BitmapAdjust {
                     profile: *profile,
                     ..BitmapAdjust::default()
@@ -482,8 +488,8 @@ pub(crate) fn colour_paint(
             ..
         } => {
             let colours = xarast_format::svg::procedural::TileColours {
-                from: rgba(from, ctx.colours),
-                to: rgba(to, ctx.colours),
+                from: ctx.rgba(from),
+                to: ctx.rgba(to),
                 effect,
             };
             let Some(key) = crate::procedural::TileKey::of(fill, Some(colours)) else {
@@ -534,20 +540,18 @@ fn gradient(
     }
 }
 
-fn fallback_solid(fill: &xarast_doc::fill::Paint, ctx: &PaintCtx<'_>) -> Option<Paint> {
+fn fallback_solid(fill: &xarast_doc::fill::Paint, ctx: &mut PaintCtx<'_>) -> Option<Paint> {
     let c = match fill {
-        FillGeometry::Flat { value } => rgba(value, ctx.colours),
+        FillGeometry::Flat { value } => ctx.rgba(value),
         FillGeometry::Linear { from, .. }
         | FillGeometry::Radial { from, .. }
         | FillGeometry::Conical { from, .. }
         | FillGeometry::Diamond { from, .. }
         | FillGeometry::Fractal { from, .. }
-        | FillGeometry::Noise { from, .. } => rgba(from, ctx.colours),
-        FillGeometry::ThreeColour { c0, .. } | FillGeometry::FourColour { c0, .. } => {
-            rgba(c0, ctx.colours)
-        }
+        | FillGeometry::Noise { from, .. } => ctx.rgba(from),
+        FillGeometry::ThreeColour { c0, .. } | FillGeometry::FourColour { c0, .. } => ctx.rgba(c0),
         FillGeometry::Bitmap { contone, .. } => match contone {
-            Some((a, _)) => rgba(a, ctx.colours),
+            Some((a, _)) => ctx.rgba(a),
             None => return None,
         },
     };
