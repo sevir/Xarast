@@ -235,6 +235,13 @@ pub enum Act {
         /// The new pixels.
         new: Option<Arc<BitmapData>>,
     },
+    /// [`Action::ReplaceBitmap`].
+    ReplaceBitmap {
+        /// The bitmap.
+        id: crate::resources::BitmapId,
+        /// What takes its place.
+        new: Arc<crate::resources::BitmapResource>,
+    },
     /// [`Action::SetForeign`].
     SetForeign {
         /// The node.
@@ -301,6 +308,10 @@ pub(crate) fn act_of(tree: &Tree, a: &Action) -> Option<Act> {
         Action::SetResource { id, new } => Act::SetResource {
             id: *id,
             new: new.clone(),
+        },
+        Action::ReplaceBitmap { id, new } => Act::ReplaceBitmap {
+            id: *id,
+            new: Arc::clone(new),
         },
         Action::SetForeign { node, new } => Act::SetForeign {
             node: tag(tree, *node)?,
@@ -384,6 +395,10 @@ fn action_of(doc: &Document, a: &Act) -> Result<Action, ReplayError> {
         Act::SetResource { id, new } => Action::SetResource {
             id: *id,
             new: new.clone(),
+        },
+        Act::ReplaceBitmap { id, new } => Action::ReplaceBitmap {
+            id: *id,
+            new: Arc::clone(new),
         },
         Act::SetForeign { node: n, new } => Action::SetForeign {
             node: node(doc, *n)?,

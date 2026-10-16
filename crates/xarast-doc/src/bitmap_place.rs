@@ -102,6 +102,30 @@ impl Command for PlaceBitmap {
     }
 }
 
+/// Replaces the resource behind one [`BitmapId`] (the bitmap gallery's
+/// Replace): one undo step, exact on undo. Every bitmap object, bitmap fill
+/// and bitmap transparency that names the id keeps its geometry and shows
+/// the new image; only those objects are marked changed
+/// ([`crate::Action::ReplaceBitmap`]). Unlike inserting a resource this is
+/// in the history.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReplaceBitmap {
+    /// The bitmap whose resource is swapped.
+    pub image: BitmapId,
+    /// What takes its place.
+    pub with: crate::resources::BitmapResource,
+}
+
+impl Command for ReplaceBitmap {
+    fn label(&self) -> &'static str {
+        "Replace Bitmap"
+    }
+
+    fn run(&self, tx: &mut Tx<'_>) -> Result<(), EditError> {
+        tx.replace_bitmap(self.image, self.with.clone())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

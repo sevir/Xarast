@@ -121,6 +121,9 @@ enum JOp {
     Rebase,
     AddBitmap(u8),
     DropBitmaps,
+    /// Replace the first bitmap the document holds (a big payload when
+    /// the seed is a multiple of three).
+    ReplaceBitmap(u8),
 }
 
 fn jop_strategy() -> impl Strategy<Value = JOp> {
@@ -137,6 +140,7 @@ fn jop_strategy() -> impl Strategy<Value = JOp> {
         1 => Just(JOp::Rebase),
         1 => any::<u8>().prop_map(JOp::AddBitmap),
         1 => Just(JOp::DropBitmaps),
+        1 => any::<u8>().prop_map(JOp::ReplaceBitmap),
     ]
 }
 
@@ -198,6 +202,18 @@ fn apply(live: &mut Live, op: &JOp) {
             // the next journalled operation records the table first.
             if s % 2 == 0 {
                 bus.sync_journal(doc);
+            }
+        }
+        JOp::ReplaceBitmap(s) => {
+            let first = doc.resources.bitmaps().next().map(|(id, _)| id);
+            if let Some(image) = first {
+                let _ = bus.dispatch(
+                    doc,
+                    &crate::ReplaceBitmap {
+                        image,
+                        with: bitmap(*s, s % 3 == 0),
+                    },
+                );
             }
         }
         JOp::DropBitmaps => {
@@ -274,6 +290,45 @@ fn a_fixed_sequence_records_and_replays() {
     assert!(live.lines.iter().any(|l| l.contains("\"op\":\"tables\"")));
     assert!(live.lines.iter().any(|l| l.contains("\"sha256\"")));
     let (doc, _) = live.recover();
+    assert_eq!(doc.canonical_digest(), live.doc.canonical_digest());
+}
+
+/// A replace is journalled as an action carrying the new resource, a big
+/// payload as a blob, and replays (with undo and redo) to the live digest.
+#[test]
+fn a_replace_is_journalled_and_replays_with_its_undo() {
+    let mut live = Live::new(edit_fixture().doc);
+    for op in [
+        JOp::AddBitmap(3),
+        JOp::Edit(Edit::AddBitmap(1)),
+        JOp::ReplaceBitmap(6),
+        JOp::Edit(Edit::Nudge(2, 10, 10)),
+        JOp::ReplaceBitmap(1),
+    ] {
+        apply(&mut live, &op);
+    }
+    let replaces: Vec<&String> = live
+        .lines
+        .iter()
+        .filter(|l| l.contains("replace_bitmap"))
+        .collect();
+    assert_eq!(replaces.len(), 2, "{:#?}", live.lines);
+    assert!(
+        replaces[0].contains("\"sha256\""),
+        "a payload of 4 KiB or more is a blob: {}",
+        replaces[0]
+    );
+    assert!(!replaces[1].contains("\"sha256\""), "a small one is inline");
+    let (mut doc, mut bus) = live.recover();
+    assert_eq!(doc.canonical_digest(), live.doc.canonical_digest());
+    // Undo the second replace, then the nudge, then the first replace.
+    for _ in 0..3 {
+        assert!(live.bus.undo(&mut live.doc).is_some());
+        assert!(bus.undo(&mut doc).is_some());
+        assert_eq!(doc.canonical_digest(), live.doc.canonical_digest());
+    }
+    assert!(live.bus.redo(&mut live.doc).is_some());
+    assert!(bus.redo(&mut doc).is_some());
     assert_eq!(doc.canonical_digest(), live.doc.canonical_digest());
 }
 

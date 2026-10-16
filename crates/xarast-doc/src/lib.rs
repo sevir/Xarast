@@ -91,7 +91,7 @@ pub use attr::{
     DefaultAttrs, MultiAttr, Quality, ResolvedAttrs, default_for, slot_name,
 };
 pub use bitmap_fill::{MoveBitmapControl, SetBitmapDpi, SetBitmapTiling};
-pub use bitmap_place::{PlaceBitmap, default_bitmap_attrs};
+pub use bitmap_place::{PlaceBitmap, ReplaceBitmap, default_bitmap_attrs};
 pub use bounds::{BoundsCache, Epoch, compute_bounds};
 pub use builder::{
     BuildError, BuildId, BuildLimits, DiagCode, Diagnostic, DocumentBuilder, Severity, legal_child,

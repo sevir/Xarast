@@ -15,6 +15,7 @@ mod journal;
 mod mould;
 mod props;
 mod regen;
+mod replace_bitmap;
 mod tree;
 mod undo;
 

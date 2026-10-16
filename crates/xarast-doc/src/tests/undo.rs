@@ -86,6 +86,28 @@ fn every_action_round_trips_through_undo_and_redo() {
         Box::new(move |tx: &mut Tx<'_>| tx.set_attr(f.group_fill, black_fill())),
         Box::new(move |tx: &mut Tx<'_>| tx.move_node(shape, layer_id, Attach::FirstChild)),
         Box::new(move |tx: &mut Tx<'_>| {
+            tx.replace_bitmap(
+                bitmap,
+                BitmapResource {
+                    name: Arc::from("replacement"),
+                    info: BitmapInfo {
+                        width: 1,
+                        height: 3,
+                        bpp: 32,
+                        dpi_x: 300,
+                        dpi_y: 300,
+                    },
+                    pixels: Arc::new(BitmapData {
+                        pixels: Arc::from(vec![7u8; 12]),
+                        palette: Arc::from(Vec::new()),
+                    }),
+                    original: None,
+                    procedural: None,
+                    transparent_index: None,
+                },
+            )
+        }),
+        Box::new(move |tx: &mut Tx<'_>| {
             tx.set_resource(
                 ResourceRef::Bitmap(bitmap),
                 Arc::new(BitmapData {

@@ -23,7 +23,7 @@ use crate::Document;
 use crate::attr::AttrValue;
 use crate::foreign::{ForeignBaggage, ForeignMarks};
 use crate::kind::NodeKind;
-use crate::resources::{BitmapData, ResourceRef};
+use crate::resources::{BitmapData, BitmapId, BitmapResource, ResourceRef};
 use crate::tree::{Attach, NodeFlags, NodeId, Tree, TreeError};
 
 /// What can go wrong during an edit.
@@ -123,6 +123,16 @@ pub enum Action {
         /// The new baggage.
         new: Option<Arc<ForeignBaggage>>,
     },
+    /// Put a whole bitmap resource in the place of another under the same
+    /// key (the bitmap gallery's Replace). Every object, fill and
+    /// transparency that names the key follows, and only they are
+    /// touched. The inverse carries the resource as it was.
+    ReplaceBitmap {
+        /// The bitmap.
+        id: BitmapId,
+        /// What takes its place.
+        new: Arc<BitmapResource>,
+    },
     /// Replace the whole colour table (phase 8 palette edits). The inverse
     /// is the table as it was, so undo restores every entry — including a
     /// removed one, under its old id — exactly.
@@ -209,6 +219,25 @@ impl Action {
                     .ok_or(EditError::MissingResource(*id))?;
                 doc.tree.touch_resources();
                 doc.tree.note_everything_changed();
+            }
+            Action::ReplaceBitmap { id, new } => {
+                doc.resources
+                    .swap_bitmap(*id, Arc::clone(new))
+                    .ok_or(EditError::MissingResource(ResourceRef::Bitmap(*id)))?;
+                // Not `touch_resources`: that moves the scope of every node
+                // of the document. Only the users are touched, so the scene
+                // diff repaints exactly them.
+                let users: Vec<NodeId> = doc
+                    .tree
+                    .iter()
+                    .filter(|(_, d)| crate::resources::uses_bitmap(&d.kind, *id))
+                    .map(|(n, _)| n)
+                    .collect();
+                for n in users {
+                    doc.tree.touch(n);
+                    let parent = doc.tree.links(n).parent;
+                    doc.tree.note_change(n, parent);
+                }
             }
             Action::SetForeign { node, new } => {
                 if !doc.tree.contains(*node) {
@@ -317,6 +346,13 @@ impl Action {
                 };
                 Action::SetResource { id: *id, new: old }
             }
+            Action::ReplaceBitmap { id, new } => Action::ReplaceBitmap {
+                id: *id,
+                new: doc
+                    .resources
+                    .bitmap(*id)
+                    .map_or_else(|| Arc::clone(new), |r| Arc::new(r.clone())),
+            },
             Action::SetForeign { node, .. } => Action::SetForeign {
                 node: *node,
                 new: doc.tree.foreign_arc(*node).cloned(),
@@ -345,6 +381,11 @@ impl Action {
             Action::SetResource { new, .. } => new
                 .as_ref()
                 .map_or(0, |p| p.pixels.len() + p.palette.len() * 4),
+            Action::ReplaceBitmap { new, .. } => {
+                new.pixels.pixels.len()
+                    + new.pixels.palette.len() * 4
+                    + new.original.as_ref().map_or(0, |o| o.bytes.len())
+            }
             Action::SetForeign { new, .. } => new.as_ref().map_or(0, |b| b.size_hint()),
             Action::SetPalette { new } => new.len() * size_of::<xarast_color::ColourDef>(),
             Action::Batch(a) => a.iter().map(|x| x.size_hint(doc)).sum(),
@@ -362,6 +403,7 @@ impl Action {
             | Action::Transform { .. }
             | Action::SetAttr { .. }
             | Action::SetResource { .. }
+            | Action::ReplaceBitmap { .. }
             | Action::SetForeign { .. }
             | Action::SetPalette { .. } => false,
         }
@@ -844,6 +886,18 @@ impl<'d> Tx<'d> {
         })
     }
 
+    /// Puts `new` in the place of bitmap `id` ([`Action::ReplaceBitmap`]).
+    ///
+    /// # Errors
+    ///
+    /// [`EditError::MissingResource`] for an unknown bitmap.
+    pub fn replace_bitmap(&mut self, id: BitmapId, new: BitmapResource) -> Result<(), EditError> {
+        self.act(Action::ReplaceBitmap {
+            id,
+            new: Arc::new(new),
+        })
+    }
+
     /// Replaces a node's foreign baggage. Empty baggage removes it.
     ///
     /// Not refused on a locked node: baggage is data this version does not
@@ -905,6 +959,7 @@ impl<'d> Tx<'d> {
             | Action::Transform { .. }
             | Action::SetAttr { .. }
             | Action::SetResource { .. }
+            | Action::ReplaceBitmap { .. }
             | Action::SetForeign { .. }
             | Action::SetPalette { .. } => {}
         }

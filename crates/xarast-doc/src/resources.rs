@@ -303,6 +303,29 @@ impl DocumentResources {
         Some(old)
     }
 
+    /// Puts `new` in the place of bitmap `id`, keeping the key, and returns
+    /// what was there. The deduplication index follows: the old content's
+    /// entry goes (when it named `id`), the new content's is added unless
+    /// another bitmap already holds that content.
+    ///
+    /// Not counted in [`DocumentResources::tables_rev`]: the change goes
+    /// through [`crate::Action::ReplaceBitmap`], which the journal records.
+    pub(crate) fn swap_bitmap(
+        &mut self,
+        id: BitmapId,
+        new: Arc<BitmapResource>,
+    ) -> Option<BitmapResource> {
+        let slot = self.bitmaps.get_mut(id)?;
+        let old_hash = slot.content_hash();
+        let old = std::mem::replace(slot, (*new).clone());
+        let new_hash = slot.content_hash();
+        if self.bitmap_by_hash.get(&old_hash) == Some(&id) {
+            self.bitmap_by_hash.remove(&old_hash);
+        }
+        self.bitmap_by_hash.entry(new_hash).or_insert(id);
+        Some(old)
+    }
+
     /// Every bitmap, in slot order.
     pub fn bitmaps(&self) -> impl Iterator<Item = (BitmapId, &BitmapResource)> + '_ {
         self.bitmaps.iter()
@@ -423,6 +446,14 @@ pub(crate) fn refs_of(kind: &NodeKind, out: &mut Vec<ResourceRef>) {
         NodeKind::Attr(a) => a.value.resource_refs(out),
         _ => {}
     }
+}
+
+/// Whether a node refers to bitmap `id`: a bitmap object, or a fill or
+/// transparency attribute.
+pub(crate) fn uses_bitmap(kind: &NodeKind, id: BitmapId) -> bool {
+    let mut refs = Vec::new();
+    refs_of(kind, &mut refs);
+    refs.contains(&ResourceRef::Bitmap(id))
 }
 
 /// Sweeps resources that nothing alive in the arena references.
