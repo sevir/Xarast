@@ -15,6 +15,8 @@
 //! | drag on empty space | marquee over nodes; Adjust adds |
 //! | Delete, Backspace | delete the selected nodes (continuity kept) |
 //! | L, C, S, Z, B, J, Enter | make line, make curve, smooth, cusp, break, join, close the selected ends |
+//! | arrows (×6 steps by modifier) | nudge the selected points with their handles; no point selected: the paths |
+//! | Tab, Shift+Tab, Home, End | move the point selection one node on or back, or to the first or last node |
 //!
 //! Handles are shown for the one selected node of a path, as the original
 //! shows them.
@@ -897,6 +899,62 @@ impl Tool for ShapeEditorTool {
         }
     }
 
+    fn takes_nudge(&self, view: ToolView<'_>) -> bool {
+        !edited_paths(view.doc, view.edit).is_empty()
+    }
+
+    /// The path-point nudge (`OPTOKEN_PATHNUDGE*` in the original,
+    /// `Kernel/pathndge.cpp`): every selected point moves by `by` with
+    /// both its handles, and no auto-placed handle is re-placed (unlike a
+    /// drag). With no point selected the edited paths move as objects.
+    /// Each path is a `SetPath`/`Move` edit, which a run of nudges
+    /// coalesces into one step per path.
+    fn nudge(&mut self, by: Vector, cx: &mut ToolCtx<'_>) -> bool {
+        let paths = edited(cx.doc, cx.edit);
+        if paths.is_empty() {
+            return false;
+        }
+        if paths.iter().all(|e| e.selected.is_empty()) {
+            let nodes = paths.iter().map(|e| e.id).collect();
+            cx.commands.emit(EditCommand::translate(nodes, by));
+            cx.requests.overlay_changed = true;
+            return true;
+        }
+        let mut points = Vec::new();
+        for e in paths {
+            if e.selected.is_empty() {
+                points.push((e.id, Vec::new()));
+                continue;
+            }
+            let mut path = e.nodes.path.clone();
+            for n in &e.selected {
+                path.move_node(*n, by);
+            }
+            commit(
+                cx,
+                e.id,
+                path,
+                PathEdit::Move,
+                None,
+                &e.selected,
+                &mut points,
+            );
+        }
+        cx.requests.points = Some(points);
+        cx.requests.overlay_changed = true;
+        true
+    }
+
+    fn claims_action(&self, action: ToolAction, view: ToolView<'_>) -> bool {
+        matches!(
+            action,
+            ToolAction::NextPoint
+                | ToolAction::PreviousPoint
+                | ToolAction::FirstPoint
+                | ToolAction::LastPoint
+        ) && !edited_paths(view.doc, view.edit).is_empty()
+    }
+
     fn cursor(&self, state: InteractionState) -> CursorKind {
         match (state, &self.drag) {
             (InteractionState::Dragging, Some(NodeDrag::Marquee { .. }) | None) => {
@@ -950,7 +1008,30 @@ impl Tool for ShapeEditorTool {
             | ToolAction::CopyMould
             | ToolAction::PasteEnvelope
             | ToolAction::PastePerspective
-            | ToolAction::RotateMould => false,
+            | ToolAction::RotateMould
+            | ToolAction::FlipHorizontal
+            | ToolAction::FlipVertical => false,
+            ToolAction::NextPoint
+            | ToolAction::PreviousPoint
+            | ToolAction::FirstPoint
+            | ToolAction::LastPoint => {
+                let paths = edited(cx.doc, cx.edit);
+                if paths.is_empty() {
+                    return false;
+                }
+                cx.requests.points = Some(
+                    paths
+                        .iter()
+                        .map(|e| {
+                            let all: Vec<NodeRef> = e.nodes.path.node_refs().collect();
+                            let sel = cycle_selection(&all, &e.selected, action);
+                            (e.id, e.nodes.indices(&sel))
+                        })
+                        .collect(),
+                );
+                cx.requests.overlay_changed = true;
+                true
+            }
             ToolAction::SelectAll => {
                 let paths = edited(cx.doc, cx.edit);
                 if paths.is_empty() {
@@ -1078,6 +1159,44 @@ impl Tool for ShapeEditorTool {
             }),
         }
     }
+}
+
+/// The point selection a cycling key leaves on one path whose nodes, in
+/// order, are `all` (`research/04 §4.11`, `tools/beztool.cpp`
+/// `CyclePathPoints`, `HomePathPoints`, `EndPathPoints` in the original):
+///
+/// - `Tab` moves every selected point one node on, the last one wrapping
+///   round to the first; `Shift+Tab` one node back.
+/// - `Home` shifts the pattern back until the first node is selected;
+///   `End` shifts it on until the last one is. What falls off the end is
+///   dropped.
+/// - With nothing selected, `Tab` and `Home` select the first node,
+///   `Shift+Tab` and `End` the last.
+#[must_use]
+pub fn cycle_selection(all: &[NodeRef], selected: &[NodeRef], key: ToolAction) -> Vec<NodeRef> {
+    let n = all.len();
+    let on: Vec<bool> = all.iter().map(|r| selected.contains(r)).collect();
+    let (Some(first), Some(last)) = (on.iter().position(|b| *b), on.iter().rposition(|b| *b))
+    else {
+        let pick = match key {
+            ToolAction::NextPoint | ToolAction::FirstPoint => all.first(),
+            _ => all.last(),
+        };
+        return pick.copied().into_iter().collect();
+    };
+    let source = |i: usize| -> bool {
+        match key {
+            ToolAction::NextPoint => on[(i + n - 1) % n],
+            ToolAction::PreviousPoint => on[(i + 1) % n],
+            ToolAction::FirstPoint => on.get(i + first).copied().unwrap_or(false),
+            ToolAction::LastPoint => {
+                let shift = n - 1 - last;
+                i >= shift && on[i - shift]
+            }
+            _ => on[i],
+        }
+    };
+    (0..n).filter(|i| source(*i)).map(|i| all[i]).collect()
 }
 
 /// Whether a node is the first or last node of an open subpath.

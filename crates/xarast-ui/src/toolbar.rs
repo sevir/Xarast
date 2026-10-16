@@ -492,6 +492,7 @@ impl InfobarRow {
                         value,
                         editable,
                     } => self.angle(ui, *field, *value, *editable, out),
+                    InfobarItem::Bump { field, enabled } => bump_buttons(ui, *field, *enabled, out),
                     InfobarItem::Toggle { field, on } => {
                         let mut v = *on;
                         let r = ui
@@ -902,6 +903,22 @@ fn choice(
             field,
             value: InfobarValue::Choice(i),
         });
+    }
+}
+
+/// A field's bump buttons: "less" and "more", each a click that steps the
+/// field (`UiCommand::InfobarBump`); the application works out the step.
+fn bump_buttons(ui: &mut egui::Ui, field: InfobarField, enabled: bool, out: &mut CommandSink) {
+    for (up, text, verb) in [(false, "-", "Decrease"), (true, "+", "Increase")] {
+        let tip = format!("{verb} {}", field.description().to_lowercase());
+        let r = ui
+            .add_enabled(enabled, egui::Button::new(text).small())
+            .on_hover_text(tip.as_str())
+            .on_disabled_hover_text(tip.as_str());
+        crate::a11y::set_label(ui.ctx(), r.id, tip);
+        if r.clicked() {
+            out.push(UiCommand::InfobarBump { field, up });
+        }
     }
 }
 

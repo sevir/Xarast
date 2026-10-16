@@ -29,6 +29,12 @@ pub enum ChordKey {
     Char(char),
     /// The Home key.
     Home,
+    /// The End key.
+    End,
+    /// The Tab key.
+    Tab,
+    /// An arrow key.
+    Arrow(crate::tool::NudgeDir),
     /// The Delete key.
     Delete,
     /// The Backspace key.
@@ -150,6 +156,14 @@ impl fmt::Display for KeyChord {
         match self.key {
             ChordKey::Char(c) => write!(f, "{}", c.to_ascii_uppercase()),
             ChordKey::Home => f.write_str("Home"),
+            ChordKey::End => f.write_str("End"),
+            ChordKey::Tab => f.write_str("Tab"),
+            ChordKey::Arrow(d) => f.write_str(match d {
+                crate::tool::NudgeDir::Up => "Up",
+                crate::tool::NudgeDir::Down => "Down",
+                crate::tool::NudgeDir::Left => "Left",
+                crate::tool::NudgeDir::Right => "Right",
+            }),
             ChordKey::Delete => f.write_str("Del"),
             ChordKey::Backspace => f.write_str("Backspace"),
             ChordKey::Enter => f.write_str("Enter"),
@@ -523,7 +537,15 @@ impl AppCommand {
                 | ToolAction::CopyMould
                 | ToolAction::PasteEnvelope
                 | ToolAction::PastePerspective
-                | ToolAction::RotateMould => NONE,
+                | ToolAction::RotateMould
+                | ToolAction::FlipHorizontal
+                | ToolAction::FlipVertical => NONE,
+                // Context keys the tool claims before the table
+                // ([`ToolKey`]): `Home` is Fit page otherwise.
+                ToolAction::NextPoint
+                | ToolAction::PreviousPoint
+                | ToolAction::FirstPoint
+                | ToolAction::LastPoint => NONE,
             },
             AppCommand::ConvertToShapes => CONVERT,
             AppCommand::Cut => CUT,
@@ -627,6 +649,99 @@ impl AppCommand {
     }
 }
 
+/// A key the tool in force reads before the command table's shortcuts,
+/// when it has something to act on: the arrow nudges (`research/04
+/// §4.5`), the shape editor's point cycling (`§4.11`) and the drop-a-copy
+/// key of a transform drag (T4.7). When the tool has nothing to act on the
+/// key does what the table binds it to ([`ToolKey::overrides`]): the
+/// arrows pan, `Home` fits the page, `NumPad +` zooms in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ToolKey {
+    /// An arrow key: nudge what the tool has selected. Every modifier
+    /// combination is a step of its own ([`crate::NudgeStep::from_keys`]),
+    /// which makes the 24 nudges.
+    Nudge(crate::tool::NudgeDir),
+    /// A tool action with a key of its own.
+    Action(ToolAction),
+    /// `NumPad +` while a transform drag is in flight: drop a copy at the
+    /// transform it has now ([`Intent::DropCopy`]).
+    DropCopy,
+}
+
+impl ToolKey {
+    /// Every context key.
+    pub const ALL: [ToolKey; 9] = [
+        ToolKey::Nudge(crate::tool::NudgeDir::Up),
+        ToolKey::Nudge(crate::tool::NudgeDir::Down),
+        ToolKey::Nudge(crate::tool::NudgeDir::Left),
+        ToolKey::Nudge(crate::tool::NudgeDir::Right),
+        ToolKey::Action(ToolAction::NextPoint),
+        ToolKey::Action(ToolAction::PreviousPoint),
+        ToolKey::Action(ToolAction::FirstPoint),
+        ToolKey::Action(ToolAction::LastPoint),
+        ToolKey::DropCopy,
+    ];
+
+    /// The key, as a help page or a tooltip shows it. An arrow is shown
+    /// plain: its modifiers choose the step rather than another command.
+    #[must_use]
+    pub const fn chord(self) -> KeyChord {
+        match self {
+            ToolKey::Nudge(d) => KeyChord::plain(ChordKey::Arrow(d)),
+            ToolKey::Action(ToolAction::PreviousPoint) => KeyChord {
+                key: ChordKey::Tab,
+                ctrl: false,
+                shift: true,
+            },
+            ToolKey::Action(ToolAction::FirstPoint) => KeyChord::plain(ChordKey::Home),
+            ToolKey::Action(ToolAction::LastPoint) => KeyChord::plain(ChordKey::End),
+            ToolKey::Action(_) => KeyChord::plain(ChordKey::Tab),
+            ToolKey::DropCopy => KeyChord::numpad('+'),
+        }
+    }
+
+    /// What the key is, for a help page.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            ToolKey::Nudge(crate::tool::NudgeDir::Up) => "Nudge up",
+            ToolKey::Nudge(crate::tool::NudgeDir::Down) => "Nudge down",
+            ToolKey::Nudge(crate::tool::NudgeDir::Left) => "Nudge left",
+            ToolKey::Nudge(crate::tool::NudgeDir::Right) => "Nudge right",
+            ToolKey::Action(a) => a.label(),
+            ToolKey::DropCopy => "Drop a copy",
+        }
+    }
+
+    /// The command table entry the key runs when the tool does not claim
+    /// it, if any. Only these may share a key with the table.
+    #[must_use]
+    pub const fn overrides(self) -> Option<AppCommand> {
+        match self {
+            ToolKey::Action(ToolAction::FirstPoint) => Some(AppCommand::FitPage),
+            ToolKey::DropCopy => Some(AppCommand::ZoomIn),
+            ToolKey::Nudge(_) | ToolKey::Action(_) => None,
+        }
+    }
+}
+
+/// Whether a key event for `b` would also fire `a`: the same chord, or a
+/// keypad key against the same character bound anywhere (the shell binds
+/// `+` without a location, so the keypad's `+` matches it too).
+#[must_use]
+pub fn chords_overlap(a: KeyChord, b: KeyChord) -> bool {
+    let key = match (a.key, b.key) {
+        (ChordKey::NumPad(x), ChordKey::Char(y)) | (ChordKey::Char(x), ChordKey::NumPad(y)) => {
+            x == y
+        }
+        (x, y) => x == y,
+    };
+    let shift = a.shift == b.shift
+        || (a.shift_is_layout_dependent() && !a.shift)
+        || (b.shift_is_layout_dependent() && !b.shift);
+    key && a.ctrl == b.ctrl && shift
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -706,6 +821,47 @@ mod tests {
             if !command.shortcuts().is_empty() {
                 assert!(AppCommand::ALL.contains(&command), "{tool:?}");
             }
+        }
+    }
+
+    #[test]
+    fn context_keys_clash_only_with_what_they_override() {
+        for (i, k) in ToolKey::ALL.iter().enumerate() {
+            assert!(!k.label().is_empty());
+            for other in &ToolKey::ALL[i + 1..] {
+                assert_ne!(k.chord(), other.chord(), "{k:?} and {other:?}");
+            }
+            for c in AppCommand::ALL {
+                for chord in c.shortcuts() {
+                    if chords_overlap(k.chord(), *chord) {
+                        assert_eq!(k.overrides(), Some(c), "{k:?} clashes with {c:?}");
+                    }
+                }
+            }
+            if let Some(c) = k.overrides() {
+                assert!(
+                    c.shortcuts()
+                        .iter()
+                        .any(|chord| chords_overlap(k.chord(), *chord)),
+                    "{k:?} overrides {c:?} but shares no key with it"
+                );
+            }
+        }
+        let key = |k: ToolKey| k.chord().to_string();
+        assert_eq!(key(ToolKey::Action(ToolAction::NextPoint)), "Tab");
+        assert_eq!(key(ToolKey::Action(ToolAction::PreviousPoint)), "Shift+Tab");
+        assert_eq!(key(ToolKey::Action(ToolAction::FirstPoint)), "Home");
+        assert_eq!(key(ToolKey::Action(ToolAction::LastPoint)), "End");
+        assert_eq!(key(ToolKey::DropCopy), "NumPad +");
+        // The point keys are not in the table: they would clash with Fit
+        // page, and they mean nothing without a path.
+        for a in [
+            ToolAction::NextPoint,
+            ToolAction::PreviousPoint,
+            ToolAction::FirstPoint,
+            ToolAction::LastPoint,
+        ] {
+            assert!(AppCommand::Action(a).shortcuts().is_empty());
         }
     }
 

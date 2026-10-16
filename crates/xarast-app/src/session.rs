@@ -237,6 +237,9 @@ pub struct Session {
     /// The coalescing gesture of a run of keyboard nudges: every nudge
     /// until another intent arrives joins one undo step (XARA-T-0220).
     nudge_run: Option<u64>,
+    /// The nudge unit in millipoints: the arrow keys' step and the
+    /// infobar's length bump (`Session::set_nudge_unit`).
+    nudge_unit: f64,
     /// The infobar slider being dragged and its last value, previewed in
     /// [`Preview::attrs`] until the release commits it (XARA-T-0220).
     infobar_drag: Option<(InfobarField, crate::tool::InfobarValue)>,
@@ -311,6 +314,7 @@ impl Session {
             picker: crate::tool::Picker::new(),
             last_edit: None,
             nudge_run: None,
+            nudge_unit: crate::tool::NUDGE_UNIT_MP,
             infobar_drag: None,
             colour_editor: crate::colour_editor::ColourEditorModel::default(),
             colour_drag: None,
@@ -1103,6 +1107,66 @@ impl Session {
         })
     }
 
+    /// Whether the tool in force has something `action` acts on now, so
+    /// that the action's context key ([`crate::command::ToolKey`]) goes to
+    /// it rather than to what the command table binds the key to: the
+    /// shell asks before it sends `Home` to the shape editor rather than
+    /// fitting the page.
+    #[must_use]
+    pub fn claims_action(&self, action: ToolAction) -> bool {
+        self.tools.claims_action(
+            action,
+            ToolView {
+                doc: &self.doc,
+                edit: &self.edit,
+                viewport: &self.viewport,
+                preview: &self.preview,
+            },
+        )
+    }
+
+    /// The nudge unit, in millipoints: one plain arrow-key nudge, and one
+    /// click of a length field's bump button.
+    #[must_use]
+    pub fn nudge_unit(&self) -> f64 {
+        self.nudge_unit
+    }
+
+    /// Sets the nudge unit (the document's nudge size, `TAG_DOCUMENTNUDGE`
+    /// in a `.xar`). A value that is not positive and finite restores the
+    /// default, [`crate::tool::NUDGE_UNIT_MP`].
+    pub fn set_nudge_unit(&mut self, mp: f64) {
+        self.nudge_unit = if mp.is_finite() && mp > 0.0 {
+            mp
+        } else {
+            crate::tool::NUDGE_UNIT_MP
+        };
+    }
+
+    /// The value one bump of `field` gives, read from the infobar now: a
+    /// length field steps by the nudge unit, an angle field by a degree
+    /// (`tools/selinfo.cpp` in the original). `None` when the field is not
+    /// on the bar, is empty, or does not take typing.
+    fn bumped(&self, field: InfobarField, up: bool) -> Option<crate::tool::InfobarValue> {
+        use crate::tool::{InfobarItem, InfobarValue};
+        let sign: f64 = if up { 1.0 } else { -1.0 };
+        self.infobar().items.iter().find_map(|item| match item {
+            InfobarItem::Measure {
+                field: f,
+                value: Some(v),
+                editable: true,
+            } if *f == field => Some(InfobarValue::Length(xarast_geom::Mp::from_f64_round(
+                sign.mul_add(self.nudge_unit, v.to_f64()),
+            ))),
+            InfobarItem::Angle {
+                field: f,
+                value: Some(v),
+                editable: true,
+            } if *f == field => Some(InfobarValue::Angle(v + sign)),
+            _ => None,
+        })
+    }
+
     /// Whether an infobar slider drag is being previewed.
     #[must_use]
     pub fn infobar_dragging(&self) -> bool {
@@ -1393,6 +1457,7 @@ impl Session {
         if !matches!(
             intent,
             Intent::Nudge(_)
+                | Intent::InfobarBump { .. }
                 | Intent::PointerMove(_)
                 | Intent::PointerLeft
                 | Intent::ModifiersChanged(_)
@@ -1480,7 +1545,7 @@ impl Session {
             }
             Intent::Nudge(n) => {
                 if !self.tools.is_pressed() {
-                    let by = n.vector(&self.viewport);
+                    let by = n.vector_with(self.nudge_unit, &self.viewport);
                     if self.nudge_run.is_none() {
                         self.nudge_run = Some(self.begin_gesture());
                     }
@@ -1593,6 +1658,20 @@ impl Session {
             Intent::Guides(op) => {
                 self.dispatch(&crate::snap::GuideCommand(op))?;
                 changed |= Changed::UI | Changed::SELECTION;
+            }
+            Intent::InfobarBump { field, up } => {
+                changed |= self.settle_infobar_drag();
+                if !self.tools.is_pressed()
+                    && let Some(value) = self.bumped(field, up)
+                {
+                    if self.nudge_run.is_none() {
+                        self.nudge_run = Some(self.begin_gesture());
+                    }
+                    changed |= self.infobar_edit(field, value)? | Changed::UI;
+                }
+            }
+            Intent::DropCopy => {
+                changed |= self.run_tool(ToolMachine::drop_copy)?.0;
             }
             Intent::InfobarEdit { field, value } => {
                 changed |= self.settle_infobar_drag();

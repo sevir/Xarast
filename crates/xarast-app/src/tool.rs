@@ -480,6 +480,8 @@ pub enum InfobarField {
     H,
     /// The rotation, in degrees.
     Angle,
+    /// The horizontal skew, in degrees (the selector, T4.9).
+    Skew,
     /// A rectangle's corner radius.
     Radius,
     /// Which point of the box stays put: the 9-anchor grid.
@@ -643,6 +645,7 @@ impl InfobarField {
             InfobarField::W => "W",
             InfobarField::H => "H",
             InfobarField::Angle => "Angle",
+            InfobarField::Skew => "Skew",
             InfobarField::Radius => "Radius",
             InfobarField::Anchor => "Anchor",
             InfobarField::LockAspect => "Lock aspect",
@@ -721,6 +724,7 @@ impl InfobarField {
             InfobarField::W => "Width",
             InfobarField::H => "Height",
             InfobarField::Angle => "Rotation angle in degrees",
+            InfobarField::Skew => "Horizontal skew angle in degrees",
             InfobarField::Radius => "Corner radius",
             InfobarField::Anchor => "Fixed point for typed values",
             InfobarField::LockAspect => "Keep the width and height in proportion",
@@ -858,6 +862,16 @@ pub enum InfobarItem {
         value: Option<f64>,
         /// Whether typing into it does anything.
         editable: bool,
+    },
+    /// The pair of bump buttons after a [`InfobarItem::Measure`] or
+    /// [`InfobarItem::Angle`] field: each click steps the field by one
+    /// nudge unit (a length) or one degree (an angle), as typing the
+    /// stepped value would (raises [`crate::Intent::InfobarBump`]).
+    Bump {
+        /// The field they step.
+        field: InfobarField,
+        /// Whether they do anything now.
+        enabled: bool,
     },
     /// A check box.
     Toggle {
@@ -1296,6 +1310,21 @@ pub enum ToolAction {
     PastePerspective,
     /// Turn the selected moulds' contents a quarter turn round the cage.
     RotateMould,
+    /// Mirror the selection left to right about its rotation centre (the
+    /// selector's infobar, T4.6).
+    FlipHorizontal,
+    /// Mirror the selection top to bottom about its rotation centre.
+    FlipVertical,
+    /// `Tab` in the shape editor: move the point selection one point on
+    /// along each edited path (`research/04 §4.11`).
+    NextPoint,
+    /// `Shift+Tab`: move the point selection one point back.
+    PreviousPoint,
+    /// `Home`: shift the point selection back so the first point is
+    /// selected, keeping its pattern.
+    FirstPoint,
+    /// `End`: shift it on so the last point is selected.
+    LastPoint,
 }
 
 impl ToolAction {
@@ -1320,12 +1349,20 @@ impl ToolAction {
             ToolAction::PasteEnvelope => "Paste envelope",
             ToolAction::PastePerspective => "Paste perspective",
             ToolAction::RotateMould => "Rotate contents",
+            ToolAction::FlipHorizontal => "Flip horizontally",
+            ToolAction::FlipVertical => "Flip vertically",
+            ToolAction::NextPoint => "Next point",
+            ToolAction::PreviousPoint => "Previous point",
+            ToolAction::FirstPoint => "First point",
+            ToolAction::LastPoint => "Last point",
         }
     }
 }
 
 /// The document's nudge unit when it sets none: one millimetre, in
-/// millipoints (provisional; the `.xar` document nudge is not kept yet).
+/// millipoints. The original's default is 2835 mp (`Kernel/opnudge.cpp`),
+/// which this rounds to; the `.xar` document nudge (tag 4114) is not kept
+/// yet, so [`crate::Session::set_nudge_unit`] is the way to change it.
 pub const NUDGE_UNIT_MP: f64 = 72_000.0 / 25.4;
 
 /// Which way an arrow key nudges.
@@ -1385,15 +1422,28 @@ pub struct Nudge {
 }
 
 impl Nudge {
-    /// The displacement in document millipoints (`y` up), at `vp`'s zoom
-    /// for the pixel steps. Never zero.
+    /// The displacement in document millipoints (`y` up) for the default
+    /// nudge unit, at `vp`'s zoom for the pixel steps. Never zero.
     #[must_use]
     pub fn vector(self, vp: &Viewport) -> Vector {
+        self.vector_with(NUDGE_UNIT_MP, vp)
+    }
+
+    /// The displacement for a nudge unit of `unit` millipoints (the
+    /// document's nudge size; a unit that is not positive and finite
+    /// falls back to [`NUDGE_UNIT_MP`]). Never zero.
+    #[must_use]
+    pub fn vector_with(self, unit: f64, vp: &Viewport) -> Vector {
+        let unit = if unit.is_finite() && unit > 0.0 {
+            unit
+        } else {
+            NUDGE_UNIT_MP
+        };
         let len = match self.step {
-            NudgeStep::One => NUDGE_UNIT_MP,
-            NudgeStep::Times5 => NUDGE_UNIT_MP * 5.0,
-            NudgeStep::Times10 => NUDGE_UNIT_MP * 10.0,
-            NudgeStep::Fifth => NUDGE_UNIT_MP / 5.0,
+            NudgeStep::One => unit,
+            NudgeStep::Times5 => unit * 5.0,
+            NudgeStep::Times10 => unit * 10.0,
+            NudgeStep::Fifth => unit / 5.0,
             NudgeStep::Pixel => device_px(vp),
             NudgeStep::TenPixels => device_px(vp) * 10.0,
         };
@@ -1562,6 +1612,24 @@ pub trait Tool: Send + std::fmt::Debug {
     /// A command sent to the tool. Returns whether the tool took it.
     fn action(&mut self, action: ToolAction, cx: &mut ToolCtx<'_>) -> bool {
         let _ = (action, cx);
+        false
+    }
+
+    /// Whether the tool has something `action` acts on now, so that its
+    /// key ([`crate::command::ToolKey`]) goes to the tool rather than to
+    /// the command the key is bound to otherwise (`Home` fits the page
+    /// unless the shape editor has a path to move the point selection
+    /// along).
+    fn claims_action(&self, action: ToolAction, view: ToolView<'_>) -> bool {
+        let _ = (action, view);
+        false
+    }
+
+    /// Drops a copy of what a transform drag in flight is moving, at the
+    /// transform it has now (`NumPad +`, or a click of another button
+    /// during the drag; T4.7). Returns whether the tool took it.
+    fn drop_copy(&mut self, cx: &mut ToolCtx<'_>) -> bool {
+        let _ = cx;
         false
     }
 
@@ -1858,6 +1926,11 @@ impl ToolMachine {
                 self.state = InteractionState::ArmedDrag;
                 true
             }
+            // Another button while a drag holds the primary one: the
+            // original's "click while dragging", which drops a copy (T4.7).
+            CanvasInput::Down { .. } if self.state == InteractionState::Dragging => {
+                self.drop_copy(cx)
+            }
             CanvasInput::Down { .. } => false,
             CanvasInput::Move { at } => {
                 self.last = Some(at);
@@ -2037,6 +2110,26 @@ impl ToolMachine {
         }
         let id = self.current;
         self.tool_mut(id).is_some_and(|t| t.action(action, cx))
+    }
+
+    /// Whether the tool in force claims `action`'s key now; never during
+    /// a gesture.
+    #[must_use]
+    pub fn claims_action(&self, action: ToolAction, view: ToolView<'_>) -> bool {
+        !self.is_pressed()
+            && self
+                .tool(self.current)
+                .is_some_and(|t| t.claims_action(action, view))
+    }
+
+    /// Asks the tool in force to drop a copy of what its drag moves; only
+    /// while a drag is in flight. Returns whether the tool took it.
+    pub fn drop_copy(&mut self, cx: &mut ToolCtx<'_>) -> bool {
+        if self.state != InteractionState::Dragging {
+            return false;
+        }
+        let id = self.current;
+        self.tool_mut(id).is_some_and(|t| t.drop_copy(cx))
     }
 
     /// Sends a caret movement to the tool in force, unless a gesture is in

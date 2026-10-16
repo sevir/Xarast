@@ -253,6 +253,21 @@ pub enum Intent {
         /// The value, already parsed from its units.
         value: crate::tool::InfobarValue,
     },
+    /// A click of one of an infobar field's bump buttons
+    /// ([`crate::tool::InfobarItem::Bump`]): the field steps by one nudge
+    /// unit (a length) or one degree (an angle), as typing the stepped
+    /// value would. A run of clicks on one field is one undo step, like
+    /// a run of nudges.
+    InfobarBump {
+        /// Which field.
+        field: crate::tool::InfobarField,
+        /// Up (the "more" button) or down.
+        up: bool,
+    },
+    /// Drop a copy of what the transform drag in flight moves, at the
+    /// transform it has now (`NumPad +`, T4.7); the drag then leaves the
+    /// originals where they were. Nothing happens without a drag.
+    DropCopy,
     /// A frame tick while a drag holds the pointer at the canvas edge:
     /// scroll the view one step and carry the gesture along. The shell
     /// sends it while [`crate::Session::wants_autoscroll`] says so.

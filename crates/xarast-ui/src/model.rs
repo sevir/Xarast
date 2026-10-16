@@ -543,6 +543,14 @@ pub enum UiCommand {
         /// The value.
         value: xarast_app::InfobarValue,
     },
+    /// A click of one of a field's bump buttons: step it by one nudge
+    /// unit or one degree (T4.9).
+    InfobarBump {
+        /// Which field.
+        field: xarast_app::InfobarField,
+        /// The "more" button (or the "less" one).
+        up: bool,
+    },
     /// The interface needs another frame soon, for example because a drag
     /// is in progress.
     RequestRedraw,

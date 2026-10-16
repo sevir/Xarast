@@ -630,6 +630,14 @@ fn duplicate(tx: &mut Tx<'_>, nodes: &[NodeId], offset: Vector) -> Result<Vec<No
     Ok(out)
 }
 
+/// Copies object `n` (the whole subtree) and attaches the copy right
+/// above `above` (the original, or a copy made of it before), so that
+/// nothing comes between them and it inherits what the original does.
+pub(crate) fn copy_above(tx: &mut Tx<'_>, n: NodeId, above: NodeId) -> Result<NodeId, EditError> {
+    let captured = capture(tx.doc(), n);
+    instantiate(tx, &captured, above, Attach::Next, &|_| {})
+}
+
 impl xarast_doc::Command for StructureCommand {
     fn label(&self) -> &'static str {
         match &self.op {

@@ -1057,6 +1057,7 @@ impl Viewer {
             UiCommand::ClearRecent => Intent::ClearRecent,
             UiCommand::AnswerPrompt(a) => Intent::AnswerPrompt(a),
             UiCommand::InfobarEdit { field, value } => Intent::InfobarEdit { field, value },
+            UiCommand::InfobarBump { field, up } => Intent::InfobarBump { field, up },
             UiCommand::InfobarDrag(op) => Intent::InfobarDrag(op),
             UiCommand::ColourEditor(op) => Intent::ColourEditor(op),
             UiCommand::ColourBar(op) => Intent::ColourBar(op),
@@ -1261,6 +1262,27 @@ impl Viewer {
     }
 }
 
+/// The shell's key for a command table key.
+fn chord_key(key: ChordKey) -> Key {
+    match key {
+        ChordKey::Char(c) | ChordKey::NumPad(c) => Key::char(c),
+        ChordKey::Home => Key::Named(NamedKey::Home),
+        ChordKey::End => Key::Named(NamedKey::End),
+        ChordKey::Tab => Key::Named(NamedKey::Tab),
+        ChordKey::Arrow(d) => Key::Named(match d {
+            xarast_app::NudgeDir::Up => NamedKey::ArrowUp,
+            xarast_app::NudgeDir::Down => NamedKey::ArrowDown,
+            xarast_app::NudgeDir::Left => NamedKey::ArrowLeft,
+            xarast_app::NudgeDir::Right => NamedKey::ArrowRight,
+        }),
+        ChordKey::Delete => Key::Named(NamedKey::Delete),
+        ChordKey::Backspace => Key::Named(NamedKey::Backspace),
+        ChordKey::Enter => Key::Named(NamedKey::Enter),
+        ChordKey::Escape => Key::Named(NamedKey::Escape),
+        ChordKey::Function(n) => Key::Named(NamedKey::Function(n)),
+    }
+}
+
 /// The command table's keys as the shell's shortcuts.
 ///
 /// Punctuation some layouts type with Shift (`+` is Shift+`=` on a US
@@ -1271,16 +1293,7 @@ fn command_shortcuts() -> ShortcutMap<AppCommand> {
     let mut map = ShortcutMap::new();
     for command in AppCommand::ALL {
         for chord in command.shortcuts() {
-            let key = match chord.key {
-                ChordKey::Char(c) => Key::char(c),
-                ChordKey::Home => Key::Named(NamedKey::Home),
-                ChordKey::Delete => Key::Named(NamedKey::Delete),
-                ChordKey::Backspace => Key::Named(NamedKey::Backspace),
-                ChordKey::Enter => Key::Named(NamedKey::Enter),
-                ChordKey::Escape => Key::Named(NamedKey::Escape),
-                ChordKey::Function(n) => Key::Named(NamedKey::Function(n)),
-                ChordKey::NumPad(c) => Key::char(c),
-            };
+            let key = chord_key(chord.key);
             let mut modifiers = Modifiers::NONE;
             if chord.ctrl {
                 modifiers = modifiers.with_ctrl();
@@ -1538,8 +1551,12 @@ impl Viewer {
                 if let Some(intent) = momentary {
                     redraw |= self.apply(vec![intent]).needs_redraw();
                 }
+                let tool_key = if consumed { None } else { self.tool_key(k) };
                 if consumed {
                     // A momentary switch, not a shortcut.
+                } else if let Some(intent) = tool_key {
+                    // The tool claims the key before the command table.
+                    redraw |= self.apply(vec![intent]).needs_redraw();
                 } else if let Some(command) = self.shortcut(k) {
                     let changed = self.run_command(command);
                     redraw |= changed.needs_redraw()
@@ -1646,6 +1663,42 @@ impl Viewer {
             dir,
             step: NudgeStep::from_keys(m.constrain(), m.adjust(), m.alternative()),
         }))
+    }
+
+    /// A context key the tool in force claims before the command table
+    /// (`xarast_app::ToolKey`), when the canvas has the keyboard or nothing
+    /// does: Tab, Shift+Tab, Home and End move the shape editor's point
+    /// selection while it has a path; `NumPad +` drops a copy during a
+    /// transform drag. Otherwise the key runs its shortcut (Home fits the
+    /// page, `NumPad +` zooms in).
+    fn tool_key(&self, k: &KeyEvent) -> Option<Intent> {
+        use crate::input::keyboard::KeyLocation;
+        use xarast_app::ToolAction;
+        let nothing_focused = self.egui.memory(|m| m.focused().is_none());
+        if !(self.canvas_focused || nothing_focused) {
+            return None;
+        }
+        let session = self.app.active()?;
+        let m = k.modifiers;
+        if m.ctrl || m.alt {
+            return None;
+        }
+        if k.location == KeyLocation::Numpad
+            && k.key == Key::char('+')
+            && session.edit.tool.drag_from.is_some()
+        {
+            return Some(Intent::DropCopy);
+        }
+        let action = match (&k.key, m.shift) {
+            (Key::Named(NamedKey::Tab), false) => ToolAction::NextPoint,
+            (Key::Named(NamedKey::Tab), true) => ToolAction::PreviousPoint,
+            (Key::Named(NamedKey::Home), false) => ToolAction::FirstPoint,
+            (Key::Named(NamedKey::End), false) => ToolAction::LastPoint,
+            _ => return None,
+        };
+        session
+            .claims_action(action)
+            .then_some(Intent::ToolAction(action))
     }
 
     /// Arrow keys pan the view when the canvas has the keyboard, or when
@@ -3498,6 +3551,76 @@ mod tests {
         assert_ne!(s.viewport.centre(), centre, "the arrow panned");
     }
 
+    /// XARA-T-0170, XARA-T-0186: the arrows nudge the selector's selection
+    /// and the shape editor's points; Tab and Home go to the shape editor
+    /// while it has a path, and Home fits the page otherwise; NumPad +
+    /// drops a copy only during a drag.
+    #[test]
+    fn context_keys_go_to_the_tool_that_claims_them() {
+        use crate::input::keyboard::{KeyEvent, KeyLocation};
+        let (mut v, n) = viewer_with_square();
+        let s = v.app.active_mut().unwrap();
+        s.apply(Intent::Select {
+            nodes: vec![n],
+            mode: xarast_app::SelectMode::Replace,
+        })
+        .unwrap();
+        // The selector: an arrow nudges, and does not pan.
+        let origin = square_origin(&v, n);
+        let centre = v.app.active().unwrap().viewport.centre();
+        press(&mut v, Key::Named(NamedKey::ArrowRight), Modifiers::NONE);
+        let s = v.app.active().unwrap();
+        assert_eq!(s.undo_label(), Some("Move"));
+        assert_eq!(s.viewport.centre(), centre, "no pan");
+        assert_eq!(
+            square_origin(&v, n),
+            origin + xarast_geom::Vector::raw(2835, 0)
+        );
+        // NumPad + outside a drag zooms in, as before.
+        let zoom = v.app.active().unwrap().viewport.zoom();
+        for state in [KeyState::Pressed, KeyState::Released] {
+            send(
+                &mut v,
+                &[ShellEvent::Key(KeyEvent {
+                    key: Key::char('+'),
+                    location: KeyLocation::Numpad,
+                    state,
+                    repeat: false,
+                    text: None,
+                    modifiers: Modifiers::NONE,
+                })],
+            );
+        }
+        let s = v.app.active_mut().unwrap();
+        assert!(s.viewport.zoom() > zoom, "NumPad + zoomed in");
+        // The shape editor on the square made a path.
+        s.apply(Intent::ConvertToShapes).unwrap();
+        s.apply(Intent::ChooseTool(xarast_app::ToolId::ShapeEditor))
+            .unwrap();
+        let zoom = s.viewport.zoom();
+        press(&mut v, Key::Named(NamedKey::Home), Modifiers::NONE);
+        let s = v.app.active().unwrap();
+        assert_eq!(s.viewport.zoom(), zoom, "Home did not fit the page");
+        let first: Vec<u32> = s.edit.control_points(n).unwrap().iter().collect();
+        assert_eq!(first.len(), 1, "Home selected the first point");
+        press(&mut v, Key::Named(NamedKey::Tab), Modifiers::NONE);
+        let s = v.app.active().unwrap();
+        let next: Vec<u32> = s.edit.control_points(n).unwrap().iter().collect();
+        assert_eq!(next.len(), 1);
+        assert_ne!(next, first, "Tab moved the selection on");
+        // Without a path Home fits the page again.
+        v.apply(vec![Intent::Select {
+            nodes: Vec::new(),
+            mode: xarast_app::SelectMode::Replace,
+        }]);
+        press(&mut v, Key::Named(NamedKey::Home), Modifiers::NONE);
+        assert_ne!(
+            v.app.active().unwrap().viewport.zoom(),
+            zoom,
+            "Home fitted the page"
+        );
+    }
+
     #[test]
     fn the_palette_and_the_tool_keys_choose_the_same_tools() {
         let (mut v, _) = viewer_with_square();
@@ -3928,14 +4051,7 @@ mod tests {
                     ChordKey::Char(c) if chord.shift && c.is_ascii_alphabetic() => {
                         Key::char(c.to_ascii_uppercase())
                     }
-                    ChordKey::Char(c) => Key::char(c),
-                    ChordKey::Home => Key::Named(NamedKey::Home),
-                    ChordKey::Delete => Key::Named(NamedKey::Delete),
-                    ChordKey::Escape => Key::Named(NamedKey::Escape),
-                    ChordKey::Function(n) => Key::Named(NamedKey::Function(n)),
-                    ChordKey::Backspace => Key::Named(NamedKey::Backspace),
-                    ChordKey::Enter => Key::Named(NamedKey::Enter),
-                    ChordKey::NumPad(c) => Key::char(c),
+                    other => chord_key(other),
                 };
                 let location = if matches!(chord.key, ChordKey::NumPad(_)) {
                     KeyLocation::Numpad

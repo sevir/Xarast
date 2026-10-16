@@ -112,6 +112,20 @@ pub enum EditCommand {
         /// of the transform's area factor. A translation ignores it.
         scale_line_widths: bool,
     },
+    /// Copy and transform (T4.7, `OPTOKEN_COPYANDTRANSFORM` in the
+    /// original): one copy of every node per matrix, each copy carried
+    /// through its matrix, the originals left as they were. Each copy goes
+    /// right above its original (a later matrix's copy above an earlier
+    /// one's). The selector's drop-a-copy drag makes it.
+    CopyAndTransform {
+        /// The nodes. A node whose ancestor is also listed is skipped.
+        nodes: Vec<NodeId>,
+        /// One matrix per copy, in the order they were dropped.
+        xfs: Vec<Matrix>,
+        /// Whether line widths scale with the copies, as
+        /// [`EditCommand::TransformNodes`] does.
+        scale_line_widths: bool,
+    },
     /// Deletes nodes and everything under them. They stay alive, retained
     /// by the undo step, until the history evicts it.
     DeleteNodes {
@@ -324,6 +338,11 @@ fn transform_label(m: &Matrix) -> &'static str {
         return "Rotate";
     }
     if b.abs() < EPS && c.abs() < EPS {
+        // A mirror: one axis reversed, neither resized (the selector's
+        // flip buttons, `tools/opflip.cpp`).
+        if (a.abs() - 1.0).abs() < EPS && (d.abs() - 1.0).abs() < EPS && (a < 0.0) != (d < 0.0) {
+            return "Flip";
+        }
         return "Scale";
     }
     if (a - 1.0).abs() < EPS && (d - 1.0).abs() < EPS && (b.abs() < EPS || c.abs() < EPS) {
@@ -359,6 +378,7 @@ impl EditCommand {
     pub fn label(&self) -> &'static str {
         match self {
             EditCommand::TransformNodes { xf, .. } => transform_label(xf),
+            EditCommand::CopyAndTransform { .. } => "Copy and Transform",
             EditCommand::DeleteNodes { .. } => "Delete",
             EditCommand::CreateShape { shape, .. } => create_label(shape),
             EditCommand::SetShapeParams { .. } => "Edit Shape",
@@ -442,6 +462,7 @@ impl EditCommand {
     pub fn is_noop(&self) -> bool {
         match self {
             EditCommand::TransformNodes { nodes, xf, .. } => nodes.is_empty() || xf.is_identity(),
+            EditCommand::CopyAndTransform { nodes, xfs, .. } => nodes.is_empty() || xfs.is_empty(),
             EditCommand::DeleteNodes { nodes }
             | EditCommand::ConvertToPaths { nodes }
             | EditCommand::SetWindingRule { nodes, .. } => nodes.is_empty(),
@@ -556,6 +577,24 @@ fn scale_line_widths(tx: &mut Tx<'_>, node: NodeId, k: f64) -> Result<(), EditEr
     Ok(())
 }
 
+/// Transforms `n` by `xf` and, with `lines`, scales its line widths by
+/// the square root of the area factor (never for a translation).
+fn transform_with_lines(
+    tx: &mut Tx<'_>,
+    n: NodeId,
+    xf: Matrix,
+    lines: bool,
+) -> Result<(), EditError> {
+    let k = xf.determinant().abs().sqrt();
+    let lines =
+        lines && !xf.is_translation_only() && k.is_finite() && k > 0.0 && (k - 1.0).abs() > 1e-12;
+    tx.transform(n, xf)?;
+    if lines {
+        scale_line_widths(tx, n, k)?;
+    }
+    Ok(())
+}
+
 impl xarast_doc::Command for EditCommand {
     fn label(&self) -> &'static str {
         EditCommand::label(self)
@@ -570,17 +609,8 @@ impl xarast_doc::Command for EditCommand {
             } => {
                 let nodes = outermost(tx, nodes);
                 check_layers(tx, &nodes)?;
-                let k = xf.determinant().abs().sqrt();
-                let lines = *lines
-                    && !xf.is_translation_only()
-                    && k.is_finite()
-                    && k > 0.0
-                    && (k - 1.0).abs() > 1e-12;
                 for n in nodes {
-                    tx.transform(n, *xf)?;
-                    if lines {
-                        scale_line_widths(tx, n, k)?;
-                    }
+                    transform_with_lines(tx, n, *xf, *lines)?;
                 }
                 Ok(())
             }
@@ -589,6 +619,23 @@ impl xarast_doc::Command for EditCommand {
                 check_layers(tx, &nodes)?;
                 for n in nodes {
                     tx.delete(n)?;
+                }
+                Ok(())
+            }
+            EditCommand::CopyAndTransform {
+                nodes,
+                xfs,
+                scale_line_widths,
+            } => {
+                let nodes = outermost(tx, nodes);
+                check_layers(tx, &nodes)?;
+                for n in nodes {
+                    let mut above = n;
+                    for xf in xfs {
+                        let copy = crate::structure::copy_above(tx, n, above)?;
+                        transform_with_lines(tx, copy, *xf, *scale_line_widths)?;
+                        above = copy;
+                    }
                 }
                 Ok(())
             }

@@ -128,7 +128,7 @@ pub use app::{
     AppState, DiagnosticEntry, DiagnosticLog, DocumentSessions, InternalClipboard, PendingAction,
     Severity, TextClipboard, xarast_path,
 };
-pub use command::{AppCommand, ChordKey, KeyChord};
+pub use command::{AppCommand, ChordKey, KeyChord, ToolKey};
 pub use decoded::{DecodedImages, DecodedImagesStats};
 pub use edit::{
     ControlPoints, CurrentAttributes, EditState, Modifiers, SelectMode, ToolId, ToolState,

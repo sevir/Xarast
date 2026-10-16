@@ -27,6 +27,20 @@
 //! Every gesture previews through [`Preview::transform`](crate::tool::Preview)
 //! and emits exactly one [`EditCommand::TransformNodes`] on release, so a
 //! gesture is one undo step whatever its length.
+//!
+//! # Copy and transform, flips, nudges
+//!
+//! `NumPad +` (or a click of another mouse button) during a move, scale,
+//! rotate or skew drag drops a copy at the transform the drag has then
+//! (the original's default "click while dragging" action, T4.7); the drag
+//! can drop several, and once it has dropped one its release leaves the
+//! originals where they were and commits the copies as one
+//! [`EditCommand::CopyAndTransform`] step. The infobar's flip buttons
+//! mirror the selection about the rotation centre (T4.6). The arrow keys
+//! nudge the selection by the 24 steps of `research/04 §4.5` (T4.10), a
+//! run of them one "Move" step. The X, Y, W, H, Angle and Skew fields
+//! carry bump buttons: a length steps by the nudge unit, an angle by a
+//! degree, as typing that value would.
 
 use std::f64::consts::FRAC_PI_4;
 
@@ -38,7 +52,7 @@ use crate::geometry::{DocPoint, DocRect};
 use crate::ops::EditCommand;
 use crate::tool::{
     Anchor, CursorKind, GestureEvent, HANDLE_TOLERANCE_PX, HandleShape, Infobar, InfobarField,
-    InfobarItem, InfobarValue, InteractionState, OverlayShape, Tool, ToolCtx, ToolView,
+    InfobarItem, InfobarValue, InteractionState, OverlayShape, Tool, ToolAction, ToolCtx, ToolView,
     near_on_screen,
 };
 use crate::tools::constrain_45;
@@ -51,6 +65,25 @@ pub const CONSTRAIN_ANGLE: f64 = FRAC_PI_4;
 /// fixed point would flatten the selection to nothing, which no later
 /// scale could undo.
 const MIN_SCALE: f64 = 1e-3;
+
+/// The largest skew the Skew field takes, either way, in degrees (the
+/// original's clamp, `tools/selinfo.cpp`).
+pub const MAX_SKEW_DEG: f64 = 89.0;
+
+/// A horizontal skew by `k` (the tangent of the skew angle) about the line
+/// `y = about.y`: x moves by `k` per unit of height above that line, so a
+/// positive `k` leans the top to the right.
+#[must_use]
+pub fn horizontal_skew(k: f64, about: DocPoint) -> Matrix {
+    Matrix {
+        a: 1.0,
+        b: 0.0,
+        c: k,
+        d: 1.0,
+        e: Mp::from_f64_round(-k * about.y.to_f64()),
+        f: Mp::ZERO,
+    }
+}
 
 /// Which handles the selection shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -290,6 +323,24 @@ enum SelectorDrag {
 }
 
 impl SelectorDrag {
+    /// The objects a transform drag moves and the matrix it has now; a
+    /// marquee or a centre drag has none.
+    fn moving(&self) -> Option<(&[NodeId], Matrix)> {
+        match self {
+            SelectorDrag::Move { nodes, delta, .. } => Some((nodes, Matrix::translate(*delta))),
+            SelectorDrag::Scale { nodes, xf, .. } | SelectorDrag::Skew { nodes, xf, .. } => {
+                Some((nodes, *xf))
+            }
+            SelectorDrag::Rotate {
+                nodes,
+                centre,
+                angle,
+                ..
+            } => Some((nodes, Matrix::rotate_about(*angle, *centre))),
+            SelectorDrag::Marquee { .. } | SelectorDrag::Centre { .. } => None,
+        }
+    }
+
     /// The previewed transform, and the box it applies to.
     fn transform(&self) -> Option<(DocRect, Matrix)> {
         match self {
@@ -319,6 +370,12 @@ pub struct SelectorTool {
     /// The rotation applied through this tool since the selection was
     /// made, in degrees: what the Angle field shows.
     angle: f64,
+    /// The horizontal skew applied through this tool since the selection
+    /// was made, in degrees: what the Skew field shows.
+    skew: f64,
+    /// The copies the drag in flight has dropped, by the matrix each was
+    /// dropped at, and the bounds they apply to (for their outlines).
+    dropped: Vec<(DocRect, Matrix)>,
     anchor: Anchor,
     lock_aspect: bool,
     scale_lines: bool,
@@ -332,6 +389,8 @@ impl Default for SelectorTool {
             mode: HandleMode::Scale,
             centre: None,
             angle: 0.0,
+            skew: 0.0,
+            dropped: Vec::new(),
             anchor: Anchor::default(),
             lock_aspect: false,
             scale_lines: true,
@@ -351,6 +410,7 @@ impl SelectorTool {
             self.mode = HandleMode::Scale;
             self.centre = None;
             self.angle = 0.0;
+            self.skew = 0.0;
         }
     }
 
@@ -360,6 +420,7 @@ impl SelectorTool {
         self.mode = HandleMode::Scale;
         self.centre = None;
         self.angle = 0.0;
+        self.skew = 0.0;
     }
 
     /// The handle mode for the selection now in force.
@@ -387,6 +448,31 @@ impl SelectorTool {
         } else {
             0.0
         }
+    }
+
+    fn skew_for(&self, edit: &EditState) -> f64 {
+        if self.same_selection(edit) {
+            self.skew
+        } else {
+            0.0
+        }
+    }
+
+    /// Mirrors the selection about its rotation centre: left to right, or
+    /// top to bottom (`tools/opflip.cpp` in the original). Returns
+    /// whether there was a selection to flip.
+    fn flip(&mut self, cx: &mut ToolCtx<'_>, horizontal: bool) -> bool {
+        let r = cx.edit.selection_bounds(cx.doc);
+        if r.is_empty() {
+            return false;
+        }
+        self.sync(cx.edit);
+        let centre = self.centre_for(cx.edit, r);
+        let (sx, sy) = if horizontal { (-1.0, 1.0) } else { (1.0, -1.0) };
+        let nodes = cx.edit.selection().collect();
+        self.commit(cx, nodes, Matrix::scale_about(sx, sy, centre), false);
+        cx.requests.overlay_changed = true;
+        true
     }
 
     fn delta(cx: &ToolCtx<'_>, from: DocPoint, to: DocPoint) -> Vector {
@@ -630,6 +716,22 @@ impl Tool for SelectorTool {
             GestureEvent::DragUpdate { from, to, .. } => self.update(cx, *from, *to),
             GestureEvent::DragEnd { from, to } => {
                 self.update(cx, *from, *to);
+                let dropped = std::mem::take(&mut self.dropped);
+                if !dropped.is_empty()
+                    && let Some(drag) = self.drag.take()
+                    && let Some((nodes, _)) = drag.moving()
+                {
+                    // The drag dropped copies: they are what it made, and
+                    // the originals stay where they were.
+                    let lines = matches!(drag, SelectorDrag::Scale { .. }) && self.scale_lines;
+                    cx.commands.emit(EditCommand::CopyAndTransform {
+                        nodes: nodes.to_vec(),
+                        xfs: dropped.into_iter().map(|(_, m)| m).collect(),
+                        scale_line_widths: lines,
+                    });
+                    cx.requests.overlay_changed = true;
+                    return;
+                }
                 match self.drag.take() {
                     Some(SelectorDrag::Move { nodes, delta, .. }) => {
                         self.commit(cx, nodes, Matrix::translate(delta), false);
@@ -658,7 +760,13 @@ impl Tool for SelectorTool {
                             self.commit(cx, nodes, Matrix::rotate_about(angle, centre), false);
                         }
                     }
-                    Some(SelectorDrag::Skew { nodes, xf, .. }) => {
+                    Some(SelectorDrag::Skew {
+                        nodes, xf, blob, ..
+                    }) => {
+                        if is_horizontal_edge(blob) && xf.b == 0.0 {
+                            let k = self.skew.to_radians().tan() + xf.c;
+                            self.skew = k.atan().to_degrees();
+                        }
                         self.commit(cx, nodes, xf, false);
                     }
                     Some(SelectorDrag::Centre { at }) => self.centre = Some(at),
@@ -668,13 +776,53 @@ impl Tool for SelectorTool {
             }
             GestureEvent::Cancel => {
                 self.drag = None;
+                self.dropped.clear();
                 cx.requests.overlay_changed = true;
             }
             GestureEvent::Hover { .. } | GestureEvent::ModifiersChanged { .. } => {}
         }
     }
 
+    fn drop_copy(&mut self, cx: &mut ToolCtx<'_>) -> bool {
+        let Some((nodes, m)) = self.drag.as_ref().and_then(SelectorDrag::moving) else {
+            return false;
+        };
+        let bounds = crate::viewport::nodes_rect(cx.doc, nodes.iter().copied());
+        self.dropped.push((bounds, m));
+        cx.requests.overlay_changed = true;
+        true
+    }
+
+    fn takes_nudge(&self, view: ToolView<'_>) -> bool {
+        !view.edit.is_selection_empty()
+    }
+
+    /// The object nudge (`OPTOKEN_NUDGE*`, `Kernel/opnudge.cpp`): the
+    /// selection moves by `by`, fills along with it; a run of nudges of
+    /// one selection coalesces into one "Move" step.
+    fn nudge(&mut self, by: Vector, cx: &mut ToolCtx<'_>) -> bool {
+        if cx.edit.is_selection_empty() {
+            return false;
+        }
+        self.sync(cx.edit);
+        let nodes = cx.edit.selection().collect();
+        self.commit(cx, nodes, Matrix::translate(by), false);
+        cx.requests.overlay_changed = true;
+        true
+    }
+
+    fn action(&mut self, action: ToolAction, cx: &mut ToolCtx<'_>) -> bool {
+        match action {
+            ToolAction::FlipHorizontal => self.flip(cx, true),
+            ToolAction::FlipVertical => self.flip(cx, false),
+            _ => false,
+        }
+    }
+
     fn overlay(&self, view: ToolView<'_>, out: &mut Vec<OverlayShape>) {
+        for (bounds, m) in &self.dropped {
+            out.push(box_outline(*bounds, *m));
+        }
         if let Some(SelectorDrag::Marquee { from, to }) = &self.drag {
             out.push(OverlayShape::Rect {
                 rect: DocRect::new(*from, *to),
@@ -731,6 +879,14 @@ impl Tool for SelectorTool {
         let some = !r.is_empty();
         let at = self.anchor.point_on(r);
         let len = |v: Mp| some.then_some(v);
+        let bump = |field| InfobarItem::Bump {
+            field,
+            enabled: some,
+        };
+        let flip = |action| InfobarItem::Command {
+            command: crate::command::AppCommand::Action(action),
+            enabled: some,
+        };
         Infobar {
             items: vec![
                 InfobarItem::Anchor { value: self.anchor },
@@ -739,21 +895,25 @@ impl Tool for SelectorTool {
                     value: len(at.x),
                     editable: some,
                 },
+                bump(InfobarField::X),
                 InfobarItem::Measure {
                     field: InfobarField::Y,
                     value: len(at.y),
                     editable: some,
                 },
+                bump(InfobarField::Y),
                 InfobarItem::Measure {
                     field: InfobarField::W,
                     value: len(r.width()),
                     editable: some,
                 },
+                bump(InfobarField::W),
                 InfobarItem::Measure {
                     field: InfobarField::H,
                     value: len(r.height()),
                     editable: some,
                 },
+                bump(InfobarField::H),
                 InfobarItem::Toggle {
                     field: InfobarField::LockAspect,
                     on: self.lock_aspect,
@@ -763,6 +923,15 @@ impl Tool for SelectorTool {
                     value: some.then_some(self.angle_for(view.edit)),
                     editable: some,
                 },
+                bump(InfobarField::Angle),
+                InfobarItem::Angle {
+                    field: InfobarField::Skew,
+                    value: some.then_some(self.skew_for(view.edit)),
+                    editable: some,
+                },
+                bump(InfobarField::Skew),
+                flip(ToolAction::FlipHorizontal),
+                flip(ToolAction::FlipVertical),
                 InfobarItem::Toggle {
                     field: InfobarField::ScaleLines,
                     on: self.scale_lines,
@@ -822,7 +991,20 @@ impl Tool for SelectorTool {
                 let lines = self.scale_lines;
                 self.commit(cx, nodes, Matrix::scale_about(sx, sy, at), lines);
             }
+            (InfobarField::Skew, InfobarValue::Angle(deg)) if deg.is_finite() => {
+                let deg = deg.clamp(-MAX_SKEW_DEG, MAX_SKEW_DEG);
+                let k = deg.to_radians().tan() - self.skew.to_radians().tan();
+                if k.abs() < 1e-12 {
+                    return;
+                }
+                let centre = self.centre_for(cx.edit, r);
+                self.skew = deg;
+                self.commit(cx, nodes, horizontal_skew(k, centre), false);
+            }
             (InfobarField::Angle, InfobarValue::Angle(deg)) if deg.is_finite() => {
+                // The original brings a typed angle of a turn or more back
+                // under one turn, keeping its sign.
+                let deg = deg % 360.0;
                 let by = deg - self.angle;
                 if by.abs() < 1e-9 {
                     return;
