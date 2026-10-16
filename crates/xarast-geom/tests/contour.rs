@@ -10,7 +10,8 @@
 
 use proptest::prelude::*;
 use xarast_geom::contour::{
-    CONTOUR_MITRE_LIMIT, MAX_CONTOUR_DISTANCE, offset_clean, offset_region, step_distances, steps,
+    CONTOUR_MITRE_LIMIT, MAX_CONTOUR_DISTANCE, REFIT_TOLERANCE, offset_clean, offset_region, refit,
+    step_distances, steps,
 };
 use xarast_geom::{BiasGain, FillRule, Join, Path, Point, Rect, Tolerance, self_union};
 
@@ -341,4 +342,106 @@ fn steps_follow_the_profile_and_collapse_inside() {
         both.steps[0].bounds(),
         Rect::raw(1_000, 1_000, 69_000, 39_000)
     );
+}
+
+/// The largest distance from any sample of `a` (its vertices and edge
+/// midpoints, flattened finely) to the outline of `b`.
+fn deviation(a: &Path, b: &Path) -> f64 {
+    use kurbo::ParamCurveNearest;
+    let segs: Vec<kurbo::PathSeg> = b.segments().map(xarast_geom::Segment::to_kurbo).collect();
+    let mut worst = 0.0f64;
+    for poly in xarast_geom::flatten(a, Tolerance(1.0)) {
+        let pts: Vec<kurbo::Point> = poly.points.iter().map(|p| p.to_kurbo()).collect();
+        for w in pts.windows(2) {
+            for q in [w[0], w[0].midpoint(w[1])] {
+                let d = segs
+                    .iter()
+                    .map(|s| s.nearest(q, 1e-9).distance_sq)
+                    .fold(f64::INFINITY, f64::min)
+                    .sqrt();
+                worst = worst.max(d);
+            }
+        }
+    }
+    worst
+}
+
+fn blob() -> Path {
+    // A curved blob with one sharp corner.
+    let mut b = Path::builder();
+    b.move_to(Point::raw(0, 0));
+    b.cubic_to(
+        Point::raw(40_000, -20_000),
+        Point::raw(90_000, 10_000),
+        Point::raw(60_000, 50_000),
+    );
+    b.cubic_to(
+        Point::raw(40_000, 80_000),
+        Point::raw(-10_000, 60_000),
+        Point::raw(0, 0),
+    );
+    b.close();
+    b.build()
+}
+
+#[test]
+fn rings_are_refitted_to_few_curves_within_the_tolerance() {
+    let src = self_union(&blob(), FillRule::NonZero, TOL);
+    for join in [Join::Round, Join::Mitre, Join::Bevel] {
+        for d in [3_000.0, -3_000.0, 20_000.0] {
+            let poly = offset_clean(&src, d, join, CONTOUR_MITRE_LIMIT, TOL);
+            let fitted = refit(&poly, REFIT_TOLERANCE);
+            let what = format!("{join:?} {d}");
+            assert!(fitted.subpaths().all(|s| s.closed), "{what}");
+            // Both ways: the curves follow the polyline and the polyline
+            // the curves, within the tolerance (and rounding).
+            let there = deviation(&poly, &fitted);
+            let back = deviation(&fitted, &poly);
+            assert!(there <= REFIT_TOLERANCE + 2.0, "{what}: {there}");
+            assert!(back <= REFIT_TOLERANCE + 2.0, "{what}: {back}");
+            assert!(
+                fitted.segment_count() * 4 <= poly.segment_count(),
+                "{what}: {} segments from {}",
+                fitted.segment_count(),
+                poly.segment_count()
+            );
+            assert!(
+                (area(&fitted) - area(&poly)).abs() <= 0.002 * area(&poly),
+                "{what}"
+            );
+            // The same polyline always fits to the same curves.
+            assert_eq!(refit(&poly, REFIT_TOLERANCE), fitted, "{what}");
+        }
+    }
+}
+
+#[test]
+fn refitting_keeps_corners_and_straight_edges() {
+    let sq = polygon(&[(0, 0), (40_000, 0), (40_000, 40_000), (0, 40_000)]);
+    // A mitred square stays the square, lines and corners.
+    let m = offset_region(&sq, FillRule::NonZero, 5_000.0, Join::Mitre, 10.0, TOL);
+    let f = refit(&m, REFIT_TOLERANCE);
+    assert_eq!(f, m);
+    assert!(
+        f.segments()
+            .all(|s| matches!(s, xarast_geom::Segment::Line { .. }))
+    );
+    // A rounded square keeps its four straight sides as lines and fits
+    // each quarter circle with a curve or two.
+    let r = offset_region(&sq, FillRule::NonZero, 5_000.0, Join::Round, 10.0, TOL);
+    let f = refit(&r, REFIT_TOLERANCE);
+    assert_eq!(f.tight_bounds(), Rect::raw(-5_000, -5_000, 45_000, 45_000));
+    assert!(f.segment_count() <= 16, "{}", f.segment_count());
+    assert!(deviation(&r, &f) <= REFIT_TOLERANCE + 2.0);
+    // A bevelled one keeps its eight corners.
+    let b = offset_region(&sq, FillRule::NonZero, 5_000.0, Join::Bevel, 10.0, TOL);
+    assert_eq!(refit(&b, REFIT_TOLERANCE), b);
+    // Open subpaths and nothing are left alone.
+    assert!(refit(&Path::new(), 100.0).is_empty());
+    let mut o = Path::builder();
+    o.move_to(Point::raw(0, 0))
+        .line_to(Point::raw(10, 0))
+        .line_to(Point::raw(10, 10));
+    let o = o.build();
+    assert_eq!(refit(&o, 100.0), o);
 }

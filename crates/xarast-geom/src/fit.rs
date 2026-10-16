@@ -92,6 +92,25 @@ pub fn fit_stroke_indexed(samples: &[KPoint], tolerance: f64) -> (EditPath, Vec<
     )
 }
 
+/// Fits cubics to one run of samples with fixed unit end tangents `tl`
+/// (leaving the first sample) and `tr` (arriving at the last, reversed),
+/// no sample further than `tolerance` from the curves, with no corner
+/// detection: the caller has cut the run at its corners. What the contour
+/// refit (`contour::refit`) uses; the freehand fitter adds the corners.
+pub(crate) fn fit_run_cubics(run: &[KPoint], tl: Vec2, tr: Vec2, tolerance: f64) -> Vec<CubicBez> {
+    if run.len() < 2 {
+        return Vec::new();
+    }
+    let tol = if tolerance.is_finite() && tolerance > 0.0 {
+        tolerance
+    } else {
+        1.0
+    };
+    let mut out = Vec::new();
+    fit_run(run, 0, tl, tr, tol * tol, 0, &mut out);
+    out.into_iter().map(|c| c.0).collect()
+}
+
 fn round(p: KPoint) -> Point {
     Point::from_f64_round(p.x, p.y).clamp_to_extent().0
 }

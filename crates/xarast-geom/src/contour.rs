@@ -350,7 +350,7 @@ impl ContourSteps {
 }
 
 /// Generates the steps of a contour around the regions `sources` (each
-/// already clean, under the non-zero rule).
+/// already clean, under the non-zero rule), each step [`refit`] to cubics.
 ///
 /// An outer contour offsets the union of the sources; an inner one insets
 /// each source on its own and unions the insets, as the original contours
@@ -367,10 +367,15 @@ pub fn steps(
     tol: Tolerance,
 ) -> ContourSteps {
     let source = union_all(sources, tol);
+    // Each step back to curves, at the tolerance it was flattened with.
+    let refitted = |p: Path, d: f64| {
+        let d = clamp_distance(d).abs();
+        refit(&p, tol.get().max(d * RELATIVE_TOLERANCE))
+    };
     let steps = if outer {
         distances
             .iter()
-            .map(|&d| offset_clean(&source, d.abs(), join, mitre_limit, tol))
+            .map(|&d| refitted(offset_clean(&source, d.abs(), join, mitre_limit, tol), d))
             .collect()
     } else {
         distances
@@ -381,11 +386,247 @@ pub fn steps(
                     .map(|s| offset_clean(s, -d.abs(), join, mitre_limit, tol))
                     .filter(|p| !p.is_empty())
                     .collect();
-                union_all(&insets, tol)
+                refitted(union_all(&insets, tol), d)
             })
             .collect()
     };
     ContourSteps { steps, source }
+}
+
+/// The furthest a refitted ring may stray from its polyline, in
+/// millipoints: a quarter of a pixel at 100 % (a 96 dpi pixel is 750 mp).
+pub const REFIT_TOLERANCE: f64 = 187.5;
+
+/// The turn, in radians, above which a vertex of a ring's polyline is a
+/// corner the refit keeps sharp: 20°. A mitre or a bevel of a corner of
+/// the source turns by more (a bevel of a bevel too: a square contoured
+/// twice turns by 22.5°); a flattened arc of a round join or of a curve
+/// turns by less (its step is `2·acos(1 − tol/r)`, under 20° once the
+/// radius is 33 times the tolerance; a tighter arc keeps its vertices as
+/// corners, which is the polyline it already was).
+const REFIT_CORNER: f64 = 20.0 * std::f64::consts::PI / 180.0;
+
+/// Fits a region's polylines back to cubics (XARA-T-0332): what the
+/// boolean engine returns is flattened, which bakes into a `.xarast` or an
+/// SVG as thousands of tiny lines and draws faceted when zoomed in.
+///
+/// Every closed subpath is cut at its corners (a turn above 20°, or the
+/// end of a cubic the boolean kept); each run of lines between two is
+/// fitted with cubics whose end tangents are its end edges, sampled at
+/// its vertices and along its edges, so that no sample
+/// is further than `tol` (at most [`REFIT_TOLERANCE`]) from the curves. A
+/// run of one edge, and a fitted cubic that is straight, stay lines. A
+/// subpath with no corner at all (a ring around a smooth source) is fitted
+/// as one loop with a smooth seam. Open subpaths and subpaths of fewer
+/// than three edges are copied. Deterministic: the same polyline always
+/// fits to the same curves.
+#[must_use]
+pub fn refit(region: &Path, tol: f64) -> Path {
+    let tol = if tol.is_finite() && tol > 0.0 {
+        tol.min(REFIT_TOLERANCE)
+    } else {
+        REFIT_TOLERANCE
+    };
+    let mut b = Path::builder();
+    for sp in region.subpaths() {
+        let segs = region.subpath_segments(&sp);
+        if segs.is_empty() {
+            continue;
+        }
+        if sp.closed {
+            refit_closed(&mut b, &segs, tol);
+        } else {
+            copy_open(&mut b, &segs);
+        }
+    }
+    b.build()
+}
+
+/// Appends an open subpath unchanged.
+fn copy_open(b: &mut crate::PathBuilder, segs: &[crate::Segment]) {
+    let Some(first) = segs.first() else {
+        return;
+    };
+    b.move_to(first.start());
+    for s in segs {
+        push_segment(b, s);
+    }
+}
+
+fn push_segment(b: &mut crate::PathBuilder, s: &crate::Segment) {
+    match *s {
+        crate::Segment::Line { p1, .. } => {
+            b.line_to(p1);
+        }
+        crate::Segment::Cubic { p1, p2, p3, .. } => {
+            b.cubic_to(p1, p2, p3);
+        }
+    }
+}
+
+/// One closed subpath, refitted.
+fn refit_closed(b: &mut crate::PathBuilder, segs: &[crate::Segment], tol: f64) {
+    use kurbo::{Point as KPoint, Vec2};
+    // Zero-length lines say nothing about the shape.
+    let segs: Vec<crate::Segment> = segs
+        .iter()
+        .copied()
+        .filter(|s| !matches!(s, crate::Segment::Line { p0, p1 } if p0 == p1))
+        .collect();
+    let n = segs.len();
+    if n < 3 {
+        if let Some(first) = segs.first() {
+            b.move_to(first.start());
+            for s in &segs {
+                push_segment(b, s);
+            }
+            b.close();
+        }
+        return;
+    }
+    let kp = |p: crate::Point| KPoint::new(p.x.to_f64(), p.y.to_f64());
+    let is_line = |i: usize| matches!(segs[i % n], crate::Segment::Line { .. });
+    let unit = |v: Vec2| {
+        let l = v.hypot();
+        if l > 0.0 { v / l } else { Vec2::ZERO }
+    };
+    let len = |i: usize| match segs[i % n] {
+        crate::Segment::Line { p0, p1 } => (kp(p1) - kp(p0)).hypot(),
+        crate::Segment::Cubic { .. } => 0.0,
+    };
+    // A straight edge of the source (or of a mitre), not a chord of a
+    // flattened curve: a line four times as long as any of the three
+    // either side (a flattened curve offset with round joins alternates
+    // long chords and short wedges, none of them straight edges). It
+    // stays a line, and the curves either side leave it smoothly.
+    let long: Vec<bool> = (0..n)
+        .map(|i| {
+            is_line(i) && (1..=3.min(n / 2)).all(|k| len(i) > 4.0 * len(i + k).max(len(i + n - k)))
+        })
+        .collect();
+    // Vertex `i` starts segment `i`. A corner: a turn above the threshold
+    // between two lines, or either side a cubic the boolean kept.
+    let corner: Vec<bool> = (0..n)
+        .map(|i| {
+            let prev = (i + n - 1) % n;
+            if !is_line(prev) || !is_line(i) {
+                return true;
+            }
+            let a = kp(segs[prev].start());
+            let v = kp(segs[i].start());
+            let c = kp(segs[i].end());
+            let (din, dout) = (v - a, c - v);
+            din.cross(dout).atan2(din.dot(dout)).abs() > REFIT_CORNER
+        })
+        .collect();
+    // Where a run starts or ends: a corner, or either side of a long line.
+    let cut: Vec<bool> = (0..n)
+        .map(|i| corner[i] || long[i] || long[(i + n - 1) % n])
+        .collect();
+    let dir = |i: usize| unit(kp(segs[i % n].end()) - kp(segs[i % n].start()));
+    // Samples of a run of lines from vertex `from`, `count` edges long:
+    // each vertex and points along each edge, at least three and no
+    // further apart than the run's shortest edge (at most 64 an edge), so
+    // that a curve cannot bulge between them.
+    let samples = |from: usize, count: usize| {
+        let step = (0..count)
+            .map(|k| len(from + k))
+            .fold(f64::INFINITY, f64::min)
+            .max(1.0);
+        let mut s = Vec::with_capacity(count * 4 + 1);
+        for k in 0..count {
+            let seg = segs[(from + k) % n];
+            let (p, q) = (kp(seg.start()), kp(seg.end()));
+            s.push(p);
+            let m = ((len(from + k) / step).ceil() as usize).clamp(4, 65);
+            for j in 1..m {
+                s.push(p.lerp(q, j as f64 / m as f64));
+            }
+        }
+        s.push(kp(segs[(from + count + n - 1) % n].end()));
+        s
+    };
+    let emit = |b: &mut crate::PathBuilder, cubics: Vec<kurbo::CubicBez>| {
+        for c in cubics {
+            let r = |p: KPoint| crate::Point::from_f64_round(p.x, p.y).clamp_to_extent().0;
+            let p3 = r(c.p3);
+            if straight(&c) {
+                b.line_to(p3);
+            } else {
+                b.cubic_to(r(c.p1), r(c.p2), p3);
+            }
+        }
+    };
+    let Some(first) = (0..n).find(|&i| cut[i]) else {
+        // A smooth loop: one run all the way round, the seam's tangent
+        // the same on both sides.
+        let s = samples(0, n);
+        let v0 = kp(segs[0].start());
+        let t = unit(kp(segs[0].end()) - kp(segs[n - 1].start()));
+        let t = if t == Vec2::ZERO {
+            unit(kp(segs[0].end()) - v0)
+        } else {
+            t
+        };
+        b.move_to(segs[0].start());
+        emit(b, crate::fit::fit_run_cubics(&s, t, -t, tol));
+        b.close();
+        return;
+    };
+    b.move_to(segs[first].start());
+    let mut i = first;
+    let mut done = 0usize;
+    while done < n {
+        if !is_line(i) || long[i % n] {
+            push_segment(b, &segs[i % n]);
+            i = (i + 1) % n;
+            done += 1;
+            continue;
+        }
+        // The lines from this cut to the next one.
+        let mut count = 1usize;
+        while done + count < n && !cut[(i + count) % n] {
+            count += 1;
+        }
+        if count == 1 {
+            push_segment(b, &segs[i % n]);
+        } else {
+            let s = samples(i, count);
+            // A run leaving a long line smoothly carries on in its
+            // direction; one leaving a corner, in its own first edge's.
+            let end = i + count;
+            let tl = if !corner[i % n] && long[(i + n - 1) % n] {
+                dir(i + n - 1)
+            } else {
+                dir(i)
+            };
+            let tr = if !corner[end % n] && long[end % n] {
+                -dir(end)
+            } else {
+                -dir(end + n - 1)
+            };
+            emit(b, crate::fit::fit_run_cubics(&s, tl, tr, tol));
+        }
+        i = (i + count) % n;
+        done += count;
+    }
+    b.close();
+}
+
+/// Whether a cubic's handles lie on its chord (within half a millipoint,
+/// between its ends): a line drawn as a curve.
+fn straight(c: &kurbo::CubicBez) -> bool {
+    let d = c.p3 - c.p0;
+    let len2 = d.hypot2();
+    if len2 <= 0.0 {
+        return true;
+    }
+    let len = len2.sqrt();
+    [c.p1, c.p2].iter().all(|p| {
+        let v = *p - c.p0;
+        let along = v.dot(d) / len2;
+        (d.cross(v) / len).abs() <= 0.5 && (0.0..=1.0).contains(&along)
+    })
 }
 
 /// The union of clean regions, cleaned.
