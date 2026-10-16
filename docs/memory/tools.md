@@ -1299,7 +1299,153 @@ tests in `contour_tool.rs` (2) and `xarast-doc` `tests/blend.rs`
     effect list adds "None" (no colour blend, the model's fourth type).
     Not done: point mapping and remap, blend along a path (F6), the
     distance mode, tangential, the "long job" question, refusing to
-    remove a bevelled/contoured blend.
+    remove a bevelled/contoured blend. (All but point mapping, remap and
+    the blend's distance mode came with XARA-T-0343, below.)
+
+### Follow-ups (XARA-T-0343, 2026-10-16)
+
+| Piece | Where | State |
+|---|---|---|
+| `LiveEdit::{AttachPath, DetachPath, PlaceOnPath}`, `blend_path_of`, blend Remove keeping and selecting the curve, `blend_removal_refusal` | `live_edit.rs` | done |
+| `complexity`, `new_blend_estimate`, `blend_estimate`, `LONG_JOB_ESTIMATE`; the blend tool's pending edit, `ToolAction::{AttachBlendPath, DetachBlendPath, Proceed}`, `InfobarField::BlendTangential` | `live_edit.rs`, `blend_tool.rs`, `tool.rs` | done |
+| `max_inner_width`, `clamp_contour`; open-path fill and "no fill" clone in `contour_start`/`LiveEdit::Apply`; `InfobarField::{ContourStepsMode, ContourStepDistance}`, `step_distance`, `steps_for_distance`; snapped size-handle drags | `live_edit.rs`, `contour_tool.rs` | done |
+| Contour rings blend fills of any two kinds with `contour::blend_fill` | `xarast-doc/src/contour.rs` | done |
+| Point-mapping and remap drags; the blend's distance mode; more than one path per blend; the object profile's direction on a reversed pair; factoring common attributes onto a new blend | — | open |
+
+Tests: `tests/contour_blend_followups.rs` (14: attach = one "Blend Along
+Curve" step, ends' centres on the curve's ends, the curve over or
+beneath the blend as it stood, the curve object gone; tangential = one
+"Blend Tangential" step, both angles the curve's direction, centres
+kept, and back upright; detach = one "Detach Curve" step, the curve just
+over the blend and selected with it, ends upright; Remove keeps the
+curve, objects then curve, all selected; a contoured blend refuses
+Remove (greyed button, the reason in a `Note`, the edit itself a no-op);
+a 2 × 5 000-point blend and 999 steps on 100-point ends wait for
+"Continue" (`Esc` drops them, no step), then one step each; the steps
+toggle is no step, distance 4 pt on 20 pt = 4 steps, under two
+distances 0, zero refused; inner widths clamped on creation, typing and
+dragging, outer not; an open path gets its outline colour as a fill and
+stays unfilled; an unfilled object clones the first fill under it; a
+size drag snaps to the grid; the golden `tests/golden/
+blend_along_curve.png`, a tangential nine-step blend along an S curve).
+Every step undone digest-exact. No existing golden moved (no fixture
+contour mixes fill kinds), and the corpus's contour and blend files
+(testimp1, Girard_simple, BLUECAR, ProbeX16, WATCH, WATCH2, Watch4,
+leafgirl, scope3 simple; `xarast-cli export --dpi 72 --background
+paper`) give byte-identical PNGs before and after, so their export
+scores cannot move.
+
+**Facts from the original** (paraphrased; `tools/blndtool.cpp`,
+`tools/blndtool.h`, `Kernel/nodeblnd.cpp`, `Kernel/nodebldr.cpp`,
+`tools/opcntr.cpp`, `tools/cntrtool.cpp`, `Kernel/ncntrcnt.cpp`,
+`wxOil/xrc/EN/markn-strings.xrc`, `bevres-strings.xrc`,
+`will-strings.xrc`, `cntres-strings.xrc`):
+
+- **Blend along a curve** (`OpAddBlendPath`, `blndtool.cpp:4991-5090`):
+  every selected object that is not a blend and can become a path is
+  converted, merged into **one** path (`BlendPathBecomeA` appends each
+  passed-back path and keeps the first object's applied attributes,
+  `:4878-4960`) and hidden; each selected blend gets a copy
+  (`NodeBlend::BlendAlongThisPath`, `nodeblnd.cpp:2117-2151`): an
+  existing path is hidden first; the path is the blend's **last** child
+  when a blend comes before any path in the selection's (render) order
+  (`IsBlendPathOnTopOfBlend`, `blndtool.cpp:5280-5298`), else its first;
+  common attributes are localised then factored. Each blender gets an
+  equal share of the path in order (`InitBlenderPathProportions`,
+  `:2153-2176`), then `TransformBlendEndObjects` (`:2224-2290`) moves
+  each start (unless it is the previous pair's end) to the point at its
+  share's start and each end to its share's end: rotate about the
+  object's box centre by (angle there − recorded angle), then translate
+  that centre to the point; the recorded angle becomes the new one. The
+  angle is the path's tangent in degrees **only when the blend is
+  tangential**, else 0 (`NodeBlender::GetPointOnNodeBlendPath`,
+  `nodebldr.cpp:7430-7458`, which ignores the reversed flag). Undo name
+  "blend Along A Curve"; greyed text "Select at least one blend object
+  AND at least one other type of object".
+- **Detach** (`OpDetachBlendPath`, `blndtool.cpp:5209-5265`;
+  `DetachNodeBlendPath`, `nodeblnd.cpp:2372-2416`;
+  `RotateBlendEndObjectsBack`, `:2178-2222`): a plain copy of the path
+  with its applied attributes goes **next** to (just over) the blend and
+  is selected; the blend path is hidden; every end is rotated about its
+  box centre by minus its recorded angle (not moved) and the angles set
+  to 0; every blender's path index set to −1. Undo name "detach Curve
+  From Blend".
+- **Infobar** (`blndtool.cpp:1470-1500`, `2120-2175`): one bitmap button
+  toggles add/detach (`IDC_ADDREMOVEBLENDPATH`); the tangential button
+  is enabled only when a selected blend is on a curve; toggling it
+  changes the flag and runs `TransformBlendEndObjects` in the same op
+  (`OpChangeBlend`, `:7286-7291`; undo `IDS_TANGENTIAL_UNDO`).
+- **Remove blend** (`OpRemoveBlend`, `blndtool.cpp:5440-5545`): ends
+  rotated back first; the blend's children in order — the path through
+  `DetachNodeBlendPath(…, PREV)`, objects moved before the hidden blend
+  — all selected. A contour or bevel controller **round** the blend
+  refuses (`NodeContourController::AllowOp`, `ncntrcnt.cpp:1250-1255`;
+  `nbevcont.cpp:2352-2357`) and the op warns "Cannot remove the blend
+  while it is contoured/bevelled. Remove the contour/bevel".
+- **Long job** (`blndtool.cpp:4320-4395`, `5850-5945`): a path's
+  complexity is its used coordinate slots (`nodepath.cpp:2426-2429`); a
+  new blend estimates 3 × start + 2 × end; a steps change sums over the
+  selected blends, per blender `steps/2 + start + (steps/2) × end`
+  (`nodebldr.cpp:2092-2112`, the precedence as written); above 24 000
+  (the "faster than a Pentium" threshold) a Yes/No box asks "This
+  operation may take a long time to complete. Do you wish to continue?"
+  (`IDS_ASKLONGJOB`); No abandons the op.
+- **Contour distance** (`cntrtool.cpp:1689-1700`, `1815-1845`,
+  `2652-2930`; `OpChangeContourStepDistance`, `opcntr.cpp:3726-3810`):
+  a steps/distance button pair on the bar; the distance shown is
+  `|width| / (steps + 1)` (blank when mixed); a typed distance `d ≤ 0`
+  warns "Distance values must be larger than 0"; otherwise `steps = 0`
+  when `|width| < 2d`, else `|width| / d − 1` (integer division).
+- **Inner clamp** (`GetMaxInnerContourWidth`, `ncntrcnt.cpp:3308-3349`):
+  the largest over every leaf object under the controller of half the
+  longer side of its bounds; applied on creation (`:2984-2993`) and on a
+  width change that does not keep the direction (`opcntr.cpp:1580-1600`).
+- **New contour fills** (`ncntrcnt.cpp:2833-2969`): the **start colour**
+  of any copied colour fill is lightened (not just a flat one) unless
+  it is "no colour"; when none was found, the first colour-fill
+  attribute depth-first under the controller is cloned and lightened.
+  An open path (first subpath not closed) among the selected paths is
+  first localised, its fills removed and a flat fill of its stroke
+  colour applied (`opcntr.cpp:328-389`).
+
+**Decisions (ours)**
+
+116. **The curve is a path child the edits move, never a parameter.**
+     Attach creates one `Path` per blend (the merged outline, the first
+     object's flags and resolved attributes materialised on it) before
+     the source (beneath) or as the controller's last child (over),
+     deletes the curve objects, sets every pair's `path_span` to its
+     equal share and `path_reversed` false, then `PlaceOnPath`. Ends
+     move with `Tx::transform` (matrices worked out on the document as it
+     stood), the angles land in `BlenderParams::path_angles` by
+     `set_live_kind`: all one transaction, one step. An object ending one
+     pair and starting the next moves once; **the next pair records the
+     angle it was given** (the original leaves that pair's start angle
+     stale). Detach and Remove reset every pair's span, angles and
+     direction. Common attributes are not factored (as decision 96).
+     Labels "Blend Along Curve", "Detach Curve", "Blend Tangential"
+     (a `SetParams` followed by `PlaceOnPath`).
+117. **The long-job question lives in the blend tool's infobar**, never a
+     modal dialog: the edit is parked (`Pending`), the bar shows the
+     question with Continue/Cancel, the status line repeats it, `Esc`
+     cancels, any new gesture or field drops it. Only the blend tool asks
+     (the original asks in its blend and steps ops only). Estimates count
+     outline points (`complexity`), the same scale as the original's
+     coordinate slots.
+118. **Contours**: the steps/distance mode is tool state; a typed
+     distance sets each selected contour's steps from its own width
+     ("Contour Steps"). The inner clamp (`clamp_contour`) applies in
+     `LiveEdit::Apply` (every creation route) and in the tool's width and
+     side edits and size drags (preview and commit alike); a `SetParams`
+     from elsewhere is not clamped. The open-path fill is set inside the
+     same Apply transaction (`fill_open_path`: the stroke's first colour,
+     only on a selected `Path` whose first subpath is open), so undo takes
+     it too; the object still draws unfilled. The "no fill" clone takes
+     the first `Fill` attribute in preorder under the object. Size-handle
+     drags snap through `ToolCtx::snap_point`. **Rings blend fills of
+     any two kinds** with `contour::blend_fill` (box-centre shift 0: a
+     contour and its object share a centre); "no colour" still does not
+     blend.
 
 ## Phase 13: the mould tool (XARA-T-0342, G9)
 
@@ -1807,13 +1953,15 @@ cycling (T6.11). Tests: `crates/xarast-app/tests/selector_extras.rs`
       follow edits made inside the mould (the original re-reads its
       bounds); snapping to moulded outlines; a 2×2 envelope preset;
       Draft-quality regeneration while dragging (J3).
-- [ ] Contour and blend tools (XARA-T-0340 follow-ups): blend along a
-      path (F6) with attach/detach, tangential and the distance mode;
-      point mapping and remap drags; the contour steps/distance toggle;
-      the inner-width clamp to the deepest possible inset; the open-path
-      fill and the "no fill" clone on a new contour; snapping of the size
-      handles; refusing to remove a bevelled or contoured blend; the
-      "long job" question for heavy blends.
+- [ ] Contour and blend tools: point mapping and remap drags (the
+      original's red line between end blobs of selected paths or of a
+      blend, `blndtool.cpp:584-1143`); the blend's distance mode (only on
+      a curve with a linear profile); more than one path per blend; the
+      object profile's direction on a reversed pair; factoring common
+      attributes onto a new blend. Done in XARA-T-0343: attach/detach,
+      tangential, contour steps/distance, inner clamp, open-path fill,
+      "no fill" clone, size-handle snapping, the refusal and the
+      long-job question (decisions 116–118).
 
 ### Keyboard-only access to the effect tools (XARA-T-0348, 2026-10-16)
 

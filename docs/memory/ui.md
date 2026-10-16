@@ -167,6 +167,23 @@ Full note: [`tools.md`](tools.md). What the interface side owns:
 - **Cursors**: contour `Resize` over a handle and while dragging; blend
   `Crosshair` over an object or a valid target, `Move` over a
   Ctrl-held blend end and while moving one.
+- **Follow-ups (XARA-T-0343)**, still existing items only, so
+  `xarast-ui` needed no change: contour `Choice` "By" (Steps/Distance,
+  `InfobarField::ContourStepsMode`, tool state, never an undo step)
+  swaps the steps `Scalar` for a `Measure`
+  (`InfobarField::ContourStepDistance`); blend `Command` buttons
+  `ToolAction::AttachBlendPath` ("Blend along curve", greyed unless a
+  non-blend object is selected too) or, when a selected blend follows a
+  curve, `ToolAction::DetachBlendPath` ("Detach curve") with a
+  `Toggle` `InfobarField::BlendTangential` (the original's single
+  add/detach button); the Remove button is greyed with a `Note` giving
+  the reason for a contoured or bevelled blend. **A long job asks in the
+  bar, not in a dialog**: the blend tool's infobar becomes a `Note`
+  (`blend_tool::LONG_JOB_QUESTION`) and two `Command` buttons,
+  `ToolAction::Proceed` ("Continue") and `ToolAction::Cancel`; `Esc`
+  answers Cancel, any other gesture or field drops the question. The
+  status line shows the question too. Nothing blocks, so headless
+  tests answer it with `Intent::ToolAction`.
 
 ### Mould tool (phase 13, XARA-T-0342)
 

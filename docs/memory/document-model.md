@@ -585,10 +585,10 @@ New in Phase 2:
       points the other lacks moved by the ends' box-centre shift × the
       ratio, ramps of different stop counts over the union of their
       positions, a fill profile blended when either has one. Equal
-      families with equal stop counts keep `blend_paint`. **Contours keep
-      their rule** (start kept) — the original's contour blends attribute
-      maps with the same `Blend` calls, so a contour follow-up could
-      adopt it, with its goldens.
+      families with equal stop counts keep `blend_paint`. **Contours use
+      it too** since XARA-T-0343 (the original's contour blends attribute
+      maps with the same `Blend` calls; box-centre shift 0), "no colour"
+      still kept as the start.
     - *Step distance*: `step_distance` > 0 draws `floor(length /
       distance)` steps, length = Σ over pairs of the ends' box-centre
       distance, or the path's whole length per pair along a path (the
@@ -606,10 +606,11 @@ New in Phase 2:
       when `tangential`; fills move with it. Bounds: the controller adds
       the path's box grown by the largest half diagonal of the source's
       children (a superset that needs no regeneration).
-      **Not built**: the tool's "blend along path"/detach (the original
-      also moves the ends onto the path's ends, `NodeBlend::
-      TransformBlendEndObjects`), more than one path per blend, the
-      profile's direction on a reversed pair.
+      The blend tool attaches and detaches the path and moves the ends
+      onto it (`live_edit::LiveEdit::{AttachPath, DetachPath,
+      PlaceOnPath}`, XARA-T-0343, `tools.md` decision 116). **Not
+      built**: more than one path per blend, the profile's direction on
+      a reversed pair.
 52. **A mould's cage is a parameter; its copy is generated, never
     stored** (XARA-T-0334, phase 13 G1/G5–G8). `MouldParams` is an enum:
     `Envelope { shape: [Point; 12] }`, `Envelope2x2 { shape: [Point; 24] }`,
