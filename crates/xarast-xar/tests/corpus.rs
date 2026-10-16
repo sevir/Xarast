@@ -1119,6 +1119,41 @@ fn winding_rules_are_the_original_enum_and_the_default_is_never_written() {
     assert_eq!(rules.iter().sum::<usize>(), 3);
 }
 
+/// `TAG_TEXT_RULER` (4204) records in the corpus (XARA-T-0263): how many
+/// there are, which kinds they hold, and that the importer reads them.
+#[test]
+fn text_rulers_in_the_corpus_are_read() {
+    let c = corpus_or_skip!();
+    let mut kinds = [0usize; 8];
+    let mut records = 0usize;
+    for f in &c.files {
+        let bytes = std::fs::read(f.path(&c.root)).unwrap_or_default();
+        let a = analyse(&bytes, ReaderLimits::default()).unwrap();
+        a.tree.walk(&mut |n, _| {
+            let r = &n.record;
+            if r.tag == 4204 {
+                records += 1;
+                let d = xarast_xar::decode(
+                    4204,
+                    &r.data,
+                    xarast_geom::Point::ORIGIN,
+                    &mut xarast_xar::DiagSink::new(),
+                    (r.number, 4204),
+                );
+                let Ok(xarast_xar::Decoded::TextRuler(stops)) = d else {
+                    panic!("{}: record {} does not decode", f.label(), r.number);
+                };
+                for s in stops {
+                    kinds[usize::from(s.type_and_flags & 7)] += 1;
+                }
+                println!("{}: record {}", f.label(), r.number);
+            }
+        });
+    }
+    println!("rulers: {records}, stop kinds 0..7: {kinds:?}");
+    assert_eq!(records, 0, "RECORDS");
+}
+
 /// Blends import as live blends (XARA-T-0333, finding 23): 480
 /// controllers and 508 blenders, each blender between two objects, none
 /// along a path, and the pairs drawing steps.

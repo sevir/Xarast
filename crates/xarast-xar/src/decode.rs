@@ -1728,6 +1728,39 @@ mod tests {
     }
 
     #[test]
+    fn a_ruler_reads_kinds_positions_decimal_and_filler_characters() {
+        let mut v = Vec::new();
+        v.extend_from_slice(&4u16.to_le_bytes());
+        // Left stop with a filler (flag 4), then right, then decimal with
+        // the comma, then centre.
+        v.push(4);
+        v.extend_from_slice(&36_000i32.to_le_bytes());
+        v.extend_from_slice(&0x2eu16.to_le_bytes());
+        v.push(1);
+        v.extend_from_slice(&72_000i32.to_le_bytes());
+        v.push(3);
+        v.extend_from_slice(&108_000i32.to_le_bytes());
+        v.extend_from_slice(&0x2cu16.to_le_bytes());
+        v.push(2);
+        v.extend_from_slice(&144_000i32.to_le_bytes());
+        let Decoded::TextRuler(stops) = dec(4204, &v) else {
+            panic!("wrong variant")
+        };
+        let kinds: Vec<u8> = stops.iter().map(|s| s.type_and_flags).collect();
+        assert_eq!(kinds, [4, 1, 3, 2]);
+        assert_eq!(stops[0].filler, Some(0x2e));
+        assert_eq!(stops[0].decimal, None);
+        assert_eq!(stops[2].decimal, Some(0x2c));
+        assert_eq!(stops[2].position, Mp::new(108_000));
+        assert_eq!(stops[3].decimal, None);
+        // A count that promises more than the record holds fails, without
+        // allocating for it.
+        let lie = [0xffu8, 0xff, 0, 0, 0, 0, 0];
+        let mut d = DiagSink::new();
+        assert!(decode(4204, &lie, Point::ORIGIN, &mut d, (1, 4204)).is_err());
+    }
+
+    #[test]
     fn has_decoder_agrees_with_decode() {
         let mut d = DiagSink::new();
         let payload = [0u8; 512];
