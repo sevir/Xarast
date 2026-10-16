@@ -84,7 +84,14 @@ fn cases() -> u32 {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: cases(), ..ProptestConfig::default() })]
+    // Two properties discard inputs with an empty region (often: most
+    // random polygons of up to 12 points are degenerate), and at 10 000
+    // cases that passes proptest's default of 1 024 global rejects.
+    #![proptest_config(ProptestConfig {
+        cases: cases(),
+        max_global_rejects: 1_000_000,
+        ..ProptestConfig::default()
+    })]
 
     #[test]
     fn offsets_of_random_polygons_are_sane_and_monotone(
