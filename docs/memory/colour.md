@@ -416,3 +416,13 @@ replays exactly. No UI yet (H7).
       colour handles are targets). XARA-T-0255.
 - [ ] "Set Fill" is also the label of a line-colour click/drop
       (`SetFillGeometry` names itself by payload, not slot). XARA-T-0255.
+
+## App wiring of the fill and palette commands (XARA-T-0212)
+
+Every command in `fill_edit` and `palette` is reachable from the app via
+`EditCommand::Fill` / `EditCommand::Palette`; `tests/fill_palette_edit.rs`
+dispatches each through `Session::apply_edit` and checks label, digest-exact
+undo and redo, and the refusal path (`EditError::FillEdit`,
+`EditError::Palette`). Invariant: `SetTranspMode` on an object with no
+transparency succeeds (it starts from an opaque default), it is not a
+refusal. `RandomiseFill` has no app path yet.

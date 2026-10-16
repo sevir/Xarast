@@ -1122,3 +1122,31 @@ be better run once at `Tx::commit` than after every call.
 - [x] **`cargo bench -p xarast-app -- viewport`** (XARA-US-0006,
       acceptance criterion 4): `benches/viewport.rs`, numbers in
       `perf.md`.
+
+## Fill and palette commands through `apply_edit` (XARA-T-0212)
+
+- Survey: nothing was missing as variants. `EditCommand::Fill { edits:
+  Vec<FillCommand> }` (every `fill_edit` command, plus the bitmap and
+  mutate ones) and `EditCommand::Palette(PaletteCommand)` already carried
+  the whole contract; `ops.rs` already used `fill_edit::set_own_attr`
+  (and so does `live_edit.rs`). Errors surface as
+  `SessionError::Edit(EditError::FillEdit(_) | EditError::Palette(_))`
+  with the document, the history and both labels untouched; a batch with
+  one bad edit applies none of it (one `Tx`).
+- The gap was `drag: Some(g)`: `impl Command for EditCommand` did not
+  forward `coalesce_key`, so a drag id on `MoveFillControl` / `MoveStop`
+  was ignored and only the bus gesture merged. It now folds the keys of a
+  `Fill` batch (all parts must carry one of the same kind), so one drag of
+  one handle is one step with no gesture open; another drag id or handle
+  is another step. The tools still pass `drag: None` and rely on their
+  gesture; both work.
+- Repaint: there is no per-colour repaint list. `after_mutation`
+  invalidates the view and the render thread diffs scenes (T-0221), which
+  covers a palette edit. `ColourUses::users_of(changed_between(..))` stays
+  available for a panel that wants the affected objects (tested).
+- `PaletteCommand::Create` builds its `CreateColour` inside `run`, so the
+  new id is read back with `colours.by_name(..)`, not `created`.
+- Journal (XARA-T-0217): both variants are plain data (no closures); add
+  them to the journal when it lands.
+- Not wired: `RandomiseFill` (no UI asks for it yet).
+- Tests: `tests/fill_palette_edit.rs` (11).

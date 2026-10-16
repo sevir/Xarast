@@ -1756,3 +1756,12 @@ test until it is listed. `MouldPoint`, `MouldGrid` and `MouldDetach` are
 tool state (no document change, no undo step) and are asserted as such.
 The status of all 17 phase 13 acceptance criteria is in `render.md`,
 "Phase 13 conformance audit".
+
+## Drag coalescing of fill edits (XARA-T-0212)
+
+`EditCommand::Fill` forwards the doc commands' `coalesce_key`, so a tool may
+pass `drag: Some(id)` on `MoveFillControl` / `MoveStop` and get one undo step
+per drag and handle even outside a bus gesture. The current fill tool passes
+`drag: None` and relies on its gesture; both are tested.
+Undo labels are the doc commands' own (`Set Fill`, `Move Fill Handle`, ...)
+and the palette's (`Create/Edit/Rename/Link/Delete Colour`).
