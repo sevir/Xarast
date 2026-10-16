@@ -2151,8 +2151,9 @@ impl<'o> Mapper<'o> {
         let path_after = path_at.filter(|&p| p >= first);
         if r.is_ok()
             && let Some(p) = path_after
+            && let Some(node) = children.get(p)
         {
-            r = self.emit_blend_path(&children[p], children.get(p.saturating_add(1)));
+            r = self.emit_blend_path(node, children.get(p.saturating_add(1)));
         }
         self.pop_scope();
         r
