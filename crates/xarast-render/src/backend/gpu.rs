@@ -50,7 +50,7 @@ impl Default for GpuConfig {
     fn default() -> GpuConfig {
         GpuConfig {
             tile_size: GPU_TILE_SIZE,
-            weights: LumaWeights::BT601,
+            weights: LumaWeights::GREY_CONVERSION,
         }
     }
 }

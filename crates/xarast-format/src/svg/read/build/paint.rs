@@ -74,6 +74,7 @@ fn mode_of(v: &str) -> Option<TranspMode> {
         "contrast" => TranspMode::Contrast,
         "brightness" => TranspMode::Brightness,
         "hue" => TranspMode::Hue,
+        "bevel" => TranspMode::Bevel,
         _ => return None,
     })
 }
@@ -1478,6 +1479,7 @@ mod tests {
             TranspMode::Brightness,
             TranspMode::Luminosity,
             TranspMode::Hue,
+            TranspMode::Bevel,
         ] {
             let (_, name) = crate::svg::paint::blend_of(m).expect("a blend mode");
             assert_eq!(mode_of(name), Some(m), "{name}");

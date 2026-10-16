@@ -283,6 +283,7 @@ const fn mode_name(m: TranspMode) -> &'static str {
         TranspMode::Brightness => "brightness",
         TranspMode::Hue => "hue",
         TranspMode::Luminosity => "luminosity",
+        TranspMode::Bevel => "bevel",
     }
 }
 

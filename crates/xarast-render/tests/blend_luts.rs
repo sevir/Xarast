@@ -126,6 +126,8 @@ fn the_luminance_weights_are_the_recorded_hypothesis() {
     // original. Until it runs, BT.601 is the documented hypothesis, and
     // this test is what will fail loudly when the constant changes.
     assert_eq!(LumaWeights::default(), LumaWeights::BT601);
+    assert_eq!(LumaWeights::GREY_CONVERSION, LumaWeights::BT601);
+    assert_eq!(xarast_color::RENDER_GREY_WEIGHTS, [0.299, 0.587, 0.114]);
     assert_eq!(LumaWeights::BT601.luma(rgb(255, 255, 255)), 255);
     assert_eq!(LumaWeights::BT601.luma(rgb(0, 0, 0)), 0);
     assert_eq!(LumaWeights::BT601.luma(rgb(255, 0, 0)), 76);

@@ -1085,10 +1085,22 @@ fn map_transparency(g: &TranspPaint, f: impl Fn(&Transparency) -> Transparency) 
             *c3 = f(c3);
         }
         FillGeometry::Bitmap { contone, .. } => {
-            if let Some((a, b)) = contone {
-                *a = f(a);
-                *b = f(b);
-            }
+            // A bitmap transparency carries its family on its level pair.
+            // Without one it reads as levels 0 at black to 255 at white,
+            // in Mix (XARA-T-0307), and that pair is made explicit so the
+            // new family has somewhere to live (phase 13 I1).
+            let (a, b) = contone.get_or_insert((
+                Transparency {
+                    level: 0,
+                    mode: TranspMode::Mix,
+                },
+                Transparency {
+                    level: 255,
+                    mode: TranspMode::Mix,
+                },
+            ));
+            *a = f(a);
+            *b = f(b);
         }
         FillGeometry::Fractal { from, to, .. } | FillGeometry::Noise { from, to, .. } => {
             *from = f(from);
@@ -1096,4 +1108,58 @@ fn map_transparency(g: &TranspPaint, f: impl Fn(&Transparency) -> Transparency) 
         }
     }
     g
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bitmap(contone: Option<(Transparency, Transparency)>) -> TranspPaint {
+        FillGeometry::Bitmap {
+            image: crate::resources::BitmapId::default(),
+            origin: Point::default(),
+            axis_x: Point::raw(1000, 0),
+            axis_y: Point::raw(0, 1000),
+            persp: None,
+            tiling: Tiling::Repeat,
+            dpi: 96,
+            contone,
+            profile: BiasGain::IDENTITY,
+        }
+    }
+
+    #[test]
+    fn a_bitmap_transparency_without_levels_takes_a_new_family() {
+        let set = |t: &Transparency| Transparency {
+            level: t.level,
+            mode: TranspMode::Darken,
+        };
+        let g = map_transparency(&bitmap(None), set);
+        assert_eq!(g.family(), TranspMode::Darken);
+        let FillGeometry::Bitmap { contone, .. } = &g else {
+            unreachable!()
+        };
+        // The implied levels, made explicit.
+        assert_eq!(contone.map(|(a, b)| (a.level, b.level)), Some((0, 255)));
+        // A pair that exists keeps its levels.
+        let mix = |level| Transparency {
+            level,
+            mode: TranspMode::Mix,
+        };
+        let g = map_transparency(&bitmap(Some((mix(20), mix(200)))), set);
+        assert_eq!(
+            g,
+            bitmap(Some((
+                Transparency {
+                    level: 20,
+                    mode: TranspMode::Darken
+                },
+                Transparency {
+                    level: 200,
+                    mode: TranspMode::Darken
+                }
+            )))
+        );
+        assert_eq!(g.source(), crate::fill::TranspSource::Image);
+    }
 }

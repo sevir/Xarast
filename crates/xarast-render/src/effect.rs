@@ -938,7 +938,7 @@ fn rows_per_task(width: usize) -> usize {
 /// The `Bevel` family's table, built once.
 fn bevel_lut() -> &'static BlendLut {
     static LUT: OnceLock<BlendLut> = OnceLock::new();
-    LUT.get_or_init(|| build_blend_lut(BlendFamily::Bevel, LumaWeights::BT601))
+    LUT.get_or_init(|| build_blend_lut(BlendFamily::Bevel, LumaWeights::GREY_CONVERSION))
 }
 
 /// For every pixel with a `feature` pixel within `reach` (Euclidean,

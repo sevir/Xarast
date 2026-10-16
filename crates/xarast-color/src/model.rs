@@ -419,7 +419,8 @@ impl ColourValue {
     ///
     /// Uses the colour model's own weights, [`GREY_MODEL_WEIGHTS`]
     /// (`research/02 §5.10.1`), not Rec. 601. The renderer's blend modes
-    /// use a different luminance constant, owned by `xarast-render`.
+    /// use a different luminance constant,
+    /// [`RENDER_GREY_WEIGHTS`](crate::RENDER_GREY_WEIGHTS).
     #[must_use]
     pub fn to_greyt(self) -> ColourValue {
         if let ColourValue::Greyt { .. } = self {

@@ -721,4 +721,61 @@ fn transform_persp(persp: &mut Option<Perspective>, m: Matrix) {
 pub type Paint = FillGeometry<xarast_color::Colour>;
 
 /// A transparency fill.
+///
+/// This is the document model's `Transparency { family, source }` (phase
+/// 13 I1): the family is the [`TranspMode`](xarast_color::TranspMode) its
+/// stops carry ([`TranspPaint::family`]), one of all twelve, and the source
+/// is the geometry ([`TranspPaint::source`]).
 pub type TranspPaint = FillGeometry<xarast_color::Transparency>;
+
+/// Where a transparency's per-pixel level comes from.
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+pub enum TranspSource {
+    /// One level everywhere.
+    Flat,
+    /// A graduated level: the four ramp shapes and the three- and
+    /// four-point meshes.
+    Gradient,
+    /// A bitmap's luminance, or a generated (fractal, noise) tile's,
+    /// mapped through the start and end levels.
+    Image,
+}
+
+impl FillGeometry<xarast_color::Transparency> {
+    /// The family the transparency composites in: its first stop's mode.
+    /// The stops carry one mode redundantly ([`crate::fill_edit::SetTranspMode`]
+    /// writes all of them). A bitmap without a level pair is Mix.
+    #[must_use]
+    pub fn family(&self) -> xarast_color::TranspMode {
+        match self {
+            FillGeometry::Flat { value } => value.mode,
+            FillGeometry::Linear { from, .. }
+            | FillGeometry::Radial { from, .. }
+            | FillGeometry::Conical { from, .. }
+            | FillGeometry::Diamond { from, .. }
+            | FillGeometry::Fractal { from, .. }
+            | FillGeometry::Noise { from, .. } => from.mode,
+            FillGeometry::ThreeColour { c0, .. } | FillGeometry::FourColour { c0, .. } => c0.mode,
+            FillGeometry::Bitmap { contone, .. } => {
+                contone.map_or(xarast_color::TranspMode::Mix, |(from, _)| from.mode)
+            }
+        }
+    }
+
+    /// Where the level comes from.
+    #[must_use]
+    pub fn source(&self) -> TranspSource {
+        match self {
+            FillGeometry::Flat { .. } => TranspSource::Flat,
+            FillGeometry::Linear { .. }
+            | FillGeometry::Radial { .. }
+            | FillGeometry::Conical { .. }
+            | FillGeometry::Diamond { .. }
+            | FillGeometry::ThreeColour { .. }
+            | FillGeometry::FourColour { .. } => TranspSource::Gradient,
+            FillGeometry::Bitmap { .. }
+            | FillGeometry::Fractal { .. }
+            | FillGeometry::Noise { .. } => TranspSource::Image,
+        }
+    }
+}

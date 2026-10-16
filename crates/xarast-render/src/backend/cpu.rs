@@ -110,7 +110,7 @@ impl CpuConfig {
             pin_simd: true,
             threads: 0,
             band_budget_bytes: 1 << 20,
-            weights: LumaWeights::BT601,
+            weights: LumaWeights::GREY_CONVERSION,
             missing_levels: MissingLevels::Materialise,
         }
     }
@@ -128,7 +128,7 @@ impl CpuConfig {
             pin_simd: false,
             threads: 0,
             band_budget_bytes: 1 << 19,
-            weights: LumaWeights::BT601,
+            weights: LumaWeights::GREY_CONVERSION,
             missing_levels: MissingLevels::Materialise,
         }
     }
@@ -2050,7 +2050,7 @@ impl<'a> LevelSampler<'a> {
                 // The original reads the transparency out of the luminance
                 // of the tile pattern, sampled like a colour image, and
                 // maps it through its start..end table.
-                let luma = LumaWeights::BT601.luma(img.sample(p));
+                let luma = LumaWeights::GREY_CONVERSION.luma(img.sample(p));
                 match self.table {
                     Some(table) if !table.is_empty() => {
                         table[crate::paint::ramp_index(f64::from(luma) / 255.0, table.len())]

@@ -235,6 +235,7 @@ fn family_of(m: TranspMode) -> BlendFamily {
         TranspMode::Brightness => BlendFamily::Brightness,
         TranspMode::Luminosity => BlendFamily::Luminosity,
         TranspMode::Hue => BlendFamily::Hue,
+        TranspMode::Bevel => BlendFamily::Bevel,
     }
 }
 

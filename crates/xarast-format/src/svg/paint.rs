@@ -1126,11 +1126,25 @@ fn contone_filter(ctx: &mut PaintCtx<'_>, a: &Colour, b: &Colour, effect: FillEf
     ctx.defs.add('f', "filter", &body)
 }
 
+/// One row of the transparency-mask colour matrix: `1 - level`, where the
+/// level runs linearly from `levels.0` at black to `levels.1` at white,
+/// with luminance taken by the renderer's grey conversion
+/// ([`xarast_color::RENDER_GREY_WEIGHTS`]), so the browser fallback and
+/// the canvas read the same luminance.
+fn mask_row(levels: (u8, u8)) -> String {
+    // mask = 1 - (a + (b - a) * luma), with a and b in 0..1.
+    let a = f64::from(levels.0) / 255.0;
+    let span = (f64::from(levels.1) - f64::from(levels.0)) / 255.0;
+    let [wr, wg, wb] = xarast_color::RENDER_GREY_WEIGHTS.map(f64::from);
+    let w = |k: f64| f64s(-span * k, 4);
+    format!("{} {} {} 0 {}", w(wr), w(wg), w(wb), f64s(1.0 - a, 4))
+}
+
 /// A bitmap transparency as a luminance `<mask>` over the element's box:
 /// the image tiled as a bitmap fill is, through a filter that turns each
 /// texel into `1 - level`, where the level runs linearly from the start
-/// level at black to the end level at white (BT.601 luma on the straight
-/// colour, alpha ignored; 0 opaque … 255 clear). With the default levels,
+/// level at black to the end level at white (the renderer's grey
+/// conversion on the straight colour, alpha ignored; 0 opaque … 255 clear). With the default levels,
 /// 0 and 255, that is `1 - luma`. The fill's profile is not applied. The
 /// mask carries no model data: the twin does.
 fn bitmap_mask(
@@ -1146,21 +1160,7 @@ fn bitmap_mask(
     let mut pattern = bitmap_pattern_head(ctx, origin, axis_x, axis_y);
     bitmap_pattern_tail(&mut pattern, bm, None);
     let pattern = ctx.defs.add('p', "pattern", &pattern);
-    let row = if levels == (0, 255) {
-        "-.299 -.587 -.114 0 1".to_owned()
-    } else {
-        // mask = 1 - (a + (b - a) * luma), with a and b in 0..1.
-        let a = f64::from(levels.0) / 255.0;
-        let span = (f64::from(levels.1) - f64::from(levels.0)) / 255.0;
-        let w = |k: f64| f64s(-span * k, 4);
-        format!(
-            "{} {} {} 0 {}",
-            w(0.299),
-            w(0.587),
-            w(0.114),
-            f64s(1.0 - a, 4)
-        )
-    };
+    let row = mask_row(levels);
     let filter = ctx.defs.add(
         'f',
         "filter",
@@ -1255,6 +1255,8 @@ pub(crate) fn blend_of(m: TranspMode) -> Option<(Option<&'static str>, &'static 
         TranspMode::Contrast => (None, "contrast"),
         TranspMode::Brightness => (None, "brightness"),
         TranspMode::Hue => (Some("hue"), "hue"),
+        // A bevel's lighting has no CSS equivalent (`research/06 §6.5.2`).
+        TranspMode::Bevel => (None, "bevel"),
     })
 }
 
@@ -1471,6 +1473,9 @@ pub(crate) fn transparency(
             };
             TranspOut {
                 mask,
+                // The family is the levels' (phase 13 I6): it used to be
+                // dropped, so the tile read back in Mix.
+                mode: from.mode,
                 sidecar,
                 ..TranspOut::default()
             }
@@ -1606,6 +1611,9 @@ pub(crate) fn transparency(
             };
             TranspOut {
                 mask,
+                // The family is the level pair's (phase 13 I6): it used to
+                // be dropped, so a bitmap transparency read back in Mix.
+                mode: contone.map_or(TranspMode::Mix, |(a, _)| a.mode),
                 sidecar,
                 ..TranspOut::default()
             }
@@ -1843,6 +1851,14 @@ fn transparency_mask(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_mask_row_reads_the_shared_grey_weights_and_keeps_its_bytes() {
+        // The bytes every file written before the weights were shared
+        // carries: the shared constant must reproduce them exactly.
+        assert_eq!(mask_row((0, 255)), "-.299 -.587 -.114 0 1");
+        assert_eq!(mask_row((255, 0)), ".299 .587 .114 0 0");
+    }
 
     #[test]
     fn hex_shortens_only_when_exact() {

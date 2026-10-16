@@ -72,8 +72,9 @@ const fn screen(a: u8, b: u8) -> u8 {
 ///
 /// `GColour_SetGreyConversionValues` installs these in the original, and
 /// **Xara LX never calls it**, so CDraw's internal defaults apply and are in
-/// no header. [`LumaWeights::BT601`] is the working hypothesis; task R4.4
-/// recovers the real ones by least squares against a rendered Darken ramp.
+/// no header. [`LumaWeights::GREY_CONVERSION`] — BT.601 until measured —
+/// is the working hypothesis; `docs/memory/render.md` ("Grey-conversion
+/// weights") records how to recover the real ones.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LumaWeights {
     /// Red weight.
@@ -86,11 +87,20 @@ pub struct LumaWeights {
 
 impl Default for LumaWeights {
     fn default() -> LumaWeights {
-        LumaWeights::BT601
+        LumaWeights::GREY_CONVERSION
     }
 }
 
 impl LumaWeights {
+    /// The renderer's grey conversion: [`xarast_color::RENDER_GREY_WEIGHTS`],
+    /// the one definition both backends' tables and the bitmap
+    /// transparency read. **Unverified** against the original.
+    pub const GREY_CONVERSION: LumaWeights = LumaWeights {
+        r: xarast_color::RENDER_GREY_WEIGHTS[0],
+        g: xarast_color::RENDER_GREY_WEIGHTS[1],
+        b: xarast_color::RENDER_GREY_WEIGHTS[2],
+    };
+
     /// ITU-R BT.601, the working hypothesis until R4.4 measures the truth.
     pub const BT601: LumaWeights = LumaWeights {
         r: 0.299,
@@ -226,6 +236,7 @@ impl BlendFamily {
             TranspMode::Brightness => BlendFamily::Brightness,
             TranspMode::Luminosity => BlendFamily::Luminosity,
             TranspMode::Hue => BlendFamily::Hue,
+            TranspMode::Bevel => BlendFamily::Bevel,
         }
     }
 

@@ -33,7 +33,7 @@ pub mod table;
 pub use builtin::BuiltinColour;
 pub use context::ColourContext;
 pub use fixed24::Fixed24;
-pub use interp::{FillEffect, Stop, TranspMode, Transparency, interpolate};
+pub use interp::{FillEffect, RENDER_GREY_WEIGHTS, Stop, TranspMode, Transparency, interpolate};
 pub use model::{ColourModel, ColourValue, GREY_MODEL_WEIGHTS, Rgba8, pack_component};
 pub use table::{
     Colour, ColourDef, ColourEditError, ColourError, ColourId, ColourIds, ColourKind, ColourTable,

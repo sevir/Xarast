@@ -120,12 +120,17 @@ fn lerp_hue(h0: f32, h1: f32, t: f32, long_way: bool) -> f32 {
     (h0 + d * t).rem_euclid(1.0)
 }
 
-/// How a transparency composites what is behind it.
+/// How a transparency composites what is behind it: its **family**.
 ///
-/// The discriminants match the `.xar` transparency `type` byte. The gaps
-/// correspond to internal variants of the original's render engine that its
-/// source does not document, which is why [`TranspMode::from_byte`] maps
-/// everything unknown to [`TranspMode::Mix`].
+/// The twelve variants are the original's twelve families: no type, the
+/// three classic ones and the eight blend modes. The discriminants are the
+/// `.xar` transparency `type` byte, which the original writes as its
+/// in-memory `TranspType` value unchanged (`Kernel/fillattr.cpp:6159` and
+/// the other `TAG_*TRANSPARENTFILL` writers; the values are listed at
+/// `Kernel/fillval.h:140-143`). The gaps are the per-family "flat" and
+/// "graduated" render-engine variants and three reserved values, which the
+/// document never holds; [`TranspMode::from_byte`] maps them to
+/// [`TranspMode::Mix`].
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Default)]
 #[repr(u8)]
 pub enum TranspMode {
@@ -154,6 +159,11 @@ pub enum TranspMode {
     /// The original's transparency tool offers it last, after Luminosity,
     /// and writes 31 (`TT_HUE`, `Kernel/fillval.h:171`).
     Hue = 31,
+    /// The bevel family (`TT_BEVEL`, 34): the original gives it only to a
+    /// bevel's own lighting fill (`Kernel/nodebev.cpp:434`), never offers it
+    /// in the transparency tool, and draws its source as a bevel index
+    /// rather than a level.
+    Bevel = 34,
 }
 
 impl TranspMode {
@@ -173,10 +183,43 @@ impl TranspMode {
             25 => TranspMode::Brightness,
             28 => TranspMode::Luminosity,
             31 => TranspMode::Hue,
+            34 => TranspMode::Bevel,
             _ => TranspMode::Mix,
         }
     }
+
+    /// Every family, in the original's numbering order.
+    pub const ALL: [TranspMode; 12] = [
+        TranspMode::None,
+        TranspMode::Mix,
+        TranspMode::StainedGlass,
+        TranspMode::Bleach,
+        TranspMode::Contrast,
+        TranspMode::Saturation,
+        TranspMode::Darken,
+        TranspMode::Lighten,
+        TranspMode::Brightness,
+        TranspMode::Luminosity,
+        TranspMode::Hue,
+        TranspMode::Bevel,
+    ];
 }
+
+/// The RGB weights of the renderer's grey conversion: the `Y(c)` every
+/// luminance-based blend family (Darken, Lighten, Brightness, Saturation,
+/// Luminosity, Hue) reads, and the luminance a bitmap transparency is read
+/// from.
+///
+/// **Unverified.** The original installs these with
+/// `GColour_SetGreyConversionValues`, never calls it, and so runs on
+/// CDraw's built-in defaults, which are in no header. ITU-R BT.601 is the
+/// stated hypothesis until they are measured (the procedure is in
+/// `docs/memory/render.md`, "Grey-conversion weights"). This is the one
+/// definition: the CPU and GPU backends' blend tables and the `.xarast`
+/// writer's transparency masks all read it. It is not the colour model's
+/// [`GREY_MODEL_WEIGHTS`](crate::GREY_MODEL_WEIGHTS), which is measured
+/// and different.
+pub const RENDER_GREY_WEIGHTS: [f32; 3] = [0.299, 0.587, 0.114];
 
 /// A transparency: a scalar level plus a compositing mode.
 ///

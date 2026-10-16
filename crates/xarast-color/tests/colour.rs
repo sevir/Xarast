@@ -327,8 +327,14 @@ fn transparency_modes_match_the_file_and_default_to_mix() {
     // The original's transparency tool writes Hue as 31 (`TT_HUE`).
     assert_eq!(TranspMode::from_byte(31), TranspMode::Hue);
     assert_eq!(TranspMode::Hue as u8, 31);
+    // A bevel's lighting fill is `TT_BEVEL`, 34.
+    assert_eq!(TranspMode::from_byte(34), TranspMode::Bevel);
+    // Every family reads back from its own byte.
+    for m in TranspMode::ALL {
+        assert_eq!(TranspMode::from_byte(m as u8), m, "{m:?}");
+    }
     // The gaps are undocumented render-engine variants; treat them as mix.
-    for v in [4u8, 7, 12, 14, 15, 99, 255] {
+    for v in [4u8, 7, 12, 14, 15, 33, 35, 36, 99, 255] {
         assert_eq!(TranspMode::from_byte(v), TranspMode::Mix, "{v}");
     }
     assert_eq!(TranspMode::default(), TranspMode::Mix);
