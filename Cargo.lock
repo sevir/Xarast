@@ -5700,6 +5700,7 @@ dependencies = [
  "xarast-doc",
  "xarast-format",
  "xarast-geom",
+ "xarast-image",
  "xarast-io",
  "xarast-render",
  "xarast-xar",
