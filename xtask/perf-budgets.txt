@@ -99,3 +99,19 @@ spitfire-first    nightly   first_ms      200  st   -    100  -- open --doc $COR
 # that fails when the cache stops hitting.
 render-feathers   pr,nightly median_ms    12   mt   -    3.5  -- render --whole --doc $CORPUS/Designs/feathers.xar --runs 11
 render-groucho2   nightly   median_ms     16   mt   -    6.5  -- render --whole --doc $CORPUS/Designs/Groucho2.xar --runs 11
+
+# ── Live effects, generation costs (phase 13 acceptance criteria 13-14,
+# XARA-T-0348): `xarast-cli bench effects --kind K`, the work an effect
+# repeats when a parameter changes, on the workload the phase table sizes,
+# with no document and no frame. They bound the generators; the frame
+# budgets of the table (Draft drags and pans on a rendered scene) need the
+# GPU-free render thread and a scene per effect, which are not committed
+# yet (perf.md, "Phase 13 conformance"). Limits follow the policy above:
+# the budget where the reference is at most half of it, so each carries a
+# wide margin and catches an order-of-magnitude regression, not drift.
+fx-contour-24    pr,nightly median_ms 250 st 250 66   -- effects --kind contour --runs 11 # 24 steps on a 500-node path, Final
+fx-blend-50      pr,nightly median_ms 100 st 100 0.15 -- effects --kind blend --runs 11 # correspondence + 50 steps of 200-node paths
+fx-mould-5000    pr,nightly median_ms 16  st 16  0.13 -- effects --kind mould --runs 11 # a perspective over 5000 nodes (the Draft frame budget)
+fx-bevel-400     pr,nightly median_ms 150 st 150 0.5  -- effects --kind bevel --runs 11 # the lighting of 400 x 400 px, not the offscreen passes
+fx-blur-disc-20  pr,nightly median_ms 12  mt 12  5.6  -- effects --kind blur --runs 11 # disc r = 20 px, 1024 x 1024 alpha, CPU
+fx-clouds-256    pr,nightly median_ms 60  st 60  0.55 -- effects --kind clouds --runs 11 # one 256 x 256 tile (the largest the generator makes); budget is for 512 x 512

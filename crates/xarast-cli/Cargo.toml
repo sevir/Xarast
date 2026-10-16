@@ -19,6 +19,7 @@ xarast-format = { path = "../xarast-format" }
 xarast-io = { path = "../xarast-io" }
 xarast-render = { path = "../xarast-render" }
 xarast-geom = { path = "../xarast-geom" }
+xarast-image = { path = "../xarast-image" }
 xarast-color = { path = "../xarast-color" }
 
 [features]

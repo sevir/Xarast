@@ -62,6 +62,10 @@ SCENARIOS
     photo      photo panel slider frames on a large photograph (--photo),
                through the render thread: intent, walk and repaint per
                frame; then the release that commits the chain
+    effects    the generation cost of one live effect (--kind contour,
+               blend, mould, bevel, blur or clouds) on a synthetic
+               workload sized by the phase 13 performance table; no
+               document, no frame
     leak       open, walk, render, edit, undo, save and close the
                document --iterations times; resident growth after the
                first close
@@ -78,6 +82,7 @@ OPTIONS
     --size WxH      the canvas (default 1920x1080)
     --zoom F        pan/zoom/render: zoom by F about the page fit (default 1)
     --photo WxH     photo: the photograph's size (default 6000x4000)
+    --kind K        effects: contour | blend | mould | bevel | blur | clouds
     --whole         render: rasterise every frame whole (the backdrop
                     changes between frames, so no pixel is reused); the
                     backend's caches, such as the effect layer cache,
@@ -118,6 +123,8 @@ pub enum Scenario {
     Leak,
     /// Photo panel slider frames and their release.
     Photo,
+    /// The generation cost of one live effect (`--kind`).
+    Effects,
 }
 
 impl Scenario {
@@ -134,6 +141,7 @@ impl Scenario {
             "export" => Scenario::Export,
             "leak" => Scenario::Leak,
             "photo" => Scenario::Photo,
+            "effects" => Scenario::Effects,
             _ => return None,
         })
     }
@@ -151,6 +159,7 @@ impl Scenario {
             Scenario::Export => "export",
             Scenario::Leak => "leak",
             Scenario::Photo => "photo",
+            Scenario::Effects => "effects",
         }
     }
 }
@@ -178,6 +187,40 @@ pub struct BenchArgs {
     /// `render`: rasterise every frame whole (`--whole`), so that the
     /// render thread cannot reuse the pixels on screen.
     pub whole: bool,
+    /// `effects`: which generator (`--kind`).
+    pub kind: Option<EffectKind>,
+}
+
+/// What the `effects` scenario generates, one sized workload per kind
+/// (the phase 13 performance table; `docs/memory/perf.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectKind {
+    /// Contour: 24 steps on a 500-node path.
+    Contour,
+    /// Blend: the correspondence of two 200-node paths and 50 steps.
+    Blend,
+    /// Mould: a perspective over a 5000-node group.
+    Mould,
+    /// Bevel: the lighting of a 400 x 400 px region.
+    Bevel,
+    /// Disc blur, radius 20 px, of a 1024 x 1024 alpha plane.
+    Blur,
+    /// The clouds fractal tile at its largest side (256).
+    Clouds,
+}
+
+impl EffectKind {
+    fn parse(s: &str) -> Option<EffectKind> {
+        Some(match s {
+            "contour" => EffectKind::Contour,
+            "blend" => EffectKind::Blend,
+            "mould" => EffectKind::Mould,
+            "bevel" => EffectKind::Bevel,
+            "blur" => EffectKind::Blur,
+            "clouds" => EffectKind::Clouds,
+            _ => return None,
+        })
+    }
 }
 
 /// Parses `bench`'s arguments.
@@ -199,6 +242,7 @@ pub fn parse(argv: &[String]) -> Result<BenchArgs, String> {
         zoom: 1.0,
         photo: (6000, 4000),
         whole: false,
+        kind: None,
     };
     while let Some(arg) = it.next_arg() {
         match arg.as_str() {
@@ -210,6 +254,11 @@ pub fn parse(argv: &[String]) -> Result<BenchArgs, String> {
             "--size" => a.size = dimensions(&it.value("--size")?, "--size")?,
             "--photo" => a.photo = dimensions(&it.value("--photo")?, "--photo")?,
             "--whole" => a.whole = true,
+            "--kind" => {
+                let v = it.value("--kind")?;
+                a.kind =
+                    Some(EffectKind::parse(&v).ok_or_else(|| format!("unknown --kind `{v}`"))?);
+            }
             other => return Err(format!("unknown argument {other}")),
         }
     }
@@ -263,6 +312,7 @@ pub fn run(a: &BenchArgs) -> Exit {
         Scenario::Export => export(a, &mut report),
         Scenario::Leak => leak(a, &mut report),
         Scenario::Photo => photo(a, &mut report),
+        Scenario::Effects => effects(a, &mut report),
     };
     let _ = std::fs::remove_dir_all(scratch_dir());
     match result {
@@ -395,6 +445,179 @@ fn save(a: &BenchArgs, r: &mut Report) -> Result<(), String> {
         let summary = job.run().result?;
         times.push(ms(t.elapsed()));
         r.info_num("bytes", summary.bytes as f64);
+    }
+    r.samples("", &times);
+    Ok(())
+}
+
+/// A closed polygon of `n` vertices around `(cx, cy)`, its radius wobbling
+/// so that no two edges are parallel (millipoints).
+fn wobbly(n: usize, cx: f64, cy: f64, r: f64, phase: f64) -> xarast_geom::Path {
+    use xarast_geom::{Path, Point};
+    let mut b = Path::builder();
+    for i in 0..n {
+        let t = std::f64::consts::TAU * i as f64 / n as f64;
+        let rr = r * (1.0 + 0.15 * (7.0 * t + phase).sin());
+        let p = Point::from_f64_round(cx + rr * t.cos(), cy + rr * t.sin());
+        if i == 0 {
+            b.move_to(p);
+        } else {
+            b.line_to(p);
+        }
+    }
+    b.close();
+    b.build()
+}
+
+/// One live effect's generation cost, on the workload the phase 13
+/// performance table names (`--kind`): the work the effect repeats when a
+/// parameter changes, without a document or a frame.
+fn effects(a: &BenchArgs, r: &mut Report) -> Result<(), String> {
+    use std::hint::black_box;
+    use xarast_geom::{BiasGain, FillRule, Join, Point, Rect, self_union};
+
+    let kind = a.kind.ok_or("effects needs --kind")?;
+    let mut job: Box<dyn FnMut()> = match kind {
+        EffectKind::Contour => {
+            use xarast_geom::contour::{
+                CONTOUR_MITRE_LIMIT, contour_tolerance, step_distances, steps,
+            };
+            let input = wobbly(500, 250_000.0, 250_000.0, 200_000.0, 0.0);
+            let tol = contour_tolerance(input.bounds());
+            let clean = self_union(&input, FillRule::NonZero, tol);
+            let distances = step_distances(40_000.0, 24, BiasGain::IDENTITY);
+            let sources = vec![clean];
+            Box::new(move || {
+                black_box(steps(
+                    black_box(&sources),
+                    true,
+                    &distances,
+                    Join::Round,
+                    CONTOUR_MITRE_LIMIT,
+                    tol,
+                ));
+            })
+        }
+        EffectKind::Blend => {
+            use xarast_geom::blend::{Outline, correspond};
+            let pa = wobbly(200, 100_000.0, 100_000.0, 60_000.0, 0.0);
+            let pb = wobbly(200, 400_000.0, 150_000.0, 90_000.0, 1.3);
+            let (oa, ob) = (Outline::subpaths(&pa), Outline::subpaths(&pb));
+            Box::new(move || {
+                let c = correspond(&oa[0], &ob[0], false);
+                for i in 1..=50 {
+                    black_box(c.at(f64::from(i) / 51.0));
+                }
+            })
+        }
+        EffectKind::Mould => {
+            use xarast_geom::mould::{Perspective, mould_path};
+            let source = Rect::raw(0, 0, 1_000_000, 1_000_000);
+            let g = Perspective::new(
+                [
+                    Point::raw(0, 0),
+                    Point::raw(150_000, 1_000_000),
+                    Point::raw(850_000, 1_000_000),
+                    Point::raw(1_000_000, 0),
+                ],
+                source,
+            );
+            // 5 000 nodes: 100 paths of 50.
+            let paths: Vec<xarast_geom::Path> = (0..100)
+                .map(|i| {
+                    let x = f64::from(i % 10) * 100_000.0 + 50_000.0;
+                    let y = f64::from(i / 10) * 100_000.0 + 50_000.0;
+                    wobbly(50, x, y, 40_000.0, f64::from(i))
+                })
+                .collect();
+            Box::new(move || {
+                for p in &paths {
+                    black_box(mould_path(&g, black_box(p), 32.0));
+                }
+            })
+        }
+        EffectKind::Bevel => {
+            let (w, h) = (400usize, 400usize);
+            let plane: Vec<u8> = (0..w * h)
+                .map(|i| {
+                    let (x, y) = ((i % w) as f64 - 200.0, (i / w) as f64 - 200.0);
+                    if x * x + y * y < 180.0 * 180.0 {
+                        255
+                    } else {
+                        0
+                    }
+                })
+                .collect();
+            let colour: Vec<u8> = plane
+                .iter()
+                .flat_map(|a| [a / 2, a / 3, a / 4, *a])
+                .collect();
+            let bevel = xarast_render::LayerEffect::Bevel(Box::new(xarast_render::BevelEffect {
+                style: xarast_geom::bevel::BevelType::Round,
+                indent: 16.0,
+                outer: false,
+                light_angle: 315.0,
+                light_tilt: 45.0,
+                contrast: 0.75,
+                colour: xarast_color::Rgba8::BLACK,
+                join: Join::Round,
+                paint_inner: false,
+            }));
+            Box::new(move || {
+                let mut c = colour.clone();
+                bevel.apply_at(
+                    black_box(&mut c),
+                    Some(&plane),
+                    w,
+                    h,
+                    xarast_render::Transform2D::scale(1.0),
+                    (0, 0),
+                );
+                black_box(c);
+            })
+        }
+        EffectKind::Blur => {
+            let (w, h) = (1024usize, 1024usize);
+            let plane: Vec<u8> = (0..w * h)
+                .map(|i| {
+                    if (i % w) / 64 % 2 == (i / w) / 64 % 2 {
+                        255
+                    } else {
+                        0
+                    }
+                })
+                .collect();
+            Box::new(move || {
+                let mut p = plane.clone();
+                xarast_render::blur_plane(
+                    black_box(&mut p),
+                    w,
+                    h,
+                    xarast_render::Kernel::Disc { radius_px: 20.0 },
+                );
+                black_box(p);
+            })
+        }
+        EffectKind::Clouds => {
+            let p = xarast_image::procedural::CloudsParams {
+                seed: 7,
+                graininess: xarast_image::procedural::fixed16(0.5),
+                gravity: xarast_image::procedural::fixed16(0.5),
+                squash: 0,
+                tileable: true,
+                dim: xarast_image::procedural::MAX_CLOUDS_DIM,
+            };
+            Box::new(move || {
+                black_box(xarast_image::procedural::clouds(black_box(&p)));
+            })
+        }
+    };
+    reset_peak_rss();
+    let mut times = Vec::with_capacity(a.runs);
+    for _ in 0..a.runs {
+        let t = Instant::now();
+        job();
+        times.push(ms(t.elapsed()));
     }
     r.samples("", &times);
     Ok(())
@@ -900,6 +1123,8 @@ impl Report {
             scenario: a.scenario.name(),
             doc: if a.scenario == Scenario::Photo {
                 format!("photo:{}x{}", a.photo.0, a.photo.1)
+            } else if a.scenario == Scenario::Effects {
+                format!("effects:{:?}", a.kind)
             } else {
                 a.doc.as_deref().map_or_else(
                     || format!("synthetic:{}", a.nodes),
