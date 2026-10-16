@@ -762,9 +762,33 @@ impl xarast_doc::Command for EditCommand {
                 kind: TYPING_KIND,
             }),
             EditCommand::RemoveEmptyStory { joins, .. } => *joins,
+            // A fill edit carrying a drag id (`MoveFillControl::drag`,
+            // `MoveStop::drag`) merges with the next of the same drag and
+            // handle whether or not the bus has a gesture open; a
+            // multi-object edit folds the keys of all its parts.
+            EditCommand::Fill { edits } => fill_coalesce_key(edits),
             _ => None,
         }
     }
+}
+
+/// The key of a multi-part fill edit: every part must carry one of the same
+/// kind, and the key folds theirs.
+fn fill_coalesce_key(edits: &[crate::fill_tool::FillCommand]) -> Option<CoalesceKey> {
+    let mut keys = edits.iter().map(|e| e.command().coalesce_key());
+    let first = keys.next()??;
+    let mut h = first.gesture;
+    for k in keys {
+        let k = k?;
+        if k.kind != first.kind {
+            return None;
+        }
+        h = (h ^ k.gesture).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    Some(CoalesceKey {
+        gesture: h,
+        kind: first.kind,
+    })
 }
 
 /// A story a deletion of `range` left without characters (only paragraph
