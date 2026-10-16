@@ -682,6 +682,14 @@ Decisions:
   `source_point` = 9×9 grid nearest + ≤ 24 Newton steps.
 - 2×2 envelope (24 points): Coons over piecewise (2-cubic) sides — our
   definition; the original's also smooths inner lines and has no tag.
+- Vanishing points (XARA-T-0342, the mould tool): `vanishing_points`
+  gives `[Sides, Ends]` — where bl–tl meets br–tr and where br–bl meets
+  tr–tl — `None` when within 1e-9 rad of parallel or outside the
+  extent. `drag_vanishing_point(corners, which, to)`: the corners on the
+  side the point lies beyond (parameter `t < 0` along the first line:
+  its start) slide along their edge's line, on lines from the fixed far
+  corners through `to`; `None` unless the result validates. Facts from
+  `Kernel/moldpers.cpp:1840-1980`; the formulation is ours.
 - Property tests (`tests/mould.rs`): corners map exactly (envelope:
   bit-exact; perspective: ≤ 1 mp), no NaN or malformed path on hostile
   cages/thresholds, subdivision bounded at threshold 1e-9, outputs pass

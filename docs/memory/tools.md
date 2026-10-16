@@ -1274,6 +1274,166 @@ tests in `contour_tool.rs` (2) and `xarast-doc` `tests/blend.rs`
     distance mode, tangential, the "long job" question, refusing to
     remove a bevelled/contoured blend.
 
+## Phase 13: the mould tool (XARA-T-0342, G9)
+
+| Piece | Where | State |
+|---|---|---|
+| `LiveEffect::Mould`, `LiveEdit::Mould { targets, kind, label }` (the whole selection in **one** controller), `mould_params` | `xarast-app/src/live_edit.rs` | done |
+| `MouldTool` (Shift+F6): presets, cage drags, vanishing points, numbers, copy/paste, rotate, detach, mesh, remove | `mould_tool.rs` | done |
+| `ToolAction::{CopyMould, PasteEnvelope, PastePerspective, RotateMould}`; six `InfobarField::Mould*` | `tool.rs` | done |
+| Previewed cage: `mould::generate_preview(doc, c, params, text)`, `regenerate_with` honours a `Mould` override, `paint_mould` keys by `regen_key_with` | `xarast-doc/src/mould.rs`, `regen.rs`, `walker.rs` | done |
+| Scene ink widened by a previewed cage's extent | `session.rs` | done |
+| Picking a moulded object by its **moulded** outline (A7, part of XARA-T-0337) | `picking.rs` (`moulded_leaf`) | done |
+| `vanishing_points`, `drag_vanishing_point`, `Vanishing` | `xarast-geom/src/mould.rs` | done |
+
+Tests: `tests/mould_tool.rs` (11: registration, key, cursors, status,
+12 cage handles drawn; a preset moulds a two-object selection into one
+controller, objects in render order, one exact "Apply Envelope" step,
+the rectangular preset is the identity cage; apply + remove = identity
+by digest and pixels for an envelope and a perspective, selection back
+to the objects; a corner drag regenerates **once per frame** and none
+for a repeated frame, digest/history untouched, the corner carries its
+two handles, commit = preview pixels, one exact "Edit Mould", a
+Constrain-dragged handle moves alone on 45°, `Esc` leaves nothing; a
+folded perspective commits nothing (the status says so) and a floor's
+vanishing point drags in one exact step with the base fixed; every
+number (point list, X, Y, accuracy clamp, same value no step, a folding
+value refused) and a preset replacing a selected mould's shape over its
+own source ("Mould Shape"); copy, paste perspective in place, paste
+envelope centred with Constrain, rotate (four turns = identity);
+detach: drags change nothing until attach, then one "Edit Mould"; the
+mesh adds 14 lines and no step; a click on the undeformed source
+outside the moulded copy picks nothing, inside it the controller; the
+golden `tests/golden/mould_tool.png`). Unit tests in `mould_tool.rs`
+(4: presets fit and are usable, corner/handle moves, rotation, kind
+conversion) and `xarast-geom` `mould.rs` (2: vanishing points, their
+drag).
+
+### Facts from the original (paraphrased; `tools/moldtool.cpp`, `Kernel/moldedit.cpp`, `Kernel/moldenv.cpp`, `Kernel/moldpers.cpp`, `Kernel/nodemold.cpp`, `wxOil/xrc/EN/mouldbar.xrc`, `mike-strings.xrc`)
+
+- **Tool**: `TOOL19`, "Mould Tool Shift+F6"; no tool keys. The infobar
+  holds: default envelope, default perspective, copy mould, paste
+  envelope, mesh toggle, circular / elliptical / concave / banner
+  envelopes, left / right / floor / ceiling perspectives, paste
+  perspective, Remove, Detach (a toggle button), Rotate contents.
+  Status: a default message, "drag vanishing point" over one, "drag
+  coordinate" over a cage point (`moldtool.cpp:678-748`). The tool draws
+  no blobs of its own: the selected mould's cage path shows its path
+  blobs and a perspective its vanishing point blobs.
+- **Create** (`moldedit.cpp:188-456`): one mould round **the whole
+  selection**, inserted after its last (topmost) node; the objects move
+  into the mould group. When every selected object is a mould, each
+  mould's shape is replaced instead, fitted to that mould's own source
+  rectangle (`moldedit.cpp:825-940`). Presets are drawn on a 72 000 mp
+  square and scaled to the selection's bounds; the circular envelope
+  locks its aspect: a square on the larger side about the centre
+  (`FindScaleRect`, `moldedit.cpp:500-527`). Greyed while anything
+  selected sits in a "needs parent" node (`moldtool.cpp:1197-1245`).
+- **Presets** (unit square, cage from the bottom-left clockwise):
+  rectangular = the box; circular/elliptical = a circle with its four
+  corners on the diagonals (an ellipse of quarter arcs, handle inset
+  1/4.4672 of the box, i.e. the usual circle constant, turned 45°);
+  concave = straight top and bottom, the left side bowing in with
+  handles at x = 3/8 (y = 2/8, 6/8), the right at x = 5/8; banner =
+  straight sides, the top bowing down with handles at y = 5/8
+  (x = 2/8, 6/8), the bottom up to y = 3/8. Perspectives (BL, TL, TR,
+  BR): left wall (0,0)(0,1)(1,5/8)(1,3/8); right wall
+  (0,3/8)(0,5/8)(1,1)(1,0); floor (0,0)(3/8,1)(5/8,1)(1,0); ceiling
+  (3/8,0)(0,1)(1,1)(5/8,0). A 2×2 envelope preset exists but its button
+  is commented out.
+- **Editing the cage**: the mould's path node is edited by the generic
+  path drag (an end point carries its adjacent control points; a control
+  point moves alone). After the edit the mould validates the new shape
+  and the op **fails** when it is not valid (`nodemold.cpp:2046-2090`):
+  an envelope needs width and height, a perspective no coincident
+  corners and convexity. The contents re-mould on the drop, not live (an
+  XOR outline while dragging).
+- **Vanishing points** (`moldpers.cpp:1236-1400`, `1840-1980`,
+  `moldedit.cpp:1649-1815`): where the left and right sides meet and
+  where the bottom and top meet, when not parallel; a click on one
+  starts its drag. The corners on the side the point lies beyond slide
+  along their own edge's line, on the lines from the two far corners
+  through the pointer; the far edge stays. The contents re-mould on the
+  drop; one op, "drag vanishing point".
+- **Copy** puts the mould's path on the clipboard as a plain path
+  object; **paste envelope/perspective** takes the first clipboard
+  object that can become a path and uses it as the shape **where it
+  is**; with Constrain (or when it would land off the pasteboard) it is
+  centred on the selection first (`moldtool.cpp:2053-2160`). It creates
+  or replaces moulds as Create does. Remove with Constrain also puts the
+  first mould's path on the clipboard.
+- **Remove** (`moldedit.cpp:545-690`): per selected mould, localise the
+  attributes, move the objects out after the mould (order kept), select
+  them, hide the mould.
+- **Rotate contents** (`moldedit.cpp:1074-1110`): the path's start moves
+  to its next end point, so the contents turn a side round the cage.
+- **Detach** (`moldtool.cpp:2724-2900`, `nodemold.cpp:1987-2000`,
+  `2370-2445`, `2530-2546`): a per-mould flag; while set, editing the
+  cage does not re-mould; clearing it re-moulds by the cage as edited.
+  It is **not saved** (saving a detached mould warns).
+- **Mesh** (`moldenv.cpp:376-520`): a per-envelope toggle (not saved):
+  the seven inner lines of an 8 × 8 grid over the source, plotted as
+  dots through the envelope; perspectives draw none.
+
+### Decisions (ours)
+
+97. **One mould for the selection, one step per gesture.** Presets and
+    paste wrap the selection in one controller (`LiveEdit::Mould`, which
+    `relocate`s each object so it looks as it did) or, when the
+    selection is all moulds, `SetParams` on each over its own source.
+    Labels: "Apply Envelope", "Apply Perspective", "Mould Shape",
+    "Edit Mould" (drags, X/Y, attach), "Mould Accuracy", "Paste
+    Envelope", "Paste Perspective", "Rotate Mould", "Remove Mould".
+    Regeneration is never a step: the cage is a parameter
+    (`document-model.md` 52) and `SetParams` is one `set_live_kind`.
+98. **Live cage drags.** Unlike the original (re-mould on the drop), the
+    contents follow every frame: `Preview::live` carries the dragged
+    `MouldParams` and `paint_mould` regenerates under `RegenOverride`
+    (once per changed frame). A cage that is not usable (a folded or
+    collapsed perspective, a flat envelope) is not previewed: the
+    overlay shows the cage being dragged, the status says it would fold,
+    and release commits nothing, as the original's validation refuses
+    it. The rectangular presets use `identity_cage` exactly; the others
+    go through `cage_from_path` (the original's straight-side thirds).
+99. **Handles**: end points (perspective corners, envelope corners, a
+    2×2's side middles) are hit before control points; Constrain keeps
+    the move to 45° steps (and does not snap), otherwise the dragged
+    point snaps. Vanishing points are `HandleShape::Centre` with two
+    dashed construction lines to the nearest corners; their drag is
+    computed from the press's corners every frame
+    (`drag_vanishing_point`) and refused when the result is not a valid
+    perspective.
+100. **J2 numbers**: a point list (`MouldPoint`, names per kind) and the
+    shared `X`/`Y` fields place that point (an end point carries its
+    handles, as a drag does); `MouldThreshold` ("Accuracy") is the
+    refitting threshold, clamped to 0..18 000 mp (ours; the original has
+    no field). A click on a cage point picks it for the fields.
+101. **Copy/paste is the tool's own**: copy keeps `(kind, cage)` in the
+    tool (not the system clipboard; no other path can be pasted as a
+    mould); paste converts between kinds (a perspective from an
+    envelope's corners, an envelope from straight sides) and places the
+    cage where it was kept, centred on the selection with Constrain.
+    Remove with Constrain does not copy.
+102. **Detach is tool state**, as the original's flag is unsaved: a
+    detached mould's cage edits (drags, numbers, presets, rotate) go to
+    a cage held by the tool and drawn in the overlay; the document is
+    untouched until Detach is cleared, which commits one "Edit Mould".
+    Held cages of moulds that are gone are dropped. Saving while
+    detached saves the attached cage (no warning).
+103. **Mesh for both kinds**: the 7 + 7 inner lines of the 8 × 8 grid,
+    sampled 32 times each, drawn as dashed polylines through the mould
+    (perspectives too; the original draws envelopes only). One toggle
+    for the tool, not per mould; never a step.
+104. **Picking through the mould** (part of XARA-T-0337): the picker
+    skips a mould's source and indexes its generated node as **one leaf
+    keyed by the controller**: every moulded shape's outline, filled
+    non-zero when any shape paints a fill, stroked as the first shape
+    that paints a stroke. A constrained (leaf) click therefore selects
+    the mould, never something inside it. Text inside a mould is not
+    outlined by the picker (it has no fonts): a mould of text alone
+    falls back to its box. Object snapping sees a mould only through
+    this leaf.
+
 ## Provisional values (observe in the VM before trusting)
 
 - Segment grab = 4 + 3 device px; freehand chunk 96 samples; freehand
@@ -1431,6 +1591,14 @@ tests in `contour_tool.rs` (2) and `xarast-doc` `tests/blend.rs`
       shadow and keys 1–4/A; the bevel size drag's contoured-path outline
       (we draw the box) and snapping; Draft-quality effects during drags
       (J3, render crate); arrow-key nudges of a wall shadow's offset.
+- [ ] Mould tool (XARA-T-0342 follow-ups): pasting any clipboard path
+      as a mould (ours keeps the copied cage in the tool); Remove with
+      Constrain copying the cage; editing a moulded object's source
+      inside the mould (the shape editor through
+      `MouldTransform::source_point`); the source rectangle does not
+      follow edits made inside the mould (the original re-reads its
+      bounds); snapping to moulded outlines; a 2×2 envelope preset;
+      Draft-quality regeneration while dragging (J3).
 - [ ] Contour and blend tools (XARA-T-0340 follow-ups): blend along a
       path (F6) with attach/detach, tangential and the distance mode;
       point mapping and remap drags; the contour steps/distance toggle;

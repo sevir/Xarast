@@ -168,6 +168,27 @@ Full note: [`tools.md`](tools.md). What the interface side owns:
   `Crosshair` over an object or a valid target, `Move` over a
   Ctrl-held blend end and while moving one.
 
+### Mould tool (phase 13, XARA-T-0342)
+
+- **Palette**: Mould (Shift+F6, the original's key) closes the
+  live-effect group after Bevel. The glyph is ours: a three-by-three
+  mesh pinched in at the waist. `AppCommand::ALL` has 65 entries.
+- **Infobar**, existing items only: envelope and perspective preset
+  `Choice`s (five each, `selected: None`: choosing applies); with a
+  mould selected, a point `Choice` (cage point names per kind), the
+  shared `X`/`Y` `Measure`s for that point, an "Accuracy" `Measure`
+  (the refitting threshold), "Mesh" and "Detach" `Toggle`s, and
+  `Command` buttons Copy mould, Paste envelope, Paste perspective,
+  Rotate contents, Remove (new `ToolAction`s; Paste is enabled once
+  something is kept). Six new `InfobarField`s with labels and
+  descriptions. Rules: `tools.md` decisions 97–104.
+- **Overlay**: the cage outline (`outline_overlay`, solid), dashed
+  handle arms, `HandleShape::Node`/`NodeSelected` for end points and
+  `Control` for handles, `Centre` for a vanishing point with two dashed
+  construction lines, and the mesh as dashed open polylines.
+- **Cursors**: `Move` over a cage point or a vanishing point and while
+  dragging one, `Default` elsewhere.
+
 ### Fill and transparency tools (phase 8, XARA-US-0039)
 
 - **Palette**: Fill (F5) and Transparency (F6) are now available and

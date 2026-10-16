@@ -774,8 +774,14 @@ placer (XARA-T-0259, 2026-09-24, ext4, load ≈ 3): ProbeX16 UI thread
   (copied into `live_preview`/`moved_preview` at the start of the
   walk, as `photo_preview`). One cache slot per controller: the
   preview's output replaces the committed one and the commit's
-  replaces the preview's (one regeneration each way). Moulds still use
-  the plain key (no mould tool yet).
+  replaces the preview's (one regeneration each way). Moulds too since
+  the mould tool (XARA-T-0342): `paint_mould` keys by `regen_key_with`
+  with the previewed `LiveKind::Mould` and generates through
+  `mould::generate_preview`; `rebuild_scene` widens the scene ink by
+  the previewed cage's extent (grown by how far the source's strokes
+  reach past its rectangle). The picker skips a mould's source and
+  indexes its moulded copy as one leaf keyed by the controller
+  (`picking::moulded_leaf`, `tools.md` decision 104).
 - `WalkStats::live_regenerated` is the cache's lifetime count
   (`LiveCache::regenerated`, also counted by `RegenQueue` flushes): the
   tests assert +1 per drag frame and +0 for a frame drawn again.

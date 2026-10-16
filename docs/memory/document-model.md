@@ -864,9 +864,11 @@ the digest recorded for that state serial.
 
 ## Open TODOs
 
-- **Mould follow-ups (XARA-T-0334).** G9 (the tool, presets,
-  vanishing points); hit-testing and snapping inside a mould still see
-  the undeformed source (interaction must map the pointer through
+- **Mould follow-ups (XARA-T-0334).** G9 is done (XARA-T-0342,
+  `tools.md`; `mould::generate_preview` draws a dragged cage), and a
+  moulded object is picked by its moulded outline; snapping and
+  editing *inside* a mould still see the undeformed source
+  (interaction must map the pointer through
   `MouldTransform::source_point`); a blend end that *contains* a mould
   deeper than its top node still blends the undeformed source; shadows,
   bevels and feathers inside a mould are not moulded; the original's 2×2
