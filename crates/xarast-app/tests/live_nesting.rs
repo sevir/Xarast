@@ -290,6 +290,28 @@ fn page(s: &Session) -> Page {
     }
 }
 
+/// Compares a page with its golden in `tests/golden/nesting/` exactly
+/// (phase 13 acceptance criterion 4); `XARAST_UPDATE_GOLDEN=1` rewrites it.
+fn matches_golden(surface: &xarast_render::Surface, name: &str) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/golden/nesting")
+        .join(format!("{name}.png"));
+    let update = std::env::var("XARAST_UPDATE_GOLDEN").is_ok_and(|v| v != "0");
+    if update || !path.exists() {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        xarast_render::golden::write_png(surface, &path).unwrap();
+        assert!(
+            update,
+            "wrote a new golden at {}; check it in",
+            path.display()
+        );
+        return;
+    }
+    let want = xarast_render::golden::read_png(&path).unwrap();
+    let c = xarast_render::golden::compare(surface, &want);
+    assert!(c.is_exact(), "{name}: {c:?}");
+}
+
 /// Every ordered pair of distinct kinds: `inner` made first, grouped, the
 /// group given `outer`. Each nests as built, renders completely, and inks
 /// the page; undo takes the outer effect away exactly.
@@ -336,6 +358,7 @@ fn every_ordered_pair_of_effects_nests_and_renders() {
             assert_eq!(p.walk.live_pending, 0, "{outer:?} over {inner:?}");
             assert!(p.walk.is_complete(), "{outer:?} over {inner:?}");
             assert!(p.inked() > 500, "{outer:?} over {inner:?} draws");
+            matches_golden(&p.surface, &format!("{outer:?}_over_{inner:?}"));
             s.undo();
             assert_eq!(s.doc.canonical_digest(), before, "{outer:?} over {inner:?}");
             pairs += 1;
