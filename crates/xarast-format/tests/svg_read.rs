@@ -2209,6 +2209,12 @@ fn a_contour_is_baked_as_real_offset_paths_and_reads_back_exactly() {
     }
     assert_eq!(svg.matches("xarast:contour-start=").count(), 3);
     assert!(svg.contains("xarast:contour-start=\"round\""), "{svg}");
+    // An inset path's source is hidden from a browser as the walker hides
+    // it (XARA-T-0332); the other two sources are drawn.
+    assert_eq!(svg.matches("display=\"none\"").count(), 1, "{svg}");
+    let hidden = &svg[..svg.find("display=\"none\"").unwrap()];
+    let hidden = &hidden[hidden.rfind('<').unwrap()..];
+    assert!(hidden.contains("xarast:kind=\"live-source\""), "{hidden}");
 
     let mut o = open(&first);
     assert!(o.diagnostics.is_empty(), "{:?}", o.diagnostics);
@@ -2257,6 +2263,7 @@ fn a_contour_is_baked_as_real_offset_paths_and_reads_back_exactly() {
         },
     );
     assert!(!export.svg.contains("xarast"), "{}", export.svg);
+    assert_eq!(export.svg.matches("display=\"none\"").count(), 1);
     for r in rings.iter().flatten().filter(|d| !d.is_empty()) {
         assert!(export.svg.contains(r.as_str()), "{r}");
     }

@@ -1938,6 +1938,17 @@ impl<'d, 'b> Emitter<'d, 'b> {
             LiveRole::Source => {
                 el.a("xarast:kind", "live-source");
                 el.a("xarast:live", kind);
+                // An inset path draws its rings, never its source
+                // (XARA-T-0332): the walker skips it, and so must a
+                // browser. The reader reads the source as usual.
+                let inset = self.doc.tree.links(n).parent.is_some_and(|c| {
+                    matches!(self.doc.tree.kind(c), Some(NodeKind::Live(cl))
+                        if cl.role == LiveRole::Controller
+                            && matches!(&cl.kind, LiveKind::Contour(p) if p.inset))
+                });
+                if inset {
+                    el.a("display", "none");
+                }
             }
             LiveRole::Generated => {
                 el.a("xarast:generated", kind);
