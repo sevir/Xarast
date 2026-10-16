@@ -1,6 +1,6 @@
 # Fuzzing
 
-Fourteen `cargo-fuzz` targets, in their own workspace so that the main one
+Fifteen `cargo-fuzz` targets, in their own workspace so that the main one
 stays on stable. Six cover the `.xar` importer — a legacy binary format
 parser is attack surface, so fuzzing is part of Phase 3 rather than a
 follow-up (`docs/phases/phase-03-xar-importer.md` W3.11) — six cover
@@ -23,6 +23,7 @@ decoding (Phase 10).
 | `fuzz_ramp` | `xarast-render` | ramp tables, profiles, gradient evaluation |
 | `fuzz_doc_builder` | `xarast-doc` | arbitrary build scripts: "valid or nothing" |
 | `fuzz_xarast_open` | `xarast-format` | `XarastReader::open`, every read path, and a re-save of whatever opens |
+| `fuzz_xarast_repair` | `xarast-format` | `repair` over arbitrary bytes (a rebuilt package must open strictly and repair again), `open_recovering`, the partial-XML closer |
 | `fuzz_xarast_manifest` | `xarast-format` | the manifest parser and its write–parse fixed point |
 | `fuzz_xarast_svg_read` | `xarast-format` | the SVG profile reader on arbitrary text, and the read–save–read fixed point of what it accepts |
 | `fuzz_image_decode` | `xarast-image` | `probe` + `decode` over every format with `DecodeLimits::tight()`, and the `.xar` bitmap wrappings |

@@ -131,6 +131,15 @@ test = false
 doc = false
 bench = false
 
+# `repair` (local-header scan, rebuild), the recovering open and the partial
+# XML closer: a rebuilt package must open strictly.
+[[bin]]
+name = "fuzz_xarast_repair"
+path = "fuzz_targets/fuzz_xarast_repair.rs"
+test = false
+doc = false
+bench = false
+
 # `META-INF/manifest.xml`: hostile XML, namespaces, foreign-data carry, and
 # the write–parse fixed point.
 [[bin]]
