@@ -177,7 +177,7 @@ pub(super) fn place_new(layer: NodeId, seed: u8) -> crate::PlaceBitmap {
             xarast_geom::Mp::new(1000),
             xarast_geom::Mp::new(1000),
         ),
-        insert: Some(bitmap(seed, seed % 3 == 0)),
+        insert: Some(bitmap(seed, seed.is_multiple_of(3))),
         label: "Place Bitmap",
     }
 }
