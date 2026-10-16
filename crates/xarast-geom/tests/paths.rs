@@ -277,6 +277,27 @@ fn subpath_iteration() {
     assert_eq!(idx[3].1, 3);
 }
 
+/// XARA-T-0355: a vertical cubic whose last two control points coincide has
+/// its extremum exactly at t = 1; the root solve lands a hair away and the
+/// rounded-out tight bounds used to step one millipoint outside the hull.
+#[test]
+fn tight_bounds_stay_inside_hull_for_degenerate_vertical_cubic() {
+    let mut b = Path::builder();
+    b.move_to(Point::raw(0, 0));
+    b.cubic_to(
+        Point::raw(0, -64471),
+        Point::raw(0, 88035),
+        Point::raw(0, 88035),
+    );
+    let p = b.build();
+    assert!(
+        p.bounds().contains_rect(p.tight_bounds()),
+        "{:?} vs {:?}",
+        p.bounds(),
+        p.tight_bounds()
+    );
+}
+
 #[test]
 fn bounds_and_tight_bounds() {
     let mut b = Path::builder();

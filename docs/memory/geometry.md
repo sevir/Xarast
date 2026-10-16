@@ -412,6 +412,22 @@ transformed (non-integer) cubics** where correctness matters.
 Regression: `hit.proptest-regressions` and
 `regression_non_uniform_scale_bevelled_line_and_cubic`.
 
+### `tight_bounds` is clamped to the control hull (XARA-T-0355)
+
+Root cause: not a wrong root. `kurbo`'s `bounding_box` evaluates the
+curve at each extremum `t` and `Rect::from_kurbo` rounds outwards
+(`floor`/`ceil`). A cubic whose last two control points coincide (e.g.
+`(0,0) (0,-64471) (0,88035) (0,88035)`) has its extremum at t = 1; the
+quadratic solve lands a few ulps away, the evaluated y is 88035.00000001,
+and `ceil` makes it 88036: one millipoint outside the hull.
+**Invariant: `tight_bounds()` of every segment is intersected with that
+segment's control-point hull**, which is mathematically lossless (a
+Bezier never leaves its hull) and only removes float noise. Other users
+of `bounding_box` (`measure.rs` nearest-point culling) use it as a
+conservative distance cull in f64 and are not affected. Regression:
+`tight_bounds_stay_inside_hull_for_degenerate_vertical_cubic`; property
+`hull_contains_tight_bounds` also run at 30 000 cases.
+
 ### Bounds on hostile input
 
 A work limit (2·10^7 edge visits), an edge cap (2^21) and a dash cap

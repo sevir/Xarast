@@ -403,7 +403,21 @@ impl Path {
         let mut any = false;
         for seg in self.segments() {
             any = true;
-            r = r.union(Rect::from_kurbo(seg.to_kurbo().bounding_box()));
+            let hull = match seg {
+                Segment::Line { p0, p1 } => Rect::EMPTY.union_point(p0).union_point(p1),
+                Segment::Cubic { p0, p1, p2, p3 } => Rect::EMPTY
+                    .union_point(p0)
+                    .union_point(p1)
+                    .union_point(p2)
+                    .union_point(p3),
+            };
+            // A Bezier never leaves its control hull, so clamping to it only
+            // removes floating-point noise: an extremum that sits exactly on
+            // a hull edge (coincident control points put it at t = 0 or 1)
+            // evaluates a few ulps outside it, and rounding outwards would
+            // turn that into a whole extra millipoint.
+            let tight = Rect::from_kurbo(seg.to_kurbo().bounding_box()).intersection(hull);
+            r = r.union(tight);
         }
         if any {
             r
