@@ -1616,3 +1616,15 @@ all twelve are shown as they are. Choosing the appended entry is a no-op
       fill and the "no fill" clone on a new contour; snapping of the size
       handles; refusing to remove a bevelled or contoured blend; the
       "long job" question for heavy blends.
+
+### Keyboard-only access to the effect tools (XARA-T-0348, 2026-10-16)
+
+`crates/xarast-app/tests/keyboard_only_effects.rs` sets every parameter
+of every infobar of the shadow, bevel, contour, blend and mould tools with
+`Intent::InfobarEdit` alone (the intent the shell's widgets raise), after
+choosing the tool with an effect selected; no pointer event is sent. The
+parameter set is pinned by field name per tool, so a new field fails the
+test until it is listed. `MouldPoint`, `MouldGrid` and `MouldDetach` are
+tool state (no document change, no undo step) and are asserted as such.
+The status of all 17 phase 13 acceptance criteria is in `render.md`,
+"Phase 13 conformance audit".

@@ -150,6 +150,12 @@ the budgets file records; both tiers passed, 12/12 and 27/27):
 | `spitfire-first` (first text document) | nightly | first ms | 200 | — | 100 | 100–108 | st |
 | `render-feathers` (whole Final frames, effect cache warm; corpus) | pr | median ms | 12 | — | 3.5 | 3.3–4.0 | mt |
 | `render-groucho2` (same) | nightly | median ms | 16 | — | 6.5 | 5.8–6.7 | mt |
+| `fx-contour-24` (24 steps, 500-node path, Final) | pr | median ms | 250 | 250 | 66 | 66–67 | st |
+| `fx-blend-50` (correspondence + 50 steps of 200-node paths) | pr | median ms | 100 | 100 | 0.15 | 0.11–0.23 | st |
+| `fx-mould-5000` (a perspective over 5000 nodes) | pr | median ms | 16 | 16 | 0.13 | 0.13 | st |
+| `fx-bevel-400` (lighting of 400 x 400 px) | pr | median ms | 150 | 150 | 0.5 | 0.48–0.51 | st |
+| `fx-blur-disc-20` (disc r = 20 px, 1024 x 1024 alpha) | pr | median ms | 12 | 12 | 5.6 | 5.2–5.7 | mt |
+| `fx-clouds-256` (one 256 x 256 tile) | pr | median ms | 60 | 60 | 0.55 | 0.55 | st |
 
 "100k" is `--nodes 250000` (105 852 objects), "10k" `--nodes 25000`
 (10 520). The pr tier takes ~20 s of scenarios here; the nightly ~45 s
@@ -1305,6 +1311,40 @@ after = c2a6e17.
 - **No lighting cache.** It would only serve an edit of a bevelled
   object's colour; a first frame, a zoom or a pan computes the
   silhouette anew either way.
+
+### Phase 13 conformance: effect generation gates (XARA-T-0348, 2026-10-16)
+
+`xarast-cli bench effects --kind contour|blend|mould|bevel|blur|clouds`
+times, in process and with no document or frame, the work an effect
+repeats when a parameter changes, on the workload the phase table sizes
+(wobbling polygons: 500 nodes for the contour, two of 200 for the blend,
+100 x 50 for the mould; a 400 x 400 disc for the bevel's lighting; a
+checkerboard 1024 x 1024 plane for the blur; the largest clouds tile).
+Six gates in `xtask/perf-budgets.txt` (`fx-*`, pr and nightly). Measured
+on the reference machine at load 3-5 (another agent building), medians of
+15 runs, two rounds:
+
+| Kind | Budget | Measured |
+|---|---|---:|
+| contour, 24 steps, 500 nodes | 250 ms | **66 ms** |
+| blend, 50 steps of 200-node paths | 100 ms | **0.1-0.2 ms** |
+| mould, 5000 nodes | 16 ms (Draft frame) | **0.13 ms** |
+| bevel lighting, 400 x 400 | 150 ms | **0.5 ms** |
+| disc blur r20, 1024 x 1024 | 12 ms | **5.2-5.7 ms** |
+| clouds tile 256 x 256 | 60 ms (for 512 x 512) | **0.55 ms** |
+
+- **What they do not measure.** A frame: the Draft drags and pans on a
+  rendered scene (shadow, feather, blend 50 steps, mould 5000) are not
+  here, nor is the bevel's full regeneration (its offscreen passes, 14.5
+  ms on Groucho2's first frame, see "Bevel cost"), the GPU blur, or a 512
+  x 512 fractal. They need a committed scene per effect.
+- **Margins.** Limits equal the budgets, per the file's policy (the
+  reference is under half of each, the disc blur excepted at 47 %). The
+  blend, mould, bevel and clouds gates sit two to three orders of
+  magnitude above their measurement: they catch an accidental quadratic,
+  not drift. Tighten them when a frame scenario lands.
+- **Timings were noisy** (another agent compiled throughout); the
+  contour's 66 ms and the blur's 5.6 ms agreed across rounds within 2 %.
 
 ## Things that were slow, and why
 

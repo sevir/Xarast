@@ -2245,6 +2245,51 @@ feather, and no corpus contour or blend end holds a mould below its top.
 Corpus export check: 118 comparisons, 0 failures; `svg-check
 --interchange` 59/59.
 
+### Phase 13 conformance audit (XARA-T-0348, 2026-10-16)
+
+The 17 acceptance criteria of `docs/phases/phase-13-live-effects.md`
+against what is in the repository. **Met** = a test or gate in CI proves
+it; **partial** = proven in a weaker form (the gap is named); **external**
+= needs tooling this repository does not have (the VM running the
+original, Chromium and Inkscape, lavapipe, an aarch64 runner, mdbook, the
+i18n tool). Numbers: 69 new parameter goldens, 30 nesting goldens, 5
+keyboard tests, 2 round-trip tests, 6 new perf gates.
+
+| AC | Status | Evidence and gap |
+|---|---|---|
+| 1 | met | `cargo clippy --workspace --all-targets --all-features -D warnings` is a CI step; the six `LiveKind` variants are handled in every `match` (it would not compile otherwise). |
+| 2 | met | `xarast-app/tests/effect_sweep.rs`: 23 sweeps x min/typ/max = **69 goldens** (`tests/golden/effect_sweep/`, 104 x 72 px, exact match, and the three must differ so a parameter that stopped reaching the renderer fails): shadow offset, blur, darkness, profile, glow width, floor scale and tilt; bevel indent, contrast, light angle, light tilt, type, direction; contour steps, width, direction; blend steps, profile, attribute profile; mould taper and skew; feather size and profile. On top of them `xarast-render/tests/golden/effect_*` (25: feather, shadow, bevel scenes), `transparency_family/` (36 = 12 families x 3 sources) and `fill_blend/` (160). Rendered by the CPU backend (the oracle); the criterion's "vello_cpu" is that. Not swept: the colour of a shadow or bevel (the colour bar sets it, `live_tools.rs`), the mould's envelope kinds (presets are in `mould_tool.rs`). |
+| 3 | external | `parity_gpu_cpu.rs` and `parity_tiles.rs` compare the backends on a GPU; the 12-family bit-exact parity on lavapipe needs that runner. GPU tests are opt-in and serial (`XARAST_GPU_TESTS`). |
+| 4 | met | `live_nesting.rs::every_ordered_pair_of_effects_nests_and_renders`: the 30 ordered pairs build, validate, render complete, ink the page, undo exactly, **and match `tests/golden/nesting/<outer>_over_<inner>.png` exactly** (added here). |
+| 5 | met | `xarast-app/tests/effects_roundtrip.rs`: a document per effect kind (feather, three shadow kinds, bevel, contour, blend, mould) and the shadow-on-blend-on-mould nesting are saved, reopened, saved again (**byte-identical**) and render identically; the corpus half is `xarast_roundtrip.rs` (59 files). Lives in `xarast-app` because it needs `Session::open_bytes`, so the criterion's `xarast-format roundtrip::effects` name does not exist. |
+| 6 | external | Mean dE00 against headless Chromium and Inkscape needs both and `cargo xtask check-external-render` (not written). `svg-check --interchange` 59/59 and resvg reads (`xarast-format/tests/svg_corpus.rs`) are the in-tree stand-in. |
+| 7 | external | The reference VM running the original. In tree: the corpus imports with the effect tags handled (`xar_shadows.rs`, `xar_bevels.rs`, `xar_contours.rs`, `xar_blends.rs`, `xar_moulds.rs`, `xar_feathers.rs`, goldens `xar_*.png`); `xar-dump --unhandled` numbers are in `xar-import.md`. Whether the render matches the original within dE00 2.0 has never been measured. |
+| 8 | met | One undo step per parameter: `live_tools.rs::every_shadow_parameter_is_typed_one_exact_step_each`, `every_bevel_parameter_...`, `contour_blend_tools.rs::every_contour_parameter_...`, `every_blend_parameter_...`, `mould_tool.rs`, `xarast-doc/src/tests/regen.rs::one_parameter_change_is_one_undo_step_...`, and the keyboard tests below. Undo is exact by the canonical digest. |
+| 9 | partial | `live_nesting.rs::converting_live_objects_to_shapes_keeps_how_they_look`: each kind converts to plain shapes, draws within **mean absolute channel difference < 0.5 of 255** of the live render, and one undo restores the digest. The criterion's measure is mean dE00 < 1.0; no dE00 comparison is made (a mean channel difference under 0.5 levels is far inside it, but it is not that number). |
+| 10 | met (nightly) | `xarast-geom/tests/contour.rs`: 96 cases on every push; `XARAST_CONTOUR_CASES=10000` runs the same properties at 10 000 (identity at 0, no NaN or unclosed output, clean output, monotone area, inset past the inradius empty, hostile input never panics, many small offsets = one big one). 10 000 cases take **59 s in release** and pass; the nightly job `contour-proptest` in `.github/workflows/fuzz.yml` runs them. The first 10 000 run exposed a harness limit, not a bug: two properties `prop_assume!` a non-empty region and tripped proptest's 1 024 global rejects, so `max_global_rejects` is now 1 000 000. |
+| 11 | partial | `xarast-image/tests/procedural.rs::the_generated_tiles_match_their_golden_hashes` pins the hashes of the clouds and plasma tiles, and the generators are integer or 16.16 fixed-point maths, so both architectures should agree; no aarch64 runner has checked it. (There is no separate "fractal" generator in the tree: clouds and plasma are the fractals; the criterion's `fractal::determinism` name does not exist.) |
+| 12 | met | `xarast_color::RENDER_GREY_WEIGHTS` is the single constant; the procedure is in "Transparency families" above; the 36 `transparency_family` goldens goldens are regenerated against it (invariant 4); the `fill_blend` matrix uses the same constant. |
+| 13 | partial | Generation costs are gated: `fx-contour-24`, `fx-blend-50`, `fx-mould-5000`, `fx-bevel-400`, `fx-blur-disc-20`, `fx-clouds-256` (perf.md, "Phase 13 conformance"), all within their budgets with 1-2 orders of margin except the disc blur (5.6 ms of 12). Not gated yet: the frame budgets of the table (shadow, feather, blend and mould **Draft frames** on a rendered scene, p95 16 ms), the GPU disc blur (2 ms, needs a GPU runner), and the exact 512 x 512 fractal (the generator's tile is at most 256 x 256). `render-feathers` and `render-groucho2` gate cached whole frames of two corpus scenes. The criterion's command (`cargo xtask bench --check-budgets --suite effects`) is `cargo xtask perf`; there is no `--suite`. |
+| 14 | met | `cargo run --release -p xtask -- perf --tier pr` exits 0 with every phase 12 gate (24 of 24 here); the nightly tier runs the rest. |
+| 15 | met | `xarast-app/tests/keyboard_only_effects.rs`: for each of the five tools, **every** infobar parameter (the set is pinned by name) is set through the one `Intent::InfobarEdit` the shell's focusable widgets raise, changes the document and makes exactly one undo step; the three tool-state fields (mould point, mesh, detach) change no document and make no step. No pointer event is sent. The model has no pointer-only parameter. Limits: the criterion's `xarast-ui keyboard_only::effects` lives in `xarast-app` (the model is there); whether the egui widgets of the shell take focus and Tab order is checked by `xarast-ui/tests/accessibility.rs` for the existing panels only. Colours go through the colour bar and editor, which have their own keyboard tests. |
+| 16 | external | No `cargo xtask i18n` exists in the tree and the UI strings are English literals; there is nothing to check yet. |
+| 17 | external | No `docs/manual` or mdbook exists; the manual chapters and the generated keyboard reference are not written. |
+
+**Dead ends and invariants from the audit.**
+
+- The sweeps need a **non-degenerate** value at each end: blur 4.5 pt
+  against 0 renders the same 104 x 72 picture at 0.4 px per point (the
+  guard test caught it; the sweep uses 0 / 15 pt / 60 pt), and the
+  contour's `colour_effect` changes nothing for a flat fill (the
+  direction sweep uses the inset flag instead). A new sweep that cannot
+  tell its three values apart fails by design: pick wider values, never
+  drop the assertion.
+- A golden sweep writes its images and then **fails** ("check them in")
+  unless `XARAST_UPDATE_GOLDEN=1`; generate with that and commit.
+- A sweep of the infobar is only as good as its pinned field list: adding
+  a parameter to a tool's infobar fails `keyboard_only_effects.rs` until
+  the field is listed, which is the point.
+
 ## Invariants that must not be broken
 
 1. **Never put absolute millipoints into an `f32`.** A 5 m document is
