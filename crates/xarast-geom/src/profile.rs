@@ -8,7 +8,7 @@
 /// convention the file format uses; Schlick's own formulation takes a
 /// parameter in `(0, 1)` with `0.5` neutral, and [`BiasGain::map`] does the
 /// remapping.
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct BiasGain {
     /// Pushes the curve towards 0 (negative) or 1 (positive).
     pub bias: f64,

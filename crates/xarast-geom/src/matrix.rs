@@ -19,7 +19,7 @@ use crate::{Fixed16, Mp, Point, Rect, Vector};
 /// The translation stays in [`Mp`] so that a pure translation of a path is
 /// exact and reversible, which matters for undo and for resource
 /// deduplication.
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Matrix {
     /// Row 0, column 0: the x scale.
     pub a: f64,

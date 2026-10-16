@@ -10,7 +10,7 @@ use crate::{Mp, Point, Vector};
 /// bounding-box code. That is worth more than it sounds: bounding boxes are
 /// accumulated in dozens of loops across the codebase, and a sentinel that is
 /// the union identity removes the `Option<Rect>` from all of them.
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Rect {
     /// Bottom-left corner.
     pub lo: Point,

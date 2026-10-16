@@ -6,6 +6,7 @@
 /// `TAG_DEFINECOMPLEXCOLOUR`, so a `.xar` reader can cast rather than map.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Default)]
 #[repr(u8)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub enum ColourModel {
     /// Internal to the original; never written to a file.
     Indexed = 0,
@@ -45,7 +46,9 @@ impl ColourModel {
 
 /// An 8-bit RGBA colour, the form the rasteriser and the file's cached
 /// approximation both use.
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Default)]
+#[derive(
+    Copy, Clone, PartialEq, Eq, Hash, Debug, Default, serde::Serialize, serde::Deserialize,
+)]
 pub struct Rgba8 {
     /// Red.
     pub r: u8,
@@ -96,7 +99,7 @@ impl Rgba8 {
 /// the file stores scaled integers that are converted at the boundary anyway.
 ///
 /// The `t` component is transparency, not alpha: 0 is opaque.
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum ColourValue {
     /// Red, green, blue, transparency.
     Rgbt {

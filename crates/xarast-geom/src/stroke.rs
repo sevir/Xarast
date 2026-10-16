@@ -5,6 +5,7 @@ use crate::{Mp, Path, Tolerance};
 /// How a stroke terminates at an open end. The discriminants match `.xar`.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Default)]
 #[repr(u8)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub enum Cap {
     /// Stops flat at the endpoint.
     #[default]
@@ -18,6 +19,7 @@ pub enum Cap {
 /// How a stroke turns a corner. The discriminants match `.xar`.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Default)]
 #[repr(u8)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub enum Join {
     /// Extends both edges to their intersection, falling back to a bevel
     /// past the mitre limit.
@@ -37,6 +39,7 @@ pub enum Join {
 /// default rule is the model's (`xarast_doc::default_for`), even-odd.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Default)]
 #[repr(u8)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub enum FillRule {
     /// Filled where the winding number is not zero.
     #[default]
@@ -98,7 +101,7 @@ impl FillRule {
 }
 
 /// A dash pattern: alternating on and off lengths.
-#[derive(Clone, PartialEq, Eq, Hash, Debug, Default)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct DashPattern {
     /// Alternating on/off lengths in millipoints, starting with "on".
     pub elements: Vec<Mp>,

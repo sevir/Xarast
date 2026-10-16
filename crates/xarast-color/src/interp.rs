@@ -7,7 +7,9 @@ use crate::ColourValue;
 /// The discriminants are not the `.xar` tag numbers — the format encodes
 /// these as three separate empty records rather than as a value — so the
 /// importer maps tags 160/161/162 onto these by hand.
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Default)]
+#[derive(
+    Copy, Clone, PartialEq, Eq, Hash, Debug, Default, serde::Serialize, serde::Deserialize,
+)]
 pub enum FillEffect {
     /// Componentwise interpolation in RGB.
     #[default]
@@ -133,6 +135,7 @@ fn lerp_hue(h0: f32, h1: f32, t: f32, long_way: bool) -> f32 {
 /// [`TranspMode::Mix`].
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Default)]
 #[repr(u8)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub enum TranspMode {
     /// Fully opaque; the transparency is ignored.
     None = 0,
@@ -229,7 +232,9 @@ pub const RENDER_GREY_WEIGHTS: [f32; 3] = [0.299, 0.587, 0.114];
 /// gradient stop, which is what [`Stop`] is for.
 ///
 /// `level` is 0 for opaque and 255 for fully transparent, matching the file.
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Default)]
+#[derive(
+    Copy, Clone, PartialEq, Eq, Hash, Debug, Default, serde::Serialize, serde::Deserialize,
+)]
 pub struct Transparency {
     /// 0 opaque, 255 fully transparent.
     pub level: u8,

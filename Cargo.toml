@@ -19,10 +19,10 @@ authors = ["The Xarast contributors"]
 # fixed-grid, bit-reproducible mode. Both are `MIT OR Apache-2.0`.
 kurbo = "0.13"
 i_overlay = "9.0"
-bitflags = "2.9"
+bitflags = { version = "2.9", features = ["serde"] }
 thiserror = "2.0"
-slotmap = "1.0"
-smallvec = "1.16"
+slotmap = { version = "1.0", features = ["serde"] }
+smallvec = { version = "1.16", features = ["serde"] }
 # Persistent HAMT, used ONLY for history checkpoints (a snapshot *over* the
 # arena) and for the arena-vs-persistent benchmark of
 # `docs/10-architecture.md` §3.1. MPL-2.0, used unmodified: see deny.toml.
@@ -237,7 +237,7 @@ egui_kittest = { version = "0.33", default-features = false }
 # types at the boundary. `MIT OR Apache-2.0`.
 accesskit = "0.21"
 # Layout and preference persistence. Both `MIT OR Apache-2.0`.
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 
 # ── Shell and platform integration ───────────────────────────────────────────

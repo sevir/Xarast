@@ -60,6 +60,7 @@ use core::ops::{Add, AddAssign, Div, Neg, Sub, SubAssign};
 /// by the first arithmetic applied to it.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Mp(pub i32);
 
 impl Mp {

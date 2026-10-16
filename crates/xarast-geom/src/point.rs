@@ -15,7 +15,9 @@ use core::ops::{Add, AddAssign, Neg, Sub, SubAssign};
 /// Distinct from [`Vector`] so that the translation-sensitive and
 /// translation-insensitive transforms cannot be confused; see
 /// [`Matrix::transform_point`](crate::Matrix::transform_point).
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Default)]
+#[derive(
+    Copy, Clone, PartialEq, Eq, Hash, Debug, Default, serde::Serialize, serde::Deserialize,
+)]
 pub struct Point {
     /// Horizontal coordinate, increasing to the right.
     pub x: Mp,
@@ -29,7 +31,9 @@ pub struct Point {
 /// format makes this distinction load-bearing: the major and minor axes of
 /// regular shapes are written *without* the coordinate-origin translation
 /// while everything else receives it.
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Default)]
+#[derive(
+    Copy, Clone, PartialEq, Eq, Hash, Debug, Default, serde::Serialize, serde::Deserialize,
+)]
 pub struct Vector {
     /// Horizontal component.
     pub dx: Mp,

@@ -35,6 +35,7 @@
 /// (`GDraw/gdraw2.h`).
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default, Hash)]
 #[repr(u8)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub enum BevelType {
     /// A flat chamfer (style 0).
     #[default]

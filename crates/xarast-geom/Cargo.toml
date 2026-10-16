@@ -16,9 +16,11 @@ kurbo = { workspace = true }
 i_overlay = { workspace = true }
 bitflags = { workspace = true }
 thiserror = { workspace = true }
+serde = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+serde_json = { workspace = true }
 criterion = { workspace = true }
 tiny-skia = { workspace = true }
 

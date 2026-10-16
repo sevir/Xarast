@@ -564,6 +564,9 @@ name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
+dependencies = [
+ "serde_core",
+]
 
 [[package]]
 name = "blake3"
@@ -3936,6 +3939,7 @@ version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bdd58c3c93c3d278ca835519292445cb4b0d4dc59ccfdf7ceadaab3f8aeb4038"
 dependencies = [
+ "serde",
  "version_check",
 ]
 
@@ -3944,6 +3948,9 @@ name = "smallvec"
 version = "1.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba467056f1b547ed52077911161fc86985becbc60e8e1857c8a144dab0def891"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "smithay-client-toolkit"
@@ -5725,6 +5732,7 @@ version = "0.0.1"
 dependencies = [
  "criterion",
  "proptest",
+ "serde",
  "slotmap",
  "smallvec",
  "thiserror 2.0.20",
@@ -5738,6 +5746,8 @@ dependencies = [
  "criterion",
  "imbl",
  "proptest",
+ "serde",
+ "serde_json",
  "sha2",
  "slotmap",
  "smallvec",
@@ -5773,6 +5783,8 @@ dependencies = [
  "i_overlay",
  "kurbo 0.13.1",
  "proptest",
+ "serde",
+ "serde_json",
  "thiserror 2.0.20",
  "tiny-skia 0.12.0",
 ]

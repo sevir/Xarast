@@ -3,6 +3,8 @@
 use crate::{Matrix, Mp, Point, Rect};
 use kurbo::{ParamCurveArea, Shape};
 
+mod repr;
+
 /// What a path segment is.
 ///
 /// There is no quadratic verb — [`PathBuilder::quad_to`] elevates quadratics

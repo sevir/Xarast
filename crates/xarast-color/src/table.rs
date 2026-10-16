@@ -17,7 +17,7 @@ slotmap::new_key_type! {
 ///
 /// The discriminants of the `.xar` `colour_type` byte are 0 to 4 in this
 /// order; the payloads are the components the format overloads for each kind.
-#[derive(Clone, PartialEq, Debug, Default)]
+#[derive(Clone, PartialEq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub enum ColourKind {
     /// An independent colour.
     #[default]
@@ -105,7 +105,7 @@ impl ColourKind {
 }
 
 /// One entry in the document's colour table.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ColourDef {
     /// The colour's name, if it has one. `Arc<str>` because names are shared
     /// by the palette UI, the colour line and the separation list, and are
@@ -404,7 +404,7 @@ impl ColourTable {
 /// The distinction matters for editing, not for rendering: changing a palette
 /// entry must change every object that references it, and only an
 /// [`Colour::Indexed`] carries that relationship.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Colour {
     /// A value that belongs to this attribute alone.
     Direct(ColourValue),
@@ -462,5 +462,54 @@ impl crate::Stop for Colour {
                 }
             }
         }
+    }
+}
+
+/// The serialised form of a [`ColourTable`] (the operation journal of
+/// `xarast-doc`): the definitions with their exact handles, the name index
+/// as it stands (a repeated name points at whichever entry won, which the
+/// definitions alone cannot say) and the epoch. The parents-first order is
+/// derived and rebuilt on first use.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ColourTableRepr {
+    defs: slotmap::SlotMap<ColourId, ColourDef>,
+    names: Vec<(Arc<str>, ColourId)>,
+    epoch: u64,
+}
+
+impl serde::Serialize for ColourTable {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut names: Vec<(Arc<str>, ColourId)> = self
+            .by_name
+            .iter()
+            .map(|(n, id)| (Arc::clone(n), *id))
+            .collect();
+        names.sort_by(|a, b| a.0.cmp(&b.0));
+        ColourTableRepr {
+            defs: self.defs.clone(),
+            names,
+            epoch: self.epoch.0,
+        }
+        .serialize(s)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ColourTable {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<ColourTable, D::Error> {
+        let r = ColourTableRepr::deserialize(d)?;
+        // A name pointing at no definition is dropped rather than refused:
+        // the index is a lookup aid, and a dangling entry is what a
+        // hostile input would use to make a lookup fail later.
+        let by_name = r
+            .names
+            .into_iter()
+            .filter(|(_, id)| r.defs.contains_key(*id))
+            .collect();
+        Ok(ColourTable {
+            defs: r.defs,
+            by_name,
+            epoch: PaletteEpoch(r.epoch),
+            order: std::sync::OnceLock::new(),
+        })
     }
 }
