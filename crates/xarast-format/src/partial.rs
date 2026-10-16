@@ -27,9 +27,7 @@ pub struct Partial {
 
 /// The index of `pat` in `s` at or after `from`.
 fn find(s: &str, from: usize, pat: &str) -> Option<usize> {
-    s.get(from..)?
-        .find(pat)
-        .and_then(|p| p.checked_add(from))
+    s.get(from..)?.find(pat).and_then(|p| p.checked_add(from))
 }
 
 /// The end (exclusive) of the tag that starts at `at`, honouring quotes.

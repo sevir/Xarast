@@ -216,7 +216,10 @@ fn recover_svg(
     let message = first.to_string();
     let mut cut = svg.len();
     for _ in 0..MAX_RECOVERY_ROUNDS {
-        let Some(p) = svg.get(..cut).and_then(|s| crate::partial::close_partial(s, depth)) else {
+        let Some(p) = svg
+            .get(..cut)
+            .and_then(|s| crate::partial::close_partial(s, depth))
+        else {
             break;
         };
         match read_svg(&p.bytes, read, fetch) {

@@ -452,7 +452,8 @@ pub fn repair(bytes: &[u8], opts: &RepairOptions) -> Result<Repaired, RepairErro
             .map(|r| r.full_path.clone())
             .collect();
     }
-    let row_of = |name: &str| -> Option<&FileEntry> { manifest.as_ref().and_then(|m| m.entry(name)) };
+    let row_of =
+        |name: &str| -> Option<&FileEntry> { manifest.as_ref().and_then(|m| m.entry(name)) };
 
     let mut w = PackageWriter::new(opts.write.clone());
     let mut index = ResourceIndex::new();

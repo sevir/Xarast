@@ -370,14 +370,24 @@ impl Session {
                 Ok(s)
             }
             FileKind::Xarast => {
-                let opened = xarast_format::open_reader(
+                let strict = xarast_format::open_reader(
                     std::io::Cursor::new(bytes),
                     &xarast_format::OpenOptions::default(),
-                )
-                .map_err(|source| SessionError::Xarast {
-                    path: path.to_path_buf(),
-                    source,
-                })?;
+                );
+                let opened = match strict {
+                    Ok(o) => o,
+                    // The strict open stays the normal path. A damaged file
+                    // gets one more try through repair (F6.8) and partial
+                    // XML recovery (F6.9), and then opens read-only.
+                    Err(source) => {
+                        return Session::open_damaged(id, path, bytes).ok_or(
+                            SessionError::Xarast {
+                                path: path.to_path_buf(),
+                                source,
+                            },
+                        );
+                    }
+                };
                 let mut diagnostics: Vec<String> =
                     opened.container.iter().map(|d| format!("{d:?}")).collect();
                 diagnostics.extend(opened.diagnostics.iter().map(|d| format!("{d:?}")));
@@ -392,6 +402,34 @@ impl Session {
                 path: path.to_path_buf(),
             }),
         }
+    }
+
+    /// The recovering open of a `.xarast` the strict reader refused: the
+    /// package is rebuilt in memory and a malformed `document.svg` is read
+    /// as far as it goes. The session is read-only (Save As keeps what was
+    /// recovered) and carries what was lost as diagnostics. `None` when
+    /// nothing can be recovered.
+    fn open_damaged(id: DocumentId, path: &Path, bytes: &[u8]) -> Option<Session> {
+        let (opened, report) =
+            xarast_format::open_recovering(bytes, &xarast_format::OpenOptions::default()).ok()?;
+        let mut diagnostics =
+            vec!["Damaged file: opened read-only from what could be recovered".to_owned()];
+        if let Some(r) = &report {
+            diagnostics.extend(
+                r.entries
+                    .iter()
+                    .filter(|e| e.action == xarast_format::repair::Action::Dropped)
+                    .map(|e| format!("Lost {} ({:?})", e.name, e.verdict)),
+            );
+        }
+        diagnostics.extend(opened.container.iter().map(|d| format!("{d:?}")));
+        diagnostics.extend(opened.diagnostics.iter().map(|d| format!("{d:?}")));
+        let mut s = Session::adopt(id, opened.document, Some(path.to_path_buf()));
+        s.diagnostics = diagnostics;
+        s.read_only = true;
+        // The original is damaged: nothing is raw-copied from it.
+        s.source = None;
+        Some(s)
     }
 
     /// Saves to the session's own path, inline. The application saves off

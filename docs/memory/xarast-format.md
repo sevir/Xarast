@@ -32,7 +32,7 @@ application's layout; the render round trip is exact for 59/59 again and
 | W3 SVG write | F3.1–F3.8, F3.11 done; F3.9 all eight passes done (4–5: XARA-T-0101, round 3); F3.10 geometry baking of conical, diamond, 3/4-colour fills done (XARA-US-0043), feather filters done (`effect`, XARA-T-0317), other filter/raster baking and `BakeProvider` open (XARA-T-0102) | `svg/` (`num`, `pathdata`, `frame`, `xml`, `defs`, `paint`, `bake`, `effect`, `style`, `emit`), `save.rs` |
 | W4 SVG read + preservation | F4.1–F4.6, F4.8–F4.10 done; F4.7 marking done, deletion accounting open (XARA-T-0113); XARA-T-0105 (localise + normal form) and T-0107 (passes 4–5) done | `svg/read/` (`dom`, `parse`, `style`, `build/{ink,paint,root}`, `normal`), `open.rs` |
 | W5 resources | F5.1–F5.4, F5.6 done; F5.8 contract + validation done (no provider implementation) | `resource.rs`, `policy.rs`, `thumbnail.rs` |
-| W6 durability | F6.1 (`write_atomic`, `.bak` = F6.2) and F6.3 (`DocumentLock`) done; F6.4 lock UX + signals, F6.5 autosave and F6.7 recovery done **in the app** (`xarast-app` `locks`/`autosave`, XARA-US-0084); F6.6 journal, F6.8, F6.9 open | `durability/` |
+| W6 durability | F6.1 (`write_atomic`, `.bak` = F6.2) and F6.3 (`DocumentLock`) done; F6.4 lock UX + signals, F6.5 autosave and F6.7 recovery done **in the app** (`xarast-app` `locks`/`autosave`, XARA-US-0084); F6.8 repair and F6.9 partial XML done (XARA-T-0088, below); F6.6 journal open | `durability/`, `repair.rs`, `partial.rs` |
 
 Public entry points: `XarastReader::{open, open_with}`, `PackageWriter`,
 `ResourceIndex`, `Manifest`, `sniff`/`sniff_bytes`, `write_atomic[_with]`,
@@ -1169,6 +1169,60 @@ initial `fill-rule` is `nonzero`. As for the join (above):
   (`paint::mask_row`), with the bytes unchanged; the contone
   `LUMA_MATRIX` stays BT.601 on its own (see `render.md`).
 
+## Repair and partial recovery (F6.8/F6.9, XARA-T-0088, 2026-10-16)
+
+The strict open stays strict (`XarastReader::open`, `open_reader` with
+`OpenOptions::recover == false`); repair is a separate path that never
+touches the central directory.
+
+- **`repair::repair(bytes, &RepairOptions) -> Repaired { bytes, report }`**
+  and `repair_file(in, out)` (atomic). `xarast-cli repair <in> <out>` drives
+  it (exit 2: nothing recoverable, 3: cannot write).
+- **Algorithm.** Scan for every `PK\x03\x04`. Per candidate: validate the
+  name (`validate_raw_name`, the strict rules), method 0 or 8 only. DEFLATE is
+  inflated with `flate2::Decompress` and ends where the *stream* ends (sizes
+  in the header are ignored, so lying sizes and data descriptors both work);
+  STORED takes the declared size, or the data-descriptor position whose CRC
+  matches. After a complete entry the scan resumes behind it (a package nested
+  in a resource is not re-scanned); after a failed candidate, one byte on.
+  Duplicate names: a CRC-verified copy beats an unverified one, later wins.
+  Validation: CRC-32; manifest BLAKE3 digest when `manifest.xml` itself
+  verifies; resources must hash to their `b3-<hash>` name. Decisions:
+  `document.svg` is always kept (`Salvaged` when it does not verify: that is
+  what F6.9 is for); `meta.xml` that does not verify is replaced by a minimal
+  one (`Replaced`); resources, previews, thumbnail, history, extensions that do
+  not verify are `Dropped` (the SVG reader then reports the image missing and
+  draws the existing placeholder bitmap). No `document.svg` -> `NoDocument`.
+  The rebuild goes through `PackageWriter` (fresh manifest, normative order,
+  resources via `ResourceIndex::insert`), so a repaired package opens strictly
+  with no diagnostics; the manifest's foreign data and refcounts are lost.
+- **Hostile input.** One inflate budget (`Limits::max_total_uncompressed`)
+  is charged for every candidate, kept or not, so overlapping fake headers
+  cannot multiply work; the strict ratio rule, entry count and manifest cap
+  apply. The module is `deny(arithmetic_side_effects)` and the crate's
+  no-indexing lint; `fuzz_xarast_repair` asserts that whatever `repair` returns
+  opens strictly and repairs again (4 min of fuzzing, ~1.7 M runs, no finding).
+- **F6.9 partial XML.** `partial::close_partial(svg, max_depth)` is a tag
+  scanner (not an XML parser): it keeps the longest prefix whose tags nest,
+  drops the partial tag, and appends the end tags still open. With
+  `OpenOptions::recover`, `open_reader` runs it when `read_svg` fails, feeds
+  the result to the real reader, and if the parser still trips at a byte
+  inside the kept part (`XmlError::Syntax { offset }`) cuts there and tries
+  again (at most 8 rounds). The result has `recovered: Some(SvgRecovery)`,
+  `read_only_suggested = true` and a `Repaired` warning diagnostic that says
+  how much was read. DOCTYPEs are never recovered (XXE rule).
+  `open_recovering(bytes, opts)` = strict container open, else `repair` in
+  memory, with `recover` forced on; it returns the repair report too.
+- **App.** `Session::open_bytes` tries the strict open, and only on failure
+  `open_recovering`; a recovered session is `read_only`, has no raw-copy
+  `source`, and its `diagnostics()` start with "Damaged file: ...".
+- **Dead ends / caveats.** Entries with ZIP64 sizes in the local header are
+  fine for DEFLATE (stream-delimited) but a STORED+ZIP64 entry is not
+  recovered. A truncated DEFLATE `document.svg` yields the inflated prefix
+  (Salvaged, CRC mismatch) which F6.9 then closes. Unresolved: the reader
+  cannot yet tell the user *which* images became placeholders beyond the
+  per-image `DanglingReference` warning.
+
 ## Decisions taken (and why)
 
 - **`zip` 8.6** (current stable major; 9.0 is pre-release), `MIT`, **every
@@ -1472,8 +1526,8 @@ the file means", not crashes; each input is now a unit test in
   XARA-T-0089 (`docs/memory/document-model.md` decision 32).
 - ~~F6.4 lock UX + signals, F6.5 autosave, F6.7 recovery scan~~ — done in
   `xarast-app` (XARA-US-0084, `app-core.md` "Saving"). Open: F6.6 journal
-  (needs a serialisable command form), F6.8 `xarast repair`, F6.9 partial
-  XML recovery.
+  (needs a serialisable command form). F6.8 and F6.9 are done
+  (XARA-T-0088, section "Repair and partial recovery").
 - **Thumbnails (F5.8) are written** (XARA-T-0082): `SaveOptions::thumbnail`
   carries the PNG; the application renders it (`xarast_app::thumbnail`)
   on a scoped thread while `prepare_save`/`prepare_resave` serialise the

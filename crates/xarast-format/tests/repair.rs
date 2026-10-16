@@ -12,16 +12,19 @@ use xarast_doc::{
 use xarast_format::repair::{Action, Verdict};
 use xarast_format::svg::{SvgOptions, normal_form};
 use xarast_format::{
-    OpenError, OpenOptions, PackageWriter, RepairOptions, ResourceIndex, SaveOptions,
-    WriteOptions, XarastReader, open_reader, open_recovering, repair, save_to,
+    OpenError, OpenOptions, PackageWriter, RepairOptions, ResourceIndex, SaveOptions, WriteOptions,
+    XarastReader, open_reader, open_recovering, repair, save_to,
 };
 use xarast_geom::{Point, Vector};
 
 fn fixture() -> Document {
     let mut b = xarast_doc::builder::skeleton(BuildLimits::default()).unwrap();
-    for (i, body) in [&b"\x89PNG\r\n\x1a\nfirst image"[..], &b"\x89PNG\r\n\x1a\nsecond image"[..]]
-        .into_iter()
-        .enumerate()
+    for (i, body) in [
+        &b"\x89PNG\r\n\x1a\nfirst image"[..],
+        &b"\x89PNG\r\n\x1a\nsecond image"[..],
+    ]
+    .into_iter()
+    .enumerate()
     {
         let image = b.define_bitmap(BitmapResource {
             name: Arc::from("photo"),
@@ -139,8 +142,8 @@ fn every_flipped_byte_of_the_central_directory_is_survivable() {
         let mut b = original.clone();
         b[at] ^= 0xFF;
         // Strict open may or may not refuse; repair must not care.
-        let r = repair(&b, &RepairOptions::default())
-            .unwrap_or_else(|e| panic!("flip at {at}: {e}"));
+        let r =
+            repair(&b, &RepairOptions::default()).unwrap_or_else(|e| panic!("flip at {at}: {e}"));
         assert_strictly_valid(&r.bytes);
         assert_eq!(normal_form(&open(&r.bytes).document), want, "flip at {at}");
     }
@@ -239,7 +242,15 @@ fn a_package_nested_in_an_entry_is_not_scanned_as_entries() {
         inner,
         "the nested package came back whole"
     );
-    assert_eq!(rebuilt.report.entries.iter().filter(|e| e.name == "document.svg").count(), 1);
+    assert_eq!(
+        rebuilt
+            .report
+            .entries
+            .iter()
+            .filter(|e| e.name == "document.svg")
+            .count(),
+        1
+    );
 }
 
 #[test]

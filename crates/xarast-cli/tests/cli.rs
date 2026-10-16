@@ -293,11 +293,19 @@ fn repair_rebuilds_a_package_without_its_central_directory() {
 
     // Nothing recoverable, same path twice, and a missing input.
     let junk = write(&dir, "junk.xarast", b"not a package");
-    let o = run(&["repair", junk.to_str().unwrap(), dir.join("o.xarast").to_str().unwrap()]);
+    let o = run(&[
+        "repair",
+        junk.to_str().unwrap(),
+        dir.join("o.xarast").to_str().unwrap(),
+    ]);
     assert_eq!(o.status.code(), Some(2));
     let o = run(&["repair", fixed.to_str().unwrap(), fixed.to_str().unwrap()]);
     assert_eq!(o.status.code(), Some(1));
-    let o = run(&["repair", dir.join("nope").to_str().unwrap(), dir.join("o2").to_str().unwrap()]);
+    let o = run(&[
+        "repair",
+        dir.join("nope").to_str().unwrap(),
+        dir.join("o2").to_str().unwrap(),
+    ]);
     assert_eq!(o.status.code(), Some(2));
 }
 
