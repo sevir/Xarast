@@ -2,14 +2,15 @@
 id: XARA-T-0347
 type: task
 title: "I1–I6 — Advanced transparency families: all 12 in the model, one LUT source, graduated/bitmap sources, .xar mapping, .xarast"
-status: in_progress
+status: done
 priority: medium
 parent: XARA-US-0072
 author: mcp
 labels: [phase-13, render, colour, xar, format]
 created: 2026-10-16T01:58:53Z
-updated: 2026-10-16T01:58:53Z
+updated: 2026-10-16T02:49:08Z
 started: 2026-10-16T01:58:53Z
+closed: 2026-10-16T02:49:08Z
 ---
 
 ## Description
