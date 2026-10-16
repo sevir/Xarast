@@ -962,9 +962,74 @@ Taken from the original to fix semantics; implemented from these notes.
   is 0. `LineSpacing::Absolute(0)` means "use the ratio".
 - **Default tab stops** every 36 000 mp (half an inch), strictly after the
   current position (`Kernel/txtattr.cpp:3181-3205`).
-- **Ruler record** (`Kernel/rechtext.cpp:1546-1575`): per stop,
-  `type = flags & 3` (0 left, 1 right, 2 centre, 3 decimal), bit 2 "has a
-  filler character"; a decimal stop carries its decimal-point character.
+- **Ruler record** (`Kernel/rechtext.cpp:1546-1575`, writer
+  `Kernel/cxftext.cpp:2475-2515`): `u16` count, then per stop `u8
+  type_and_flags`, `i32` position, a `u16` decimal-point character **if
+  the type is decimal**, a `u16` filler character **if bit 2 is set**.
+  `type = flags & 3` is the original's in-memory enum `{LeftTab,
+  RightTab, CentreTab, DecimalTab}` (`Kernel/txtattr.h:143`): 0 left, 1
+  right, 2 centre, 3 decimal. Imported since XARA-T-0263 (no corpus file
+  has the record); the import keeps `kind = flags & 3` and drops the
+  filler (flag and character: the model has no filler yet).
+
+## Tab sections: right, centre and decimal stops (XARA-T-0263)
+
+Facts from `TextLine::FindBreakChar`, `FormatState::{AdvanceBy,
+IsAvailable, FinishTabSection}` (`Kernel/nodetxtl.cpp:1005-1500`), with
+`TxtRulerAttribute::FindTabStopInRuler` (`Kernel/txtattr.cpp:3181`); the
+implementation is `FormatState` and `break_lines` in
+`xarast-text/src/layout.rs`.
+
+- **A section** is the text after one tab up to the next tab, the end of
+  the line (wrap or paragraph end). The text before the first tab is
+  anchored to a notional left stop at the line start. A tab takes the first
+  stop **strictly beyond** the current right edge (`Width`, which starts at
+  the indent), so two tabs in a row advance; past the last ruler stop the
+  stops are left stops every 36 000 mp.
+- **Right**: the section's characters fill the room between the tab and the
+  stop from its right end; all of the section ends at the stop. **Centre**:
+  half of each character's width (C-truncated `w / 2`) goes into the room,
+  the other half to the right of the stop. **Decimal**: like right until
+  the decimal character is met; that character and everything after it go
+  to the right of the stop. The decimal point is always right of the stop.
+- **The tab's width is the room left when the section ends**
+  (`FinishTabSection`), so the text of a right/centre/decimal section is
+  placed by shrinking the tab; the width of the line is unchanged by
+  alignment. Our `tab_advances` take that final value.
+- **Overflow**: when the room is used up (`remaining == 0`), the rest of
+  the section goes to the right of the current edge, so the tab's width is 0
+  and the text pushes **past** the stop; nothing is clipped or moved to a
+  later stop. For centre, half of a character that does not fit in the room
+  uses what room remains and the rest goes right.
+- **Decimal stop with no decimal character in the section**: the section is
+  never "found", so it behaves exactly as a right stop. A decimal stop's
+  character is compared with the first scalar of each cluster; only a
+  decimal stop compares (a `.` in a right section is ordinary text).
+  `DecimalPointFound` resets at each tab.
+- **Wrapping**: whether a character fits is decided by placing it on a copy
+  of the state (`IsAvailable` "advance and backtrack"): a right section
+  that still lies left of the stop does not push the line toward the
+  limit. A line broken mid-section finishes that section **at the break**
+  (the tab's width reflects only the characters kept; we keep a snapshot of
+  `remaining` per cluster). A line may break before a tab. Divergence
+  kept from before: the original also refuses a tab whose stop lies beyond
+  the wrap limit (breaks before it); we let the tab through.
+- **Justification**: alignment of the whole line (left/centre/right) uses
+  the summed advances, which already contain the final tab widths, and
+  tab positions are relative to the indent not the shift (`CharPosOffset` is
+  "transparent" to stops). Full justification stretches only the **last**
+  section (counts restart after each tab, as before), so the gap is
+  measured against the line's total including shrunken tabs.
+- **Model**: `xarast_doc::TabStop { position, kind: u8, decimal:
+  Option<char> }` and `xarast_text::TabStop { pos, kind, decimal: char }`.
+  `None` (a stop from a file that did not state one, or the ruler UI before
+  the user picks one) lays out with a full stop; the ruler's "add decimal
+  stop" writes `Some('.')`. `.xarast` ruler text: `position:kind` plus an
+  optional third field, the code point in decimal (`72:3:46`); stops
+  without it, and files from before the field, are unchanged byte for byte.
+- **Corpus**: no corpus file has a `TAG_TEXT_RULER` record, so every corpus
+  story uses the default left grid; its layout is unchanged by this work
+  (the golden-image and text tests pass untouched).
 - Line ascent/descent/size are the maxima over the line's characters; an
   empty line takes them from its end-of-line item.
 
@@ -1022,7 +1087,7 @@ in the logical text:
 | `Justification` | `ParagraphStyle.justification` | same four values |
 | `LineSpace(LineSpacing::{Ratio, Absolute})` | `.line_spacing` | same shape |
 | `LeftMargin` / `RightMargin` / `FirstIndent` | `.left_margin` / `.right_margin` / `.first_indent` | as is |
-| `Ruler(Arc<[TabStop { position, kind: u8 }]>)` | `.tabs` | `kind & 3`: 0 Left, 1 Right, 2 Centre, 3 Decimal. The decimal-point character is not in the model yet: add it before T9.3.8 |
+| `Ruler(Arc<[TabStop { position, kind: u8, decimal: Option<char> }]>)` | `.tabs` | `kind & 3`: 0 Left, 1 Right, 2 Centre, 3 Decimal; `decimal` → `TabStop.decimal` (`None` → `.`) |
 | `TextStoryNode.auto_kern` | every `ParagraphStyle.auto_kern` | story-wide |
 | `TextItem::Kern(Mp)` | `ManualKern { at, amount }` | `amount` = raw value (em/1000), `at` = byte offset of the following character |
 
@@ -1427,8 +1492,7 @@ first story of a process waits for enumeration when nothing prewarmed
 ## Open TODOs
 
 - Round 2 leftovers: faux **bold** is not synthesised (skew is); underline
-  uses fixed proportions, not the font's `post` table; `TabStop` decimal
-  character still not in the model; the layer bounds cache (when warm)
+  uses fixed proportions, not the font's `post` table; the layer bounds cache (when warm)
   ignores text, so `drawing_rect` misses text once `update_bounds` has run;
   `Viewport::fit_bounds_to` (scroll bounds) ignores text; a per-document
   embedded-font overlay; ~~golden images of `TextDesigns` with pinned
@@ -1447,7 +1511,8 @@ first story of a process waits for enumeration when nothing prewarmed
   `SetTextAttr` handle them); line spacing cannot be switched between ratio
   and absolute from the bar; a ruler with every tab removed falls back to
   the ruler a `.xar` line node carries; centre/right/decimal stops can be
-  set but layout still treats every stop as left (T9.3.8); the ruler is not
+  set and now lay out as such (XARA-T-0263; a tab filler character is not
+  modelled); the ruler is not
   shown for turned, sheared or mirrored stories or text on a path.
 - IME and clipboard leftovers (XARA-T-0224): the candidate window's
   position and preedit behaviour are not yet observed on a real GNOME and
@@ -1500,7 +1565,7 @@ first story of a process waits for enumeration when nothing prewarmed
   macOS smoke tests (T9.1.7's gallery would replace the infobar's plain
   family list, which has no previews). A per-document embedded-font overlay: today an embedded
   face registered in a shared `FontDb` is visible to every document.
-- W9.3: T9.3.8 centre/right/decimal tabs (only left stops now), T9.3.10
+- W9.3: ~~T9.3.8 centre/right/decimal tabs~~ (done, XARA-T-0263), T9.3.10
   features/variations are plumbed per run but untested beyond `kern`/`liga`/
   `wght`, T9.3.11 layout cache (the text tool keeps its own per-epoch
   cache of `CaretMap`s; the walker another).

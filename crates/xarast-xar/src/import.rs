@@ -3464,6 +3464,11 @@ mod tests {
     /// A layer holding one story: a string with its own font size, a string
     /// without, a non-BMP character as two `TAG_TEXT_CHAR` records, an EOL.
     fn text_drawing() -> Vec<u8> {
+        text_drawing_with(&[])
+    }
+
+    /// [`text_drawing`] with one more record, before the strings.
+    fn text_drawing_with(extra: &[(u32, Vec<u8>)]) -> Vec<u8> {
         let mut spread = Vec::new();
         for v in [600_000i32, 450_000, 0, 0] {
             spread.extend_from_slice(&v.to_le_bytes());
@@ -3479,7 +3484,7 @@ mod tests {
             story.extend_from_slice(&v.to_le_bytes());
         }
         let utf16 = |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(u16::to_le_bytes).collect() };
-        XarBuilder::new()
+        let mut b = XarBuilder::new()
             .record(40, &[])
             .down()
             .record(41, &[])
@@ -3493,8 +3498,11 @@ mod tests {
             .record(2100, &story)
             .down()
             .record(2200, &[])
-            .down()
-            .record(2201, &utf16("ab"))
+            .down();
+        for (tag, payload) in extra {
+            b = b.record(*tag, payload);
+        }
+        b.record(2201, &utf16("ab"))
             .down()
             .record(2906, &20_000i32.to_le_bytes())
             .up()
@@ -3511,6 +3519,49 @@ mod tests {
             .up()
             .end_of_file()
             .finish()
+    }
+
+    #[test]
+    fn a_ruler_imports_with_the_decimal_character_of_a_decimal_stop() {
+        let mut ruler = Vec::new();
+        ruler.extend_from_slice(&3u16.to_le_bytes());
+        ruler.push(0);
+        ruler.extend_from_slice(&36_000i32.to_le_bytes());
+        // Decimal with a comma, and a filler flag on a centre stop.
+        ruler.push(3);
+        ruler.extend_from_slice(&72_000i32.to_le_bytes());
+        ruler.extend_from_slice(&0x2cu16.to_le_bytes());
+        ruler.push(2 | 4);
+        ruler.extend_from_slice(&108_000i32.to_le_bytes());
+        ruler.extend_from_slice(&0x2eu16.to_le_bytes());
+        let bytes = text_drawing_with(&[(4204, ruler)]);
+        let (doc, _) = import(&bytes, &ImportOptions::default()).unwrap();
+        assert_eq!(doc.validate().errors, Vec::new());
+        let stops: Vec<TabStop> = doc
+            .tree
+            .preorder(doc.tree.root())
+            .find_map(|n| match doc.tree.kind(n) {
+                Some(NodeKind::Attr(a)) => match &a.value {
+                    AttrValue::Ruler(r) => Some(r.to_vec()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("the ruler attribute");
+        let got: Vec<(i32, u8, Option<char>)> = stops
+            .iter()
+            .map(|t| (t.position.raw(), t.kind, t.decimal))
+            .collect();
+        // Kinds are the original's enum; the filler flag goes with the
+        // filler, which the model does not carry.
+        assert_eq!(
+            got,
+            [
+                (36_000, 0, None),
+                (72_000, 3, Some(',')),
+                (108_000, 2, None)
+            ]
+        );
     }
 
     #[test]

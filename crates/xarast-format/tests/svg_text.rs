@@ -82,11 +82,25 @@ fn story_doc() -> Document {
     b.attribute(AttrValue::RightMargin(Mp::new(3_000))).unwrap();
     b.attribute(AttrValue::FirstIndent(Mp::new(10_000)))
         .unwrap();
-    b.attribute(AttrValue::Ruler(Arc::from(vec![TabStop {
-        position: Mp::new(36_000),
-        kind: 1,
-        decimal: None,
-    }])))
+    // A right stop, a decimal stop with its character and one without: the
+    // character is a third field only where there is one (XARA-T-0263).
+    b.attribute(AttrValue::Ruler(Arc::from(vec![
+        TabStop {
+            position: Mp::new(36_000),
+            kind: 1,
+            decimal: None,
+        },
+        TabStop {
+            position: Mp::new(72_000),
+            kind: 3,
+            decimal: Some(','),
+        },
+        TabStop {
+            position: Mp::new(108_000),
+            kind: 3,
+            decimal: None,
+        },
+    ])))
     .unwrap();
     b.attribute(AttrValue::Tracking(Mp::new(50))).unwrap();
     b.attribute(AttrValue::AspectRatio(1.25)).unwrap();
@@ -268,6 +282,7 @@ fn a_story_reads_back_resolving_identically_and_saves_to_the_same_bytes() {
     assert!(svg.contains("<xarast:char xarast:code=\"fffe\"/>"));
     assert!(svg.contains("&#13;<xarast:char xarast:code=\"1\"/>&amp;&lt;"));
     assert!(svg.contains("xarast:matrix="));
+    assert!(svg.contains("xarast:ruler=\"36:1 72:3:44 108:3\""), "{svg}");
     assert!(svg.contains("font-family=\"'Calisto MT', serif\""));
     assert!(svg.contains("xarast:panose=\"02040603050505020304\""));
 }
