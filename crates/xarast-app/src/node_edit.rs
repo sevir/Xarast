@@ -70,10 +70,18 @@ pub fn path_of(doc: &Document, id: NodeId) -> Option<&Arc<Path>> {
 }
 
 /// The selected paths the shape editor edits: selected path objects not
-/// on a locked layer, in selection order.
+/// on a locked layer, in selection order. A selected story on a path
+/// gives the path it follows (T9.5.5): the path is a child node, edited
+/// like any other, and the text follows it.
 #[must_use]
 pub fn edited_paths(doc: &Document, edit: &EditState) -> Vec<NodeId> {
     edit.selection()
+        .map(|id| match doc.tree.kind(id) {
+            Some(NodeKind::TextStory(_)) => {
+                crate::text_path_edit::story_path(doc, id).unwrap_or(id)
+            }
+            _ => id,
+        })
         .filter(|id| path_of(doc, *id).is_some() && !crate::ops::on_locked_layer(doc, *id))
         .collect()
 }

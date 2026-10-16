@@ -78,6 +78,15 @@
 //! document's epoch: any committed edit (undo included) drops them all. A
 //! story on a path keeps its fit, so the caret, hit tests and highlight
 //! follow the drawn text ([`CaretMap::on_path`]).
+//!
+//! # Indents on a path (T9.5.5)
+//!
+//! While a caret is in a story on a path, two handles sit on the path where
+//! its text may start and end (the left and right indents, in the text's
+//! direction). Dragging one slides it along the path, never past the other,
+//! and its release is one [`crate::text_path_edit::TextPathEdit::Indents`]
+//! step. The path itself is an ordinary child node, so the shape editor
+//! still edits it.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -225,6 +234,15 @@ enum Drag {
         from: DocPoint,
         to: DocPoint,
         before: Option<Editing>,
+    },
+    /// Dragging an indent handle of a story on a path: the indents as
+    /// the drag has them so far, in story space.
+    Indent {
+        story: NodeId,
+        /// The left handle (`false`: the right one).
+        left_end: bool,
+        left: Mp,
+        right: Mp,
     },
 }
 
@@ -507,6 +525,57 @@ impl TextTool {
             .map(Arc::new);
         cache.composing = Some((p.clone(), v.clone()));
         v
+    }
+
+    /// The story on a path the caret is in, its view, and its indents.
+    fn path_story(&self, doc: &Document) -> Option<(NodeId, Arc<StoryView>, Mp, Mp)> {
+        let Some(Editing {
+            state: TextEditing::Story(sel),
+            ..
+        }) = self.editing
+        else {
+            return None;
+        };
+        let v = self.view(doc, sel.story)?;
+        v.map.path_fit()?;
+        match v.node.layout {
+            TextLayout::OnPath {
+                left_indent,
+                right_indent,
+                ..
+            } => Some((sel.story, v, left_indent, right_indent)),
+            _ => None,
+        }
+    }
+
+    /// Where the indent handles of `v` sit for the indents `left` and
+    /// `right`, in document space: left, then right.
+    fn indent_handles(v: &StoryView, left: Mp, right: Mp) -> Option<[DocPoint; 2]> {
+        let path = v.map.path_fit()?.path();
+        let start = path.at(left.to_f64()).0;
+        let end = path.at(path.length() - right.to_f64()).0;
+        Some([v.to_doc(start), v.to_doc(end)])
+    }
+
+    /// An indent handle under `at`: the drag it starts.
+    fn indent_at(&self, cx: &ToolCtx<'_>, at: DocPoint) -> Option<Drag> {
+        let (story, v, left, right) = self.path_story(cx.doc)?;
+        let [l, r] = Self::indent_handles(&v, left, right)?;
+        let near =
+            |h| crate::tool::near_on_screen(cx.viewport, h, at, crate::tool::HANDLE_TOLERANCE_PX);
+        let left_end = if near(l) {
+            true
+        } else if near(r) {
+            false
+        } else {
+            return None;
+        };
+        Some(Drag::Indent {
+            story,
+            left_end,
+            left,
+            right,
+        })
     }
 
     /// The topmost editable story under a document point, and the caret
@@ -1395,111 +1464,9 @@ fn is_editable(tree: &xarast_doc::Tree, id: NodeId) -> bool {
         })
 }
 
-impl Tool for TextTool {
-    fn id(&self) -> ToolId {
-        ToolId::Text
-    }
-
-    fn on_activate(&mut self, cx: &mut ToolCtx<'_>) {
-        // One story selected: edit it, the caret at its end.
-        if cx.edit.selection_len() == 1
-            && let Some(story) = cx.edit.selection().next()
-            && matches!(cx.doc.tree.kind(story), Some(NodeKind::TextStory(_)))
-            && let Some(v) = self.view(cx.doc, story)
-        {
-            let end = v
-                .map
-                .move_caret(Caret::at(0), CaretMotion::StoryEnd, true, None);
-            self.select_story(story, end, end, cx);
-        }
-    }
-
-    fn on_deactivate(&mut self, cx: &mut ToolCtx<'_>) {
-        self.drag = None;
-        self.set(None, None, cx);
-    }
-
-    fn on_gesture(&mut self, ev: &GestureEvent, cx: &mut ToolCtx<'_>) {
-        match ev {
-            GestureEvent::Click { at, count, .. } => self.click(*at, *count, cx),
-            GestureEvent::DragStart { from, .. } => {
-                let before = self.editing;
-                self.drag = Some(match self.story_at(cx, *from) {
-                    Some((story, _, hit)) => {
-                        let anchor = match self.current(cx.doc) {
-                            Some((s, _)) if cx.modifiers.adjust && s.story == story => s.anchor,
-                            _ => hit,
-                        };
-                        self.select_story(story, anchor, hit, cx);
-                        Drag::Select {
-                            story,
-                            anchor,
-                            before,
-                        }
-                    }
-                    None => Drag::Column {
-                        from: *from,
-                        to: *from,
-                        before,
-                    },
-                });
-                cx.requests.overlay_changed = true;
-            }
-            GestureEvent::DragUpdate { to, .. } => match &mut self.drag {
-                Some(Drag::Select { story, anchor, .. }) => {
-                    let (story, anchor) = (*story, *anchor);
-                    if let Some(v) = self.view(cx.doc, story) {
-                        let head = v.map.hit_point(v.to_story(*to)).0;
-                        self.set(
-                            Some(TextEditing::Story(TextSelection {
-                                story,
-                                anchor,
-                                head,
-                            })),
-                            None,
-                            cx,
-                        );
-                    }
-                }
-                Some(Drag::Column { to: t, .. }) => {
-                    *t = *to;
-                    cx.requests.overlay_changed = true;
-                }
-                None => {}
-            },
-            GestureEvent::DragEnd { to, .. } => match self.drag.take() {
-                Some(Drag::Column { from, .. }) => {
-                    let width = (to.x.to_f64() - from.x.to_f64()).abs();
-                    let size = Self::size_in(&[], cx.edit);
-                    let left = from.x.min(to.x);
-                    let top = from.y.max(to.y);
-                    if width < MIN_COLUMN_PX * cx.device_px() {
-                        self.pending(from, None, cx);
-                    } else {
-                        // The first line's top sits at the top of the drag.
-                        let ascent = size.mul_ratio(4, 5);
-                        let at = DocPoint::new(left, top.saturating_sub(ascent));
-                        self.pending(at, Some(Mp::from_f64_round(width)), cx);
-                    }
-                }
-                Some(Drag::Select { .. }) | None => {
-                    cx.requests.overlay_changed = true;
-                }
-            },
-            GestureEvent::Cancel => {
-                if let Some(Drag::Select { before, .. } | Drag::Column { before, .. }) =
-                    self.drag.take()
-                {
-                    self.editing = before;
-                    self.moved = self.moved.wrapping_add(1);
-                }
-                cx.requests.overlay_changed = true;
-            }
-            GestureEvent::Hover { .. } | GestureEvent::ModifiersChanged { .. } => {}
-        }
-    }
-
-    fn overlay(&self, view: ToolView<'_>, out: &mut Vec<OverlayShape>) {
+impl TextTool {
+    /// The caret, the selection and a column being dragged out.
+    fn caret_overlay(&self, view: ToolView<'_>, out: &mut Vec<OverlayShape>) {
         if let Some(Drag::Column { from, to, .. }) = self.drag {
             out.push(OverlayShape::Rect {
                 rect: DocRect::new(from, to),
@@ -1559,6 +1526,185 @@ impl Tool for TextTool {
                 }
             }
             None => {}
+        }
+    }
+}
+
+impl Tool for TextTool {
+    fn id(&self) -> ToolId {
+        ToolId::Text
+    }
+
+    fn on_activate(&mut self, cx: &mut ToolCtx<'_>) {
+        // One story selected: edit it, the caret at its end.
+        if cx.edit.selection_len() == 1
+            && let Some(story) = cx.edit.selection().next()
+            && matches!(cx.doc.tree.kind(story), Some(NodeKind::TextStory(_)))
+            && let Some(v) = self.view(cx.doc, story)
+        {
+            let end = v
+                .map
+                .move_caret(Caret::at(0), CaretMotion::StoryEnd, true, None);
+            self.select_story(story, end, end, cx);
+        }
+    }
+
+    fn on_deactivate(&mut self, cx: &mut ToolCtx<'_>) {
+        self.drag = None;
+        self.set(None, None, cx);
+    }
+
+    fn on_gesture(&mut self, ev: &GestureEvent, cx: &mut ToolCtx<'_>) {
+        match ev {
+            GestureEvent::Click { at, count, .. } => self.click(*at, *count, cx),
+            GestureEvent::DragStart { from, .. } => {
+                if let Some(d) = self.indent_at(cx, *from) {
+                    self.drag = Some(d);
+                    cx.requests.overlay_changed = true;
+                    return;
+                }
+                let before = self.editing;
+                self.drag = Some(match self.story_at(cx, *from) {
+                    Some((story, _, hit)) => {
+                        let anchor = match self.current(cx.doc) {
+                            Some((s, _)) if cx.modifiers.adjust && s.story == story => s.anchor,
+                            _ => hit,
+                        };
+                        self.select_story(story, anchor, hit, cx);
+                        Drag::Select {
+                            story,
+                            anchor,
+                            before,
+                        }
+                    }
+                    None => Drag::Column {
+                        from: *from,
+                        to: *from,
+                        before,
+                    },
+                });
+                cx.requests.overlay_changed = true;
+            }
+            GestureEvent::DragUpdate { to, .. } => match &mut self.drag {
+                Some(Drag::Select { story, anchor, .. }) => {
+                    let (story, anchor) = (*story, *anchor);
+                    if let Some(v) = self.view(cx.doc, story) {
+                        let head = v.map.hit_point(v.to_story(*to)).0;
+                        self.set(
+                            Some(TextEditing::Story(TextSelection {
+                                story,
+                                anchor,
+                                head,
+                            })),
+                            None,
+                            cx,
+                        );
+                    }
+                }
+                Some(Drag::Column { to: t, .. }) => {
+                    *t = *to;
+                    cx.requests.overlay_changed = true;
+                }
+                Some(Drag::Indent {
+                    story,
+                    left_end,
+                    left,
+                    right,
+                }) => {
+                    let (story, left_end, l, r) = (*story, *left_end, *left, *right);
+                    let Some(v) = self.view(cx.doc, story) else {
+                        return;
+                    };
+                    let Some(fit) = v.map.path_fit() else {
+                        return;
+                    };
+                    let length = fit.path().length();
+                    let along = fit.path().project(v.to_story(*to));
+                    // Never past the other handle.
+                    let (l, r) = if left_end {
+                        let most = (length - r.to_f64()).max(0.0);
+                        (Mp::from_f64_round(along.min(most)), r)
+                    } else {
+                        let most = (length - l.to_f64()).max(0.0);
+                        (l, Mp::from_f64_round((length - along).clamp(0.0, most)))
+                    };
+                    if let Some(Drag::Indent { left, right, .. }) = &mut self.drag {
+                        (*left, *right) = (l, r);
+                    }
+                    cx.requests.overlay_changed = true;
+                }
+                None => {}
+            },
+            GestureEvent::DragEnd { to, .. } => match self.drag.take() {
+                Some(Drag::Column { from, .. }) => {
+                    let width = (to.x.to_f64() - from.x.to_f64()).abs();
+                    let size = Self::size_in(&[], cx.edit);
+                    let left = from.x.min(to.x);
+                    let top = from.y.max(to.y);
+                    if width < MIN_COLUMN_PX * cx.device_px() {
+                        self.pending(from, None, cx);
+                    } else {
+                        // The first line's top sits at the top of the drag.
+                        let ascent = size.mul_ratio(4, 5);
+                        let at = DocPoint::new(left, top.saturating_sub(ascent));
+                        self.pending(at, Some(Mp::from_f64_round(width)), cx);
+                    }
+                }
+                Some(Drag::Indent {
+                    story, left, right, ..
+                }) => {
+                    let unchanged = matches!(
+                        cx.doc.tree.kind(story),
+                        Some(NodeKind::TextStory(t)) if matches!(t.layout,
+                            TextLayout::OnPath { left_indent, right_indent, .. }
+                                if left_indent == left && right_indent == right)
+                    );
+                    if !unchanged {
+                        cx.commands.emit(EditCommand::TextPath(
+                            crate::text_path_edit::TextPathEdit::Indents { story, left, right },
+                        ));
+                    }
+                    cx.requests.overlay_changed = true;
+                }
+                Some(Drag::Select { .. }) | None => {
+                    cx.requests.overlay_changed = true;
+                }
+            },
+            GestureEvent::Cancel => {
+                match self.drag.take() {
+                    Some(Drag::Select { before, .. } | Drag::Column { before, .. }) => {
+                        self.editing = before;
+                        self.moved = self.moved.wrapping_add(1);
+                    }
+                    Some(Drag::Indent { .. }) | None => {}
+                }
+                cx.requests.overlay_changed = true;
+            }
+            GestureEvent::Hover { .. } | GestureEvent::ModifiersChanged { .. } => {}
+        }
+    }
+
+    fn overlay(&self, view: ToolView<'_>, out: &mut Vec<OverlayShape>) {
+        self.caret_overlay(view, out);
+        // The indent handles of a story on a path, where a drag has them.
+        if let Some((story, v, left, right)) = self.path_story(view.doc) {
+            let (left, right) = match self.drag {
+                Some(Drag::Indent {
+                    story: s,
+                    left,
+                    right,
+                    ..
+                }) if s == story => (left, right),
+                _ => (left, right),
+            };
+            if let Some(handles) = Self::indent_handles(&v, left, right) {
+                for at in handles {
+                    out.push(OverlayShape::Handle {
+                        at,
+                        shape: crate::tool::HandleShape::Radius,
+                    });
+                }
+            }
         }
     }
 
