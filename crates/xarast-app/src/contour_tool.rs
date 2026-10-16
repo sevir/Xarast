@@ -34,7 +34,9 @@ use crate::bevel_tool::{
 };
 use crate::edit::{SelectMode, ToolId};
 use crate::geometry::{DocPoint, DocRect};
-use crate::live_edit::{LiveEdit, LiveEffect, contour_params, current_join, effect_of};
+use crate::live_edit::{
+    LiveEdit, LiveEffect, clamp_contour, contour_params, current_join, effect_of,
+};
 use crate::ops::EditCommand;
 use crate::tool::{
     CursorKind, GestureEvent, HandleShape, Infobar, InfobarField, InfobarItem, InfobarValue,
@@ -179,6 +181,41 @@ enum Hover {
 pub struct ContourTool {
     drag: Option<SizeDrag>,
     hover: Hover,
+    /// Whether the steps field gives the distance between rings rather
+    /// than their number (the original's steps/distance buttons,
+    /// `wxOil/xrc/barsource/cntrbar.ini:20-46`).
+    by_distance: bool,
+}
+
+/// The infobar's choice between counting rings and spacing them.
+pub const CONTOUR_STEPS_MODES: [&str; 2] = ["Steps", "Distance"];
+
+/// The distance between a contour's rings: its width over its rings
+/// (`tools/cntrtool.cpp:2743`).
+#[must_use]
+pub fn step_distance(p: &ContourParams) -> Mp {
+    Mp::new(p.width.raw() / i32::try_from(p.steps.saturating_add(1)).unwrap_or(i32::MAX))
+}
+
+/// The steps a contour of `width` has with its rings `distance` apart: none
+/// when the width is under two distances, else the width over the
+/// distance less one, rounded down
+/// (`OpChangeContourStepDistance`, `tools/opcntr.cpp:3793-3803`), kept to
+/// the steps field's range. `None` for a distance of zero or less, which
+/// the original refuses (`tools/cntrtool.cpp:1828-1833`).
+#[must_use]
+pub fn steps_for_distance(width: Mp, distance: Mp) -> Option<u32> {
+    if distance.raw() <= 0 {
+        return None;
+    }
+    let w = width.raw().unsigned_abs();
+    let d = distance.raw().unsigned_abs();
+    let steps = if w < d.saturating_mul(2) {
+        0
+    } else {
+        w / d - 1
+    };
+    Some(steps.min(MAX_CONTOUR_STEPS - 1))
 }
 
 fn contour_edits(
@@ -193,6 +230,34 @@ fn contour_edits(
             f(&mut q);
             (q != *p).then(|| (*c, LiveKind::Contour(Box::new(q))))
         })
+        .collect();
+    if edits.is_empty() {
+        Vec::new()
+    } else {
+        vec![LiveEdit::SetParams { edits, label }]
+    }
+}
+
+/// [`contour_edits`] with every inner width clamped to what its objects
+/// allow (`live_edit::clamp_contour`): a width or side change.
+fn contour_edits_clamped(
+    doc: &xarast_doc::Document,
+    contours: &[(NodeId, ContourParams)],
+    label: &'static str,
+    f: impl Fn(&mut ContourParams),
+) -> Vec<LiveEdit> {
+    let clamped: Vec<(NodeId, ContourParams, ContourParams)> = contours
+        .iter()
+        .map(|(c, p)| {
+            let mut q = p.clone();
+            f(&mut q);
+            (*c, p.clone(), clamp_contour(doc, *c, &q))
+        })
+        .collect();
+    let edits: Vec<(NodeId, LiveKind)> = clamped
+        .into_iter()
+        .filter(|(_, p, q)| q != p)
+        .map(|(c, _, q)| (c, LiveKind::Contour(Box::new(q))))
         .collect();
     if edits.is_empty() {
         Vec::new()
@@ -246,15 +311,27 @@ impl ContourTool {
     }
 
     fn on_drag_update(&mut self, to: DocPoint, cx: &mut ToolCtx<'_>) {
+        if self.drag.is_none() {
+            return;
+        }
+        // The pointer snaps (`tools/cntrtool.cpp:1289-1558`).
+        let to = cx.snap_point(to);
         let Some(d) = &mut self.drag else {
             return;
         };
         let w = clamp_signed(signed_width(d.rect, to) - d.start + d.base);
         d.now = Some(w);
+        // An inner contour goes no deeper than its objects allow: what
+        // the release commits, the drag shows.
         cx.preview.live = d
             .contours
             .iter()
-            .map(|(c, p)| (*c, LiveKind::Contour(Box::new(sized(p, w)))))
+            .map(|(c, p)| {
+                (
+                    *c,
+                    LiveKind::Contour(Box::new(clamp_contour(cx.doc, *c, &sized(p, w)))),
+                )
+            })
             .collect();
         cx.requests.overlay_changed = true;
     }
@@ -279,9 +356,14 @@ impl ContourTool {
                 ))),
             });
         }
-        edits.extend(contour_edits(&contours, "Contour Width", |p| {
-            *p = sized(p, w);
-        }));
+        edits.extend(contour_edits_clamped(
+            cx.doc,
+            &contours,
+            "Contour Width",
+            |p| {
+                *p = sized(p, w);
+            },
+        ));
         if !edits.is_empty() {
             cx.commands.emit(EditCommand::Live { edits });
         }
@@ -328,16 +410,46 @@ impl ContourTool {
                         .clamp(MIN_CONTOUR_WIDTH.raw(), MAX_CONTOUR_WIDTH.raw()),
                 );
                 let mut e = apply(new_contour(w, true));
-                e.extend(contour_edits(&contours, "Contour Width", |p| p.width = w));
+                e.extend(contour_edits_clamped(
+                    doc,
+                    &contours,
+                    "Contour Width",
+                    |p| {
+                        p.width = w;
+                    },
+                ));
                 e
             }
             (InfobarField::ContourSide, InfobarValue::Choice(i)) if i < 2 => {
                 let outer = i == 0;
                 let mut e = apply(new_contour(ContourParams::default().width, outer));
-                e.extend(contour_edits(&contours, "Contour Side", |p| {
-                    p.outer = outer
+                e.extend(contour_edits_clamped(doc, &contours, "Contour Side", |p| {
+                    p.outer = outer;
                 }));
                 e
+            }
+            // The rings `d` apart: the steps follow from each contour's
+            // width (`OpChangeContourStepDistance`).
+            (InfobarField::ContourStepDistance, InfobarValue::Length(d)) => {
+                let edits: Vec<(NodeId, LiveKind)> = contours
+                    .iter()
+                    .filter_map(|(c, p)| {
+                        let steps = steps_for_distance(p.width, d)?;
+                        (steps != p.steps).then(|| {
+                            let mut q = p.clone();
+                            q.steps = steps;
+                            (*c, LiveKind::Contour(Box::new(q)))
+                        })
+                    })
+                    .collect();
+                if edits.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![LiveEdit::SetParams {
+                        edits,
+                        label: "Contour Steps",
+                    }]
+                }
             }
             (InfobarField::ContourJoin, InfobarValue::Choice(i)) => {
                 let Some(&(_, j)) = CONTOUR_JOINS.get(i) else {
@@ -479,14 +591,28 @@ impl Tool for ContourTool {
         let choice = |f: &dyn Fn(&ContourParams) -> Option<usize>| {
             common(contours.iter().map(|(_, p)| f(p))).flatten()
         };
-        let mut items = vec![
+        let steps = if self.by_distance {
+            InfobarItem::Measure {
+                field: InfobarField::ContourStepDistance,
+                value: common(contours.iter().map(|(_, p)| step_distance(p))),
+                editable: !contours.is_empty(),
+            }
+        } else {
             InfobarItem::Scalar {
                 field: InfobarField::ContourSteps,
                 value: of(|p| p.rings() as f64),
                 suffix: "",
                 min: 1.0,
                 max: f64::from(MAX_CONTOUR_STEPS),
+            }
+        };
+        let mut items = vec![
+            InfobarItem::Choice {
+                field: InfobarField::ContourStepsMode,
+                options: CONTOUR_STEPS_MODES.to_vec(),
+                selected: Some(usize::from(self.by_distance)),
             },
+            steps,
             InfobarItem::Measure {
                 field: InfobarField::ContourWidth,
                 value: common(contours.iter().map(|(_, p)| p.width)),
@@ -585,6 +711,12 @@ impl Tool for ContourTool {
     }
 
     fn infobar_edit(&mut self, field: InfobarField, value: InfobarValue, cx: &mut ToolCtx<'_>) {
+        // The steps/distance choice is the bar's, not the document's.
+        if let (InfobarField::ContourStepsMode, InfobarValue::Choice(i)) = (field, value) {
+            self.by_distance = i == 1;
+            cx.requests.overlay_changed = true;
+            return;
+        }
         let sel: Vec<NodeId> = cx.edit.selection().collect();
         let edits = Self::field_edits(field, value, cx.doc, &sel);
         if !edits.is_empty() {

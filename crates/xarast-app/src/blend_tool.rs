@@ -18,8 +18,18 @@
 //!   an end selected inside the blend (Ctrl-click).
 //! * **Infobar**: steps, colour effect (fade, rainbow, alternate rainbow,
 //!   none), one to one, antialias, the position and the attribute
-//!   profiles, and a Remove button that gives the objects back. Every
-//!   value is typed or chosen (J2).
+//!   profiles, and a Remove button that gives the objects back (refused,
+//!   with the reason, for a contoured or bevelled blend). Every value is
+//!   typed or chosen (J2).
+//! * **Along a curve** (F6): "Blend along curve" makes the selected
+//!   blends follow the outline of the other selected objects, which become
+//!   the curve; the blends' ends move onto it. "Detach curve" gives the
+//!   curve back as an object and turns the ends upright. "Tangential"
+//!   (only for a blend on a curve) turns the steps and the ends with it.
+//! * **A long job asks first**: a blend or a step count the original
+//!   would warn about (its estimate over 24 000) waits for an answer in
+//!   the infobar, "Continue" or "Cancel" (`Esc`), without blocking
+//!   anything.
 //!
 //! Every gesture and every field is one undo step; `Esc` during a drag
 //! leaves nothing.
@@ -32,7 +42,8 @@ use crate::bevel_tool::common;
 use crate::edit::{SelectMode, ToolId};
 use crate::geometry::DocPoint;
 use crate::live_edit::{
-    LiveEdit, LiveEffect, blend_holding, blend_members, blend_params, effect_of,
+    LONG_JOB_ESTIMATE, LiveEdit, LiveEffect, blend_estimate, blend_holding, blend_members,
+    blend_params, blend_path_of, blend_removal_refusal, effect_of, new_blend_estimate,
 };
 use crate::ops::EditCommand;
 use crate::tool::{
@@ -152,11 +163,24 @@ enum Hover {
     End,
 }
 
+/// The question a long job waits on (the original's `IDS_ASKLONGJOB`, in
+/// our words).
+pub const LONG_JOB_QUESTION: &str = "This may take a long time. Continue?";
+
+/// An edit waiting for "Continue".
+#[derive(Debug, Clone)]
+struct Pending {
+    edits: Vec<LiveEdit>,
+    /// What to select first (a new blend's two objects).
+    select: Option<Vec<NodeId>>,
+}
+
 /// The blend tool.
 #[derive(Debug, Default)]
 pub struct BlendTool {
     drag: Option<Drag>,
     hover: Hover,
+    pending: Option<Pending>,
 }
 
 fn blend_edits(
@@ -213,6 +237,7 @@ impl BlendTool {
         hit: Option<crate::tool::HitResult>,
         cx: &mut ToolCtx<'_>,
     ) {
+        self.pending = None;
         if let Some(node) = Self::end_at(from, cx) {
             self.drag = Some(Drag::MoveEnd {
                 node,
@@ -264,8 +289,15 @@ impl BlendTool {
                 if let Some(edit) = blend_edit(cx.doc, start, from, end, to) {
                     // The new blend is selected (the selection follows the
                     // two objects into it).
-                    cx.requests.select(vec![start, end], SelectMode::Replace);
-                    cx.commands.emit(EditCommand::Live { edits: vec![edit] });
+                    let job = Pending {
+                        edits: vec![edit],
+                        select: Some(vec![start, end]),
+                    };
+                    if new_blend_estimate(cx.doc, start, end) > LONG_JOB_ESTIMATE {
+                        self.pending = Some(job);
+                    } else {
+                        Self::run(job, cx);
+                    }
                 }
             }
             Some(Drag::MoveEnd {
@@ -276,6 +308,31 @@ impl BlendTool {
             _ => {}
         }
         cx.requests.overlay_changed = true;
+    }
+
+    /// Runs an edit, now or after "Continue".
+    fn run(job: Pending, cx: &mut ToolCtx<'_>) {
+        if let Some(sel) = job.select {
+            cx.requests.select(sel, SelectMode::Replace);
+        }
+        if !job.edits.is_empty() {
+            cx.commands.emit(EditCommand::Live { edits: job.edits });
+        }
+        cx.requests.overlay_changed = true;
+    }
+
+    /// The selected objects that are not blends, nor in one: what "Blend
+    /// along curve" makes the curve of.
+    fn curve_objects(doc: &xarast_doc::Document, sel: &[NodeId]) -> Vec<NodeId> {
+        sel.iter()
+            .copied()
+            .filter(|n| {
+                effect_of(doc, *n, LiveEffect::Blend).is_none()
+                    && !std::iter::once(*n)
+                        .chain(doc.tree.ancestors(*n))
+                        .any(|a| blend_holding(doc, a).is_some() || blend_params(doc, a).is_some())
+            })
+            .collect()
     }
 
     fn field_edits(
@@ -300,6 +357,17 @@ impl BlendTool {
             }
             (InfobarField::BlendAntialias, InfobarValue::Toggle(on)) => {
                 blend_edits(blends, "Blend Antialias", |p| p.antialias = on)
+            }
+            // The ends turn with the curve, or upright, at once
+            // (`OpChangeBlend`, `tools/blndtool.cpp:7286-7291`).
+            (InfobarField::BlendTangential, InfobarValue::Toggle(on)) => {
+                let mut edits = blend_edits(blends, "Blend Tangential", |p| p.tangential = on);
+                if !edits.is_empty() {
+                    edits.push(LiveEdit::PlaceOnPath {
+                        blends: blends.iter().map(|(c, _)| *c).collect(),
+                    });
+                }
+                edits
             }
             (
                 InfobarField::BlendBias
@@ -335,12 +403,14 @@ impl Tool for BlendTool {
     fn on_deactivate(&mut self, _cx: &mut ToolCtx<'_>) {
         self.drag = None;
         self.hover = Hover::Nothing;
+        self.pending = None;
     }
 
     fn on_gesture(&mut self, ev: &GestureEvent, cx: &mut ToolCtx<'_>) {
         match ev {
             GestureEvent::Hover { at } => self.hover = Self::hover_at(*at, cx),
             GestureEvent::Click { hit, .. } => {
+                self.pending = None;
                 let adjust = cx.modifiers.adjust;
                 match hit {
                     Some(h) => cx.requests.select(
@@ -385,6 +455,22 @@ impl Tool for BlendTool {
     }
 
     fn infobar(&self, view: ToolView<'_>) -> Infobar {
+        // A long job waits on its answer, in the bar (no modal dialog).
+        if self.pending.is_some() {
+            return Infobar {
+                items: vec![
+                    InfobarItem::Note(LONG_JOB_QUESTION.to_owned()),
+                    InfobarItem::Command {
+                        command: crate::command::AppCommand::Action(ToolAction::Proceed),
+                        enabled: true,
+                    },
+                    InfobarItem::Command {
+                        command: crate::command::AppCommand::Action(ToolAction::Cancel),
+                        enabled: true,
+                    },
+                ],
+            };
+        }
         let blends = live_blends(&view);
         let of = |f: fn(&BlendParams) -> f64| common(blends.iter().map(|(_, p)| shown(f(p))));
         let mut items = vec![InfobarItem::Scalar {
@@ -430,10 +516,38 @@ impl Tool for BlendTool {
                 max: 1.0,
             });
         }
+        // Along a curve: one button, as the original's, detaching when a
+        // selected blend follows one.
+        let sel: Vec<NodeId> = view.edit.selection().collect();
+        let on_curve = blends
+            .iter()
+            .any(|(c, _)| blend_path_of(view.doc, *c).is_some());
+        if on_curve {
+            items.push(InfobarItem::Toggle {
+                field: InfobarField::BlendTangential,
+                on: blends.iter().all(|(_, p)| p.tangential),
+            });
+            items.push(InfobarItem::Command {
+                command: crate::command::AppCommand::Action(ToolAction::DetachBlendPath),
+                enabled: true,
+            });
+        } else {
+            items.push(InfobarItem::Command {
+                command: crate::command::AppCommand::Action(ToolAction::AttachBlendPath),
+                enabled: !Self::curve_objects(view.doc, &sel).is_empty(),
+            });
+        }
+        let refused: Vec<&'static str> = blends
+            .iter()
+            .filter_map(|(c, _)| blend_removal_refusal(view.doc, *c))
+            .collect();
         items.push(InfobarItem::Command {
             command: crate::command::AppCommand::Action(ToolAction::RemoveEffect),
-            enabled: true,
+            enabled: refused.len() < blends.len(),
         });
+        if let Some(why) = refused.first() {
+            items.push(InfobarItem::Note((*why).to_owned()));
+        }
         Infobar { items }
     }
 
@@ -465,37 +579,108 @@ impl Tool for BlendTool {
     }
 
     fn infobar_edit(&mut self, field: InfobarField, value: InfobarValue, cx: &mut ToolCtx<'_>) {
+        self.pending = None;
         let sel: Vec<NodeId> = cx.edit.selection().collect();
         let blends = selected_blends(cx.doc, &sel);
         let edits = Self::field_edits(field, value, &blends);
-        if !edits.is_empty() {
-            cx.commands.emit(EditCommand::Live { edits });
+        // More steps may be a long job (`OpChangeBlendSteps`,
+        // `tools/blndtool.cpp:5850-5930`).
+        let estimate: u64 = match (field, edits.first()) {
+            (InfobarField::BlendSteps, Some(LiveEdit::SetParams { edits: e, .. })) => e
+                .iter()
+                .map(|(c, k)| match k {
+                    LiveKind::Blend(p) => blend_estimate(cx.doc, *c, p.steps),
+                    _ => 0,
+                })
+                .sum(),
+            _ => 0,
+        };
+        let job = Pending {
+            edits,
+            select: None,
+        };
+        if estimate > LONG_JOB_ESTIMATE {
+            self.pending = Some(job);
+        } else {
+            Self::run(job, cx);
         }
         cx.requests.overlay_changed = true;
     }
 
     fn action(&mut self, action: ToolAction, cx: &mut ToolCtx<'_>) -> bool {
-        if action != ToolAction::RemoveEffect {
-            return false;
-        }
         let sel: Vec<NodeId> = cx.edit.selection().collect();
         let blends: Vec<NodeId> = selected_blends(cx.doc, &sel)
             .into_iter()
             .map(|(c, _)| c)
             .collect();
-        if !blends.is_empty() {
-            // The blends themselves, so the selection follows to their
-            // objects.
-            cx.requests.select(blends.clone(), SelectMode::Replace);
-            cx.commands.emit(EditCommand::Live {
-                edits: vec![LiveEdit::Remove {
-                    targets: blends,
-                    effect: LiveEffect::Blend,
-                }],
-            });
+        match action {
+            ToolAction::Proceed => {
+                let Some(job) = self.pending.take() else {
+                    return false;
+                };
+                Self::run(job, cx);
+                true
+            }
+            ToolAction::Cancel => {
+                if self.pending.take().is_none() {
+                    return false;
+                }
+                cx.requests.overlay_changed = true;
+                true
+            }
+            ToolAction::AttachBlendPath => {
+                self.pending = None;
+                let paths = Self::curve_objects(cx.doc, &sel);
+                if !blends.is_empty() && !paths.is_empty() {
+                    // The blends stay selected; the curve's objects go.
+                    cx.requests.select(blends.clone(), SelectMode::Replace);
+                    cx.commands.emit(EditCommand::Live {
+                        edits: vec![LiveEdit::AttachPath { blends, paths }],
+                    });
+                }
+                cx.requests.overlay_changed = true;
+                true
+            }
+            ToolAction::DetachBlendPath => {
+                self.pending = None;
+                let on: Vec<NodeId> = blends
+                    .into_iter()
+                    .filter(|c| blend_path_of(cx.doc, *c).is_some())
+                    .collect();
+                if !on.is_empty() {
+                    // The blends themselves, so the selection takes the
+                    // detached curves too.
+                    cx.requests.select(on.clone(), SelectMode::Replace);
+                    cx.commands.emit(EditCommand::Live {
+                        edits: vec![LiveEdit::DetachPath { blends: on }],
+                    });
+                }
+                cx.requests.overlay_changed = true;
+                true
+            }
+            ToolAction::RemoveEffect => {
+                self.pending = None;
+                // A contoured or bevelled blend stays (the bar says why).
+                let blends: Vec<NodeId> = blends
+                    .into_iter()
+                    .filter(|c| blend_removal_refusal(cx.doc, *c).is_none())
+                    .collect();
+                if !blends.is_empty() {
+                    // The blends themselves, so the selection follows to
+                    // their objects.
+                    cx.requests.select(blends.clone(), SelectMode::Replace);
+                    cx.commands.emit(EditCommand::Live {
+                        edits: vec![LiveEdit::Remove {
+                            targets: blends,
+                            effect: LiveEffect::Blend,
+                        }],
+                    });
+                }
+                cx.requests.overlay_changed = true;
+                true
+            }
+            _ => false,
         }
-        cx.requests.overlay_changed = true;
-        true
     }
 
     fn cursor(&self, state: InteractionState) -> CursorKind {
@@ -530,6 +715,9 @@ impl Tool for BlendTool {
                 }
                 None => None,
             };
+        }
+        if self.pending.is_some() {
+            return Some(LONG_JOB_QUESTION.to_owned());
         }
         Some(
             match self.hover {

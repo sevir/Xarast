@@ -561,7 +561,10 @@ impl AppCommand {
                 | ToolAction::PastePerspective
                 | ToolAction::RotateMould
                 | ToolAction::FlipHorizontal
-                | ToolAction::FlipVertical => NONE,
+                | ToolAction::FlipVertical
+                | ToolAction::AttachBlendPath
+                | ToolAction::DetachBlendPath
+                | ToolAction::Proceed => NONE,
                 // Context keys the tool claims before the table
                 // ([`ToolKey`]): `Home` is Fit page otherwise.
                 ToolAction::NextPoint

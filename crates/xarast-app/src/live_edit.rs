@@ -42,10 +42,10 @@ use xarast_color::{Colour, ColourValue};
 use xarast_doc::fill::FillGeometry;
 use xarast_doc::live::{LiveNode, LiveRole, RegenState};
 use xarast_doc::{
-    Attach, AttrNode, AttrSlot, AttrValue, BevelParams, BlendParams, ContourParams, Document,
-    EditError, LiveKind, NodeId, NodeKind, ResolvedAttrs, ShadowParams, Tx,
+    Attach, AttrNode, AttrSlot, AttrValue, BevelParams, BlendParams, BlenderParams, ContourParams,
+    Document, EditError, LiveKind, NodeId, NodeKind, ResolvedAttrs, ShadowParams, Tx,
 };
-use xarast_geom::Join;
+use xarast_geom::{Join, Matrix, Vector};
 
 use crate::structure::{NOTHING_TO_DO, in_render_order, inherited_batch, materialise, no_remap};
 
@@ -139,6 +139,36 @@ pub enum LiveEdit {
         /// The parameters of a new blend.
         kind: LiveKind,
     },
+    /// Makes `blends` run along the outline of the `paths` objects, merged
+    /// into one path, and deletes those objects (the original's "Blend
+    /// along a curve", `tools/blndtool.cpp:4991-5090`). The path stands
+    /// over a blend when a blend came first in render order, else beneath
+    /// it (`IsBlendPathOnTopOfBlend`); a path a blend had is replaced. Each
+    /// pair gets an equal share of the path, and the ends move onto it
+    /// ([`LiveEdit::PlaceOnPath`]).
+    AttachPath {
+        /// The blend controllers.
+        blends: Vec<NodeId>,
+        /// The objects whose outlines make the path.
+        paths: Vec<NodeId>,
+    },
+    /// Takes the path away from `blends`, leaving it as an object just
+    /// over each blend, and turns every end back upright
+    /// (`tools/blndtool.cpp:5209-5265`, `NodeBlend::DetachNodeBlendPath`,
+    /// `RotateBlendEndObjectsBack`).
+    DetachPath {
+        /// The blend controllers.
+        blends: Vec<NodeId>,
+    },
+    /// Moves every end of `blends` onto its blend's path: its box centre
+    /// to the point at its pair's share of the path, turned by the path's
+    /// direction there when the blend is tangential, upright otherwise
+    /// (`NodeBlend::TransformBlendEndObjects`, `Kernel/nodeblnd.cpp:2224-
+    /// 2290`). What a change of the tangential flag does after it.
+    PlaceOnPath {
+        /// The blend controllers.
+        blends: Vec<NodeId>,
+    },
     /// Moulds `targets` **together**: one mould controller standing where
     /// the topmost target stood, holding them all in render order, each
     /// looking as it did (the original's create-mould op puts the whole
@@ -175,6 +205,9 @@ impl LiveEdit {
             LiveEdit::SetParams { label, .. } => label,
             LiveEdit::SetJoin { .. } => "Bevel Join",
             LiveEdit::Blend { .. } => "Blend",
+            LiveEdit::AttachPath { .. } => "Blend Along Curve",
+            LiveEdit::DetachPath { .. } => "Detach Curve",
+            LiveEdit::PlaceOnPath { .. } => "Place On Curve",
             LiveEdit::Mould { label, .. } => label,
         }
     }
@@ -189,6 +222,8 @@ impl LiveEdit {
             LiveEdit::SetParams { edits, .. } => edits.iter().map(|(n, _)| *n).collect(),
             LiveEdit::SetJoin { controllers, .. } => controllers.clone(),
             LiveEdit::Blend { start, end, .. } => vec![*start, *end],
+            LiveEdit::AttachPath { blends, paths } => blends.iter().chain(paths).copied().collect(),
+            LiveEdit::DetachPath { blends } | LiveEdit::PlaceOnPath { blends } => blends.clone(),
         }
     }
 
@@ -202,6 +237,8 @@ impl LiveEdit {
             LiveEdit::SetParams { edits, .. } => edits.is_empty(),
             LiveEdit::SetJoin { controllers, .. } => controllers.is_empty(),
             LiveEdit::Blend { start, end, .. } => start == end,
+            LiveEdit::AttachPath { blends, paths } => blends.is_empty() || paths.is_empty(),
+            LiveEdit::DetachPath { blends } | LiveEdit::PlaceOnPath { blends } => blends.is_empty(),
         }
     }
 
@@ -222,10 +259,19 @@ impl LiveEdit {
                     ));
                 };
                 for t in in_render_order(tx.doc(), targets) {
-                    match wrap_plan(tx.doc(), t, effect) {
-                        Some(Wrap::Node(n)) => wrap_node(tx, n, kind)?,
-                        Some(Wrap::Contents(src)) => wrap_contents(tx, src, kind)?,
-                        None => {}
+                    let Some(plan) = wrap_plan(tx.doc(), t, effect) else {
+                        continue;
+                    };
+                    // A new inner contour is never deeper than the object
+                    // allows; an open path is given a fill in its outline's
+                    // colour first (`tools/opcntr.cpp:328-389`).
+                    let kind = clamp_contour_kind(tx.doc(), t, kind);
+                    if effect == LiveEffect::Contour {
+                        fill_open_path(tx, t)?;
+                    }
+                    match plan {
+                        Wrap::Node(n) => wrap_node(tx, n, &kind)?,
+                        Wrap::Contents(src) => wrap_contents(tx, src, &kind)?,
                     }
                 }
                 Ok(())
@@ -236,9 +282,16 @@ impl LiveEdit {
                     .iter()
                     .filter_map(|t| effect_of(tx.doc(), *t, *effect))
                     .filter(|c| seen.insert(*c))
+                    // A contoured or bevelled blend stays
+                    // (`tools/blndtool.cpp:5478-5488`).
+                    .filter(|c| blend_removal_refusal(tx.doc(), *c).is_none())
                     .collect();
                 for c in controllers {
-                    unwrap(tx, c)?;
+                    if blend_params(tx.doc(), c).is_some() {
+                        unwrap_blend(tx, c)?;
+                    } else {
+                        unwrap(tx, c)?;
+                    }
                 }
                 Ok(())
             }
@@ -257,6 +310,19 @@ impl LiveEdit {
                 Ok(())
             }
             LiveEdit::Blend { start, end, kind } => blend(tx, *start, *end, kind),
+            LiveEdit::AttachPath { blends, paths } => attach_path(tx, blends, paths),
+            LiveEdit::DetachPath { blends } => {
+                for b in unique_blends(tx.doc(), blends) {
+                    detach_path(tx, b, b, Attach::Next)?;
+                }
+                Ok(())
+            }
+            LiveEdit::PlaceOnPath { blends } => {
+                for b in unique_blends(tx.doc(), blends) {
+                    place_on_path(tx, b)?;
+                }
+                Ok(())
+            }
             LiveEdit::Mould { targets, kind, .. } => mould(tx, targets, kind),
         }
     }
@@ -534,10 +600,12 @@ const CONTOUR_SLOTS: [AttrSlot; 8] = [
 ];
 
 /// What a new contour's last ring is drawn in: the first object's fill,
-/// transparency, outline, width, join and mappings, with a flat colour
-/// fill made lighter (value four fifths of the way to full, saturation a
-/// fifth: `Kernel/ncntrcnt.cpp:2851-2873`) unless the contour is an inset
-/// path.
+/// transparency, outline, width, join and mappings, the colour fill's
+/// start colour made lighter (value four fifths of the way to full,
+/// saturation a fifth: `Kernel/ncntrcnt.cpp:2851-2873`) unless the contour
+/// is an inset path. When that fill shows no colour, the first colour
+/// fill given to anything under `node` is cloned, lightened the same way
+/// (`Kernel/ncntrcnt.cpp:2920-2969`).
 #[must_use]
 pub fn contour_start(doc: &Document, node: NodeId, inset: bool) -> Vec<AttrValue> {
     let Some(first) = xarast_doc::contour::ink_nodes(&doc.tree, node)
@@ -547,17 +615,129 @@ pub fn contour_start(doc: &Document, node: NodeId, inset: bool) -> Vec<AttrValue
         return Vec::new();
     };
     let resolved = xarast_doc::attr::resolve_uncached(&doc.tree, first, &doc.defaults);
-    CONTOUR_SLOTS
+    let mut found = false;
+    let mut out: Vec<AttrValue> = CONTOUR_SLOTS
         .iter()
         .map(|slot| match resolved.get(*slot).clone() {
-            AttrValue::Fill(FillGeometry::Flat { value }) if !inset => {
-                AttrValue::Fill(FillGeometry::Flat {
-                    value: lightened(doc, &value),
-                })
+            AttrValue::Fill(g) => {
+                let (g, shows) = lightened_fill(doc, g, inset);
+                found = shows;
+                AttrValue::Fill(g)
             }
             v => v,
         })
-        .collect()
+        .collect();
+    if !found
+        && let Some(g) = first_fill_under(doc, node)
+        && let Some(v) = out.iter_mut().find(|v| matches!(v, AttrValue::Fill(_)))
+    {
+        *v = AttrValue::Fill(lightened_fill(doc, g, inset).0);
+    }
+    out
+}
+
+/// A colour fill with its start colour lightened as a new contour's is
+/// (not for an inset path), and whether that start colour shows at all
+/// ("no colour" stays as it is).
+fn lightened_fill(
+    doc: &Document,
+    mut g: xarast_doc::fill::Paint,
+    inset: bool,
+) -> (xarast_doc::fill::Paint, bool) {
+    let mut first = true;
+    let mut shows = false;
+    g.for_each_value_mut(&mut |c| {
+        if std::mem::take(&mut first) && !c.is_none() {
+            shows = true;
+            if !inset {
+                *c = lightened(doc, c);
+            }
+        }
+    });
+    (g, shows)
+}
+
+/// The first colour fill attribute given to anything under `node`, in
+/// document order.
+fn first_fill_under(doc: &Document, node: NodeId) -> Option<xarast_doc::fill::Paint> {
+    doc.tree
+        .preorder(node)
+        .find_map(|n| match doc.tree.kind(n) {
+            Some(NodeKind::Attr(a)) => match &a.value {
+                AttrValue::Fill(g) => Some(g.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+}
+
+/// The deepest an inner contour on `node` may go: half the longer side of
+/// the largest of its objects' boxes (`ContourNodePathProcessor::
+/// GetMaxInnerContourWidth`, `Kernel/ncntrcnt.cpp:3308-3349`, applied on
+/// creation and on a width change, `:2984-2993`, `tools/opcntr.cpp:
+/// 1580-1600`). `None` when it has no objects.
+#[must_use]
+pub fn max_inner_width(doc: &Document, node: NodeId) -> Option<xarast_geom::Mp> {
+    let root = effect_of(doc, node, LiveEffect::Contour)
+        .and_then(|c| xarast_doc::live::parts(&doc.tree, c))
+        .map_or(node, |p| p.source);
+    xarast_doc::contour::ink_nodes(&doc.tree, root)
+        .into_iter()
+        .map(|n| crate::viewport::nodes_rect(doc, [n]))
+        .filter(|r| !r.is_empty())
+        .map(|r| xarast_geom::Mp::new(r.width().raw().max(r.height().raw()) / 2))
+        .max()
+}
+
+/// `p` with an inner width no deeper than [`max_inner_width`] allows.
+#[must_use]
+pub fn clamp_contour(doc: &Document, node: NodeId, p: &ContourParams) -> ContourParams {
+    let mut q = p.clone();
+    if !q.outer
+        && let Some(m) = max_inner_width(doc, node)
+        && q.width > m
+    {
+        q.width = m;
+    }
+    q
+}
+
+/// `kind` clamped by [`clamp_contour`] when it is a contour's.
+fn clamp_contour_kind(doc: &Document, node: NodeId, kind: &LiveKind) -> LiveKind {
+    match kind {
+        LiveKind::Contour(p) => LiveKind::Contour(Box::new(clamp_contour(doc, node, p))),
+        k => k.clone(),
+    }
+}
+
+/// An open path about to be contoured is given a flat fill in its
+/// outline's colour, so its contour has a colour to start from
+/// (`tools/opcntr.cpp:328-389`: the first subpath not closed). How it
+/// draws does not change: an open path is not filled.
+fn fill_open_path(tx: &mut Tx<'_>, node: NodeId) -> Result<(), EditError> {
+    let doc = tx.doc();
+    let Some(NodeKind::Path(p)) = doc.tree.kind(node) else {
+        return Ok(());
+    };
+    if !p.data.subpaths().next().is_some_and(|s| !s.closed) {
+        return Ok(());
+    }
+    let resolved = xarast_doc::attr::resolve_uncached(&doc.tree, node, &doc.defaults);
+    let AttrValue::StrokeColour(mut stroke) = resolved.get(AttrSlot::StrokeColour).clone() else {
+        return Ok(());
+    };
+    let mut colour = None;
+    stroke.for_each_value_mut(&mut |c| {
+        colour.get_or_insert_with(|| c.clone());
+    });
+    let Some(value) = colour else {
+        return Ok(());
+    };
+    let fill = AttrValue::Fill(FillGeometry::Flat { value });
+    if resolved.get(AttrSlot::FillGeometry) == &fill {
+        return Ok(());
+    }
+    xarast_doc::fill_edit::set_own_attr(tx, node, fill)
 }
 
 /// A colour made lighter as a new contour's is; "no colour" stays.
@@ -755,7 +935,7 @@ pub fn becomes_shapes(doc: &Document, c: NodeId) -> bool {
     })
 }
 
-/// A plain path standing at `anchor`/`how`, drawn as `desired` says
+/// A plain path as the last child of `group`, drawn as `desired` says
 /// (attribute children for what it would not inherit there).
 fn plain_path(
     tx: &mut Tx<'_>,
@@ -765,12 +945,32 @@ fn plain_path(
     desired: &ResolvedAttrs,
     group: NodeId,
 ) -> Result<(), EditError> {
+    new_path(
+        tx,
+        path,
+        (filled, stroked),
+        desired,
+        group,
+        Attach::LastChild,
+    )
+}
+
+/// A plain path standing at `anchor`/`how`, filled and stroked as `look`
+/// says, drawn as `desired` says.
+fn new_path(
+    tx: &mut Tx<'_>,
+    path: &xarast_geom::Path,
+    (filled, stroked): (bool, bool),
+    desired: &ResolvedAttrs,
+    anchor: NodeId,
+    how: Attach,
+) -> Result<(), EditError> {
     let p = tx.create(NodeKind::Path(Box::new(xarast_doc::PathNode {
         data: std::sync::Arc::new(path.clone()),
         filled,
         stroked,
     })))?;
-    tx.attach(p, group, Attach::LastChild)?;
+    tx.attach(p, anchor, how)?;
     let now = inherited_batch(tx.doc(), &[p])
         .remove(&p)
         .ok_or(EditError::WrongKind(p))?;
@@ -967,6 +1167,398 @@ fn unwrap(tx: &mut Tx<'_>, c: NodeId) -> Result<(), EditError> {
     tx.delete(c)
 }
 
+/// Why the original would not remove blend `c` (`None`: it would, or it
+/// is no blend): a contour or a bevel round it refuses the blend's
+/// removal (`Kernel/ncntrcnt.cpp:1250-1255`, `Kernel/nbevcont.cpp:2352-
+/// 2357`), and the tool says why (`tools/blndtool.cpp:5478-5488`).
+#[must_use]
+pub fn blend_removal_refusal(doc: &Document, c: NodeId) -> Option<&'static str> {
+    blend_params(doc, c)?;
+    if inside(doc, c, LiveEffect::Contour) {
+        return Some("A contoured blend cannot be removed: remove the contour first.");
+    }
+    if inside(doc, c, LiveEffect::Bevel) {
+        return Some("A bevelled blend cannot be removed: remove the bevel first.");
+    }
+    None
+}
+
+/// The blend controllers among `nodes` (an end stands for its blend),
+/// each once, in order.
+fn unique_blends(doc: &Document, nodes: &[NodeId]) -> Vec<NodeId> {
+    let mut out = Vec::new();
+    for n in nodes {
+        let c = effect_of(doc, *n, LiveEffect::Blend).or_else(|| blend_holding(doc, *n));
+        if let Some(c) = c
+            && !out.contains(&c)
+        {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// The path blend `c` runs along, when it has one.
+#[must_use]
+pub fn blend_path_of(doc: &Document, c: NodeId) -> Option<NodeId> {
+    blend_params(doc, c)?;
+    xarast_doc::blend::blend_path(&doc.tree, c)
+}
+
+/// Whether blend `c`'s path stands over its objects (after its source).
+fn path_over(doc: &Document, c: NodeId, path: NodeId) -> bool {
+    let Some(parts) = xarast_doc::live::parts(&doc.tree, c) else {
+        return true;
+    };
+    let kids: Vec<NodeId> = doc.tree.children(c).collect();
+    let at = |n: NodeId| kids.iter().position(|k| *k == n);
+    at(path) > at(parts.source)
+}
+
+/// A rough count of the work blending `node` costs: the points of every
+/// outline under it (the original's `EstimateNodeComplexity`, a path's
+/// used coordinate slots, `Kernel/nodepath.cpp:2426-2429`).
+#[must_use]
+pub fn complexity(doc: &Document, node: NodeId) -> u64 {
+    xarast_doc::contour::ink_nodes(&doc.tree, node)
+        .into_iter()
+        .filter_map(|n| xarast_doc::contour::geometry(doc, n))
+        .map(|p| p.points().len() as u64)
+        .sum()
+}
+
+/// Above this estimate a blend edit asks first: the original's
+/// `pathsBeforeAsk` for anything faster than a Pentium
+/// (`tools/blndtool.cpp:4350-4375`, `:5900-5925`).
+pub const LONG_JOB_ESTIMATE: u64 = 24_000;
+
+/// The original's estimate for blending `start` into `end`
+/// (`OpBlendNodes::DeterminBlendObjectsProcessorHit`,
+/// `tools/blndtool.cpp:4335-4345`): three times the start's points and
+/// twice the end's.
+#[must_use]
+pub fn new_blend_estimate(doc: &Document, start: NodeId, end: NodeId) -> u64 {
+    3 * complexity(doc, start) + 2 * complexity(doc, end)
+}
+
+/// The original's estimate for blend `c` drawn with `steps` steps
+/// (`NodeBlender::EstimateNodeComplexity`, `Kernel/nodebldr.cpp:2092-
+/// 2112`, summed over the pairs): half the steps, plus the start's
+/// points, plus half the steps times the end's points, per pair.
+#[must_use]
+pub fn blend_estimate(doc: &Document, c: NodeId, steps: u32) -> u64 {
+    let Some(parts) = xarast_doc::live::parts(&doc.tree, c) else {
+        return 0;
+    };
+    let half = u64::from(steps / 2);
+    xarast_doc::blend::blenders(&doc.tree, parts.source)
+        .into_iter()
+        .filter_map(|(_, s, e)| Some((s?, e?)))
+        .map(|(s, e)| half + complexity(doc, s) + half * complexity(doc, e))
+        .sum()
+}
+
+/// One end of a blend to move onto (or off) its path: rotated about its
+/// box centre by `turn` degrees, then its centre moved to `to`.
+struct Placement {
+    node: NodeId,
+    turn: f64,
+    to: Option<xarast_geom::Point>,
+}
+
+/// Applies placements worked out on the document as it stood.
+fn apply_placements(tx: &mut Tx<'_>, plan: &[Placement]) -> Result<(), EditError> {
+    let mut matrices = Vec::new();
+    for p in plan {
+        let r = crate::viewport::nodes_rect(tx.doc(), [p.node]);
+        if r.is_empty() {
+            continue;
+        }
+        let c = r.centre();
+        let mut m = Matrix::IDENTITY;
+        if p.turn.is_finite() && p.turn != 0.0 {
+            m = Matrix::rotate_about(p.turn.to_radians(), c);
+        }
+        if let Some(to) = p.to
+            && to != c
+        {
+            m = m.then(Matrix::translate(Vector::new(to.x - c.x, to.y - c.y)));
+        }
+        if m != Matrix::IDENTITY {
+            matrices.push((p.node, m));
+        }
+    }
+    for (n, m) in matrices {
+        tx.transform(n, m)?;
+    }
+    Ok(())
+}
+
+/// [`LiveEdit::PlaceOnPath`] for one blend; the blend's pair parameters
+/// record the angle each end now stands at. An object ending one pair and
+/// starting the next moves once, with the first pair (as the original),
+/// and the second pair records the angle it was given (Xarast's rule: the
+/// original leaves that pair's angle as it was).
+fn place_on_path(tx: &mut Tx<'_>, c: NodeId) -> Result<(), EditError> {
+    let doc = tx.doc();
+    let Some(path) = blend_path_of(doc, c) else {
+        return Ok(());
+    };
+    let Some(run) = (match doc.tree.kind(path) {
+        Some(NodeKind::Path(p)) => xarast_geom::blend::PathRun::new(&p.data),
+        _ => None,
+    }) else {
+        return Ok(());
+    };
+    let Some(old) = blend_params(doc, c).cloned() else {
+        return Ok(());
+    };
+    let source = source_of(doc, c)?;
+    let pairs = xarast_doc::blend::blenders(&doc.tree, source);
+    let mut params = old.clone();
+    if params.blenders.len() < pairs.len() {
+        params
+            .blenders
+            .resize(pairs.len(), BlenderParams::default());
+    }
+    let at = |prop: f64| {
+        let (p, angle) = run.at(run.length() * prop);
+        let deg = if old.tangential && angle.is_finite() {
+            angle.to_degrees()
+        } else {
+            0.0
+        };
+        (xarast_geom::Point::from_f64_round(p.x, p.y), deg)
+    };
+    let mut plan = Vec::new();
+    let mut last: Option<(NodeId, f64)> = None;
+    for (k, &(_, s, e)) in pairs.iter().enumerate() {
+        let (Some(s), Some(e)) = (s, e) else {
+            continue;
+        };
+        let b = &mut params.blenders[k];
+        let (s0, e0) = b.path_span.unwrap_or((0.0, 1.0));
+        let (s0, e0) = if b.path_reversed { (e0, s0) } else { (s0, e0) };
+        match last {
+            Some((n, angle)) if n == s => b.path_angles.0 = angle,
+            _ => {
+                let (to, angle) = at(s0);
+                plan.push(Placement {
+                    node: s,
+                    turn: angle - b.path_angles.0,
+                    to: Some(to),
+                });
+                b.path_angles.0 = angle;
+            }
+        }
+        let (to, angle) = at(e0);
+        plan.push(Placement {
+            node: e,
+            turn: angle - b.path_angles.1,
+            to: Some(to),
+        });
+        b.path_angles.1 = angle;
+        last = Some((e, angle));
+    }
+    apply_placements(tx, &plan)?;
+    if params != old {
+        tx.set_live_kind(c, &LiveKind::Blend(Box::new(params)))?;
+    }
+    Ok(())
+}
+
+/// Turns every end of blend `c` back upright (by the angle its pair
+/// records) and forgets the path's share, angles and direction
+/// (`NodeBlend::RotateBlendEndObjectsBack`, `Kernel/nodeblnd.cpp:2178-
+/// 2222`, and `DetachNodeBlendPath`, which unhooks every pair).
+fn unturn_ends(tx: &mut Tx<'_>, c: NodeId) -> Result<(), EditError> {
+    let doc = tx.doc();
+    let Some(old) = blend_params(doc, c).cloned() else {
+        return Ok(());
+    };
+    let source = source_of(doc, c)?;
+    let pairs = xarast_doc::blend::blenders(&doc.tree, source);
+    let mut plan = Vec::new();
+    let mut last = None;
+    for (k, &(_, s, e)) in pairs.iter().enumerate() {
+        let b = old.blender(k);
+        if let Some(s) = s
+            && Some(s) != last
+        {
+            plan.push(Placement {
+                node: s,
+                turn: -b.path_angles.0,
+                to: None,
+            });
+        }
+        if let Some(e) = e {
+            plan.push(Placement {
+                node: e,
+                turn: -b.path_angles.1,
+                to: None,
+            });
+        }
+        last = e;
+    }
+    apply_placements(tx, &plan)?;
+    let mut params = old.clone();
+    for b in &mut params.blenders {
+        b.path_span = None;
+        b.path_angles = (0.0, 0.0);
+        b.path_reversed = false;
+    }
+    if params != old {
+        tx.set_live_kind(c, &LiveKind::Blend(Box::new(params)))?;
+    }
+    Ok(())
+}
+
+/// [`LiveEdit::DetachPath`] for one blend: its ends upright, its path an
+/// object of its own, looking as it did, at `to`/`how`.
+fn detach_path(tx: &mut Tx<'_>, c: NodeId, to: NodeId, how: Attach) -> Result<(), EditError> {
+    let Some(path) = blend_path_of(tx.doc(), c) else {
+        return Ok(());
+    };
+    unturn_ends(tx, c)?;
+    let was = inherited_batch(tx.doc(), &[path]);
+    relocate(tx, path, to, how, &was)
+}
+
+/// The objects [`LiveEdit::AttachPath`] makes its path of: nothing that is
+/// or is inside a blend, nothing generated, nothing unreachable.
+fn path_objects(doc: &Document, paths: &[NodeId]) -> Vec<NodeId> {
+    in_render_order(doc, paths)
+        .into_iter()
+        .filter(|p| {
+            doc.tree.is_reachable(*p)
+                && !xarast_doc::live::in_generated(&doc.tree, *p)
+                && effect_of(doc, *p, LiveEffect::Blend).is_none()
+                && !doc
+                    .tree
+                    .ancestors(*p)
+                    .any(|a| blend_params(doc, a).is_some())
+        })
+        .collect()
+}
+
+/// One path from every outline under `objects`, and the first outline's
+/// object with how it is filled and stroked (`BlendPathBecomeA` merges
+/// what each object passes back and keeps the first one's attributes,
+/// `tools/blndtool.cpp:4878-4960`).
+fn merged_outline(
+    doc: &Document,
+    objects: &[NodeId],
+) -> Option<(xarast_geom::Path, NodeId, bool, bool)> {
+    let mut merged: Option<xarast_geom::Path> = None;
+    let mut look: Option<(NodeId, bool, bool)> = None;
+    for o in objects {
+        for ink in xarast_doc::contour::ink_nodes(&doc.tree, *o) {
+            let Some(g) = xarast_doc::contour::geometry(doc, ink).filter(|g| !g.is_empty()) else {
+                continue;
+            };
+            if look.is_none() {
+                let (f, s) = match doc.tree.kind(ink) {
+                    Some(NodeKind::Path(p)) => (p.filled, p.stroked),
+                    _ => (true, true),
+                };
+                look = Some((ink, f, s));
+            }
+            merged = Some(match merged {
+                Some(m) => joined(&m, &g),
+                None => g,
+            });
+        }
+    }
+    let (first, f, s) = look?;
+    Some((merged?, first, f, s))
+}
+
+/// [`LiveEdit::AttachPath`].
+fn attach_path(tx: &mut Tx<'_>, blends: &[NodeId], paths: &[NodeId]) -> Result<(), EditError> {
+    let doc = tx.doc();
+    let blends: Vec<NodeId> = unique_blends(doc, blends)
+        .into_iter()
+        .filter(|b| doc.tree.is_reachable(*b) && !xarast_doc::live::in_generated(&doc.tree, *b))
+        .collect();
+    let objects = path_objects(doc, paths);
+    if blends.is_empty() {
+        return Ok(());
+    }
+    let Some((merged, first, filled, stroked)) = merged_outline(doc, &objects) else {
+        return Ok(());
+    };
+    // The path goes over a blend when a blend came first in render order
+    // (`OpAddBlendPath::IsBlendPathOnTopOfBlend`).
+    let mut all = blends.clone();
+    all.extend(objects.iter().copied());
+    let on_top = in_render_order(doc, &all)
+        .first()
+        .is_some_and(|n| blends.contains(n));
+    let desired = xarast_doc::attr::resolve_uncached(&doc.tree, first, &doc.defaults);
+    for &b in &blends {
+        if let Some(old) = blend_path_of(tx.doc(), b) {
+            tx.delete(old)?;
+        }
+        let source = source_of(tx.doc(), b)?;
+        let (anchor, how) = if on_top {
+            (b, Attach::LastChild)
+        } else {
+            (source, Attach::Prev)
+        };
+        new_path(tx, &merged, (filled, stroked), &desired, anchor, how)?;
+        // Each pair an equal share, in order
+        // (`NodeBlend::InitBlenderPathProportions`, `Kernel/nodeblnd.cpp:
+        // 2153-2176`).
+        let doc = tx.doc();
+        let n = xarast_doc::blend::blenders(&doc.tree, source).len();
+        if let Some(old) = blend_params(doc, b).cloned()
+            && n > 0
+        {
+            let mut params = old.clone();
+            if params.blenders.len() < n {
+                params.blenders.resize(n, BlenderParams::default());
+            }
+            let share = 1.0 / n as f64;
+            for (k, p) in params.blenders.iter_mut().enumerate().take(n) {
+                p.path_span = Some((k as f64 * share, ((k + 1) as f64 * share).min(1.0)));
+                p.path_reversed = false;
+            }
+            if params != old {
+                tx.set_live_kind(b, &LiveKind::Blend(Box::new(params)))?;
+            }
+        }
+        place_on_path(tx, b)?;
+    }
+    for o in objects {
+        tx.delete(o)?;
+    }
+    Ok(())
+}
+
+/// `first` followed by `more`'s subpaths.
+fn joined(first: &xarast_geom::Path, more: &xarast_geom::Path) -> xarast_geom::Path {
+    let mut verbs = first.verbs().to_vec();
+    verbs.extend_from_slice(more.verbs());
+    let mut points = first.points().to_vec();
+    points.extend_from_slice(more.points());
+    xarast_geom::Path::from_parts(verbs, points, Vec::new()).unwrap_or_else(|_| first.clone())
+}
+
+/// [`LiveEdit::Remove`] of a blend: its ends upright, then its objects and
+/// its path, in the order they stood, out before it, looking as they did
+/// (`OpRemoveBlend`, `tools/blndtool.cpp:5440-5545`).
+fn unwrap_blend(tx: &mut Tx<'_>, c: NodeId) -> Result<(), EditError> {
+    match blend_path_of(tx.doc(), c) {
+        // Beneath the objects: out first, so it stays beneath them.
+        Some(p) if !path_over(tx.doc(), c, p) => detach_path(tx, c, c, Attach::Prev)?,
+        // Over them: just over the blend, which the objects come out
+        // beneath.
+        Some(_) => detach_path(tx, c, c, Attach::Next)?,
+        None => {}
+    }
+    unwrap(tx, c)
+}
+
 /// Replaces a controller's parameters, and its generated and source
 /// nodes', which carry the same (as the readers build them): the one edit
 /// the document allows on a generated node (`Tx::set_live_kind`).
@@ -1022,6 +1614,18 @@ pub fn removed_members(
 ) -> Vec<(NodeId, Vec<NodeId>)> {
     let mut out = Vec::new();
     for e in edits {
+        // A detached path is selected with its blend
+        // (`NodeBlend::DetachNodeBlendPath` selects it).
+        if let LiveEdit::DetachPath { blends } = e {
+            for c in unique_blends(doc, blends) {
+                if selection.contains(&c)
+                    && let Some(p) = blend_path_of(doc, c)
+                {
+                    out.push((c, vec![c, p]));
+                }
+            }
+            continue;
+        }
         let LiveEdit::Remove { targets, effect } = e else {
             continue;
         };
@@ -1039,7 +1643,20 @@ pub fn removed_members(
             let Some(parts) = xarast_doc::live::parts(&doc.tree, c) else {
                 continue;
             };
-            out.push((c, objects_in(doc, parts.source)));
+            if blend_removal_refusal(doc, c).is_some() {
+                continue;
+            }
+            let mut members = objects_in(doc, parts.source);
+            // A blend's path comes out with its objects, beneath or over
+            // them as it stood, and is selected too.
+            if let Some(p) = blend_path_of(doc, c) {
+                if path_over(doc, c, p) {
+                    members.push(p);
+                } else {
+                    members.insert(0, p);
+                }
+            }
+            out.push((c, members));
         }
     }
     out

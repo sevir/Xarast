@@ -1032,7 +1032,10 @@ impl Tool for ShapeEditorTool {
             | ToolAction::PastePerspective
             | ToolAction::RotateMould
             | ToolAction::FlipHorizontal
-            | ToolAction::FlipVertical => false,
+            | ToolAction::FlipVertical
+            | ToolAction::AttachBlendPath
+            | ToolAction::DetachBlendPath
+            | ToolAction::Proceed => false,
             ToolAction::NextPoint
             | ToolAction::PreviousPoint
             | ToolAction::FirstPoint

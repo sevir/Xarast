@@ -201,7 +201,10 @@ fn parameters(s: &Session) -> Vec<(InfobarField, Option<InfobarValue>)> {
 fn is_selector(field: InfobarField) -> bool {
     matches!(
         field,
-        InfobarField::MouldPoint | InfobarField::MouldGrid | InfobarField::MouldDetach
+        InfobarField::MouldPoint
+            | InfobarField::MouldGrid
+            | InfobarField::MouldDetach
+            | InfobarField::ContourStepsMode
     )
 }
 
@@ -296,6 +299,7 @@ fn contour_parameters_by_keyboard() {
             "ContourJoin",
             "ContourSide",
             "ContourSteps",
+            "ContourStepsMode",
             "ContourWidth",
         ],
     );

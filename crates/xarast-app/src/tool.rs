@@ -623,6 +623,11 @@ pub enum InfobarField {
     ContourColourGain,
     /// One ring at the full width drawn instead of the object.
     ContourInset,
+    /// Whether the contour's steps field counts rings or gives the
+    /// distance between them (XARA-T-0343).
+    ContourStepsMode,
+    /// The distance between a contour's rings.
+    ContourStepDistance,
     /// How many steps a blend draws between each pair (phase 13, F8).
     BlendSteps,
     /// How colours run across a blend's steps.
@@ -639,6 +644,9 @@ pub enum InfobarField {
     BlendAttrBias,
     /// The blend attribute profile's gain.
     BlendAttrGain,
+    /// Whether a blend along a curve turns its steps with the curve
+    /// (XARA-T-0343).
+    BlendTangential,
     /// An envelope preset to apply, or to give the selected moulds
     /// (phase 13, G9).
     MouldEnvelope,
@@ -724,6 +732,9 @@ impl InfobarField {
             InfobarField::ContourColourBias | InfobarField::BlendAttrBias => "Colour bias",
             InfobarField::ContourColourGain | InfobarField::BlendAttrGain => "Colour gain",
             InfobarField::ContourInset => "Inset path",
+            InfobarField::ContourStepsMode => "By",
+            InfobarField::ContourStepDistance => "Distance",
+            InfobarField::BlendTangential => "Tangential",
             InfobarField::BlendOneToOne => "One to one",
             InfobarField::BlendAntialias => "Antialias",
             InfobarField::MouldEnvelope => "Envelope",
@@ -817,6 +828,11 @@ impl InfobarField {
                 "Pushes the colour change towards the middle or the ends"
             }
             InfobarField::ContourInset => "Draw one path at the full width instead of the object",
+            InfobarField::ContourStepsMode => {
+                "Set the contour's rings by their number or by the distance between them"
+            }
+            InfobarField::ContourStepDistance => "How far apart the contour's rings are",
+            InfobarField::BlendTangential => "Turn the blend's steps with the curve they follow",
             InfobarField::BlendSteps => "How many steps the blend draws between its objects",
             InfobarField::BlendEffect => "How colours run from one object to the next",
             InfobarField::BlendOneToOne => "Match the objects' points one to one",
@@ -1345,6 +1361,14 @@ pub enum ToolAction {
     FirstPoint,
     /// `End`: shift it on so the last point is selected.
     LastPoint,
+    /// Make the selected blends follow the curve of the other selected
+    /// objects (phase 13 F6, XARA-T-0343).
+    AttachBlendPath,
+    /// Take the curve away from the selected blends.
+    DetachBlendPath,
+    /// Answer "yes" to the question a tool asks in its infobar before a
+    /// long job (XARA-T-0343).
+    Proceed,
 }
 
 impl ToolAction {
@@ -1375,6 +1399,9 @@ impl ToolAction {
             ToolAction::PreviousPoint => "Previous point",
             ToolAction::FirstPoint => "First point",
             ToolAction::LastPoint => "Last point",
+            ToolAction::AttachBlendPath => "Blend along curve",
+            ToolAction::DetachBlendPath => "Detach curve",
+            ToolAction::Proceed => "Continue",
         }
     }
 }
