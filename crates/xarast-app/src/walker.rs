@@ -2744,8 +2744,7 @@ mod tests {
         use xarast_color::{Colour, ColourValue, Rgba8, Transparency};
         use xarast_doc::fill::{FillGeometry, Paint};
         use xarast_doc::{
-            AttrValue, BevelParams, BuildLimits, LiveKind, LiveNode, LiveRole, PathNode,
-            RegenState,
+            AttrValue, BevelParams, BuildLimits, LiveKind, LiveNode, LiveRole, PathNode, RegenState,
         };
         let mut b = xarast_doc::builder::skeleton(BuildLimits::default()).unwrap();
         let kind = LiveKind::Bevel(Box::new(BevelParams {

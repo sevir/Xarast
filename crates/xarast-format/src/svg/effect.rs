@@ -411,10 +411,7 @@ fn ramp_table(width_in_sigmas: f64) -> String {
                 hi = mid;
             }
         }
-        out.push(f64s(
-            (0.5 * (lo + hi) / width_in_sigmas).clamp(0.0, 1.0),
-            4,
-        ));
+        out.push(f64s((0.5 * (lo + hi) / width_in_sigmas).clamp(0.0, 1.0), 4));
     }
     out.join(" ")
 }
@@ -628,8 +625,16 @@ pub(crate) fn bevel(b: &Bevel<'_>, region: Region) -> FilterChain {
         }
     }
     let (dx, dy) = (
-        if ox == 0.0 { 0.0 } else { ox + 0.1 * ox.signum() },
-        if oy == 0.0 { 0.0 } else { oy + 0.1 * oy.signum() },
+        if ox == 0.0 {
+            0.0
+        } else {
+            ox + 0.1 * ox.signum()
+        },
+        if oy == 0.0 {
+            0.0
+        } else {
+            oy + 0.1 * oy.signum()
+        },
     );
     s.push_str("<feOffset");
     attr(&mut s, "in", "h");
@@ -647,7 +652,9 @@ pub(crate) fn bevel(b: &Bevel<'_>, region: Region) -> FilterChain {
     for (name, table) in [("w", dark), ("a", light)] {
         s.push_str(&format!("<feComponentTransfer in=\"d\" result=\"{name}\">"));
         for ch in ["R", "G", "B"] {
-            s.push_str(&format!("<feFunc{ch} type=\"table\" tableValues=\"{table}\"/>"));
+            s.push_str(&format!(
+                "<feFunc{ch} type=\"table\" tableValues=\"{table}\"/>"
+            ));
         }
         s.push_str("</feComponentTransfer>");
     }
@@ -656,7 +663,9 @@ pub(crate) fn bevel(b: &Bevel<'_>, region: Region) -> FilterChain {
     let band = format!("0 {}0", "1 ".repeat(63));
     s.push_str("<feComponentTransfer in=\"h\" result=\"m\">");
     for ch in ["R", "G", "B"] {
-        s.push_str(&format!("<feFunc{ch} type=\"table\" tableValues=\"{band}\"/>"));
+        s.push_str(&format!(
+            "<feFunc{ch} type=\"table\" tableValues=\"{band}\"/>"
+        ));
     }
     s.push_str("</feComponentTransfer>");
     s.push_str("<feComposite in=\"w\" in2=\"m\" operator=\"arithmetic\" k1=\"1\" k3=\"-1\" k4=\"1\" result=\"w\"/>");
@@ -699,9 +708,7 @@ pub(crate) fn bevel(b: &Bevel<'_>, region: Region) -> FilterChain {
         s.push_str(" result=\"k\"/>");
         s.push_str("<feComposite in=\"p\" in2=\"k\" operator=\"in\" result=\"s\"/>");
         s.push_str("<feComposite in=\"s\" in2=\"SourceAlpha\" operator=\"in\" result=\"s\"/>");
-        s.push_str(
-            "<feMerge><feMergeNode in=\"SourceGraphic\"/><feMergeNode in=\"s\"/></feMerge>",
-        );
+        s.push_str("<feMerge><feMergeNode in=\"SourceGraphic\"/><feMergeNode in=\"s\"/></feMerge>");
     } else {
         s.push_str("<feComposite in=\"p\" in2=\"SourceAlpha\" operator=\"in\"/>");
     }
@@ -916,7 +923,10 @@ mod tests {
         // outside it.
         let tables: Vec<&str> = s.split("tableValues=\"").skip(1).collect();
         let mask = tables[9].split('"').next().unwrap();
-        assert!(mask.starts_with("0 1 1 ") && mask.ends_with(" 1 1 0"), "{mask}");
+        assert!(
+            mask.starts_with("0 1 1 ") && mask.ends_with(" 1 1 0"),
+            "{mask}"
+        );
         assert!(s.contains("in2=\"SourceAlpha\" operator=\"in\""));
         assert!(!s.contains("<feMerge>"));
     }
@@ -991,7 +1001,11 @@ mod tests {
         // The union of rectangles under |x| + |y| = indent, none with a
         // zero side.
         let s = outer(Join::Bevel, true);
-        assert_eq!(s.matches("operator=\"dilate\"").count(), CHAMFER_STEPS, "{s}");
+        assert_eq!(
+            s.matches("operator=\"dilate\"").count(),
+            CHAMFER_STEPS,
+            "{s}"
+        );
         assert!(s.contains("radius=\".1667 3.8333\""), "{s}");
         assert!(!s.contains("radius=\"0 "), "{s}");
         // Everything else, and a round join, is a disc: a square would
@@ -1023,12 +1037,25 @@ mod tests {
             inner_paint: true,
         };
         let s = written(bevel(&b, Region::Object { margin: 0.5 }));
-        assert!(s.contains("<feFlood flood-color=\"#2850dc\" result=\"c\"/>"), "{s}");
+        assert!(
+            s.contains("<feFlood flood-color=\"#2850dc\" result=\"c\"/>"),
+            "{s}"
+        );
         assert!(!s.contains("in=\"SourceGraphic\" type=\"matrix\""), "{s}");
         // The band mask carries the opacity; the paint goes over the object
         // and is cut to it.
-        assert!(s.contains("values=\"0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .5 0 0 0 0\""), "{s}");
-        assert!(s.contains("<feMerge><feMergeNode in=\"SourceGraphic\"/><feMergeNode in=\"s\"/></feMerge>"), "{s}");
-        assert!(s.contains("<feComposite in=\"s\" in2=\"SourceAlpha\" operator=\"in\" result=\"s\"/>"));
+        assert!(
+            s.contains("values=\"0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .5 0 0 0 0\""),
+            "{s}"
+        );
+        assert!(
+            s.contains(
+                "<feMerge><feMergeNode in=\"SourceGraphic\"/><feMergeNode in=\"s\"/></feMerge>"
+            ),
+            "{s}"
+        );
+        assert!(
+            s.contains("<feComposite in=\"s\" in2=\"SourceAlpha\" operator=\"in\" result=\"s\"/>")
+        );
     }
 }

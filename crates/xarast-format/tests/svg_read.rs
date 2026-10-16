@@ -2009,7 +2009,13 @@ fn morphologies_per_filter(svg: &str) -> Vec<usize> {
     svg.split("<filter ")
         .skip(1)
         .filter(|f| f.contains("xarast:filter=\"bevel\""))
-        .map(|f| f.split("</filter>").next().unwrap().matches("<feMorphology").count())
+        .map(|f| {
+            f.split("</filter>")
+                .next()
+                .unwrap()
+                .matches("<feMorphology")
+                .count()
+        })
         .collect()
 }
 
@@ -2046,8 +2052,14 @@ fn an_inner_bevel_with_a_flat_paint_bakes_that_paint_over_the_object() {
     // The bevel's own colour paints the band; without one the object's flat
     // fill does (the renderer's `paint_inner`, which takes the first
     // object's fill when it is flat).
-    assert!(filters[0].contains("<feFlood flood-color=\"#334de6\""), "{svg}");
-    assert!(filters[1].contains("<feFlood flood-color=\"#e6801a\""), "{svg}");
+    assert!(
+        filters[0].contains("<feFlood flood-color=\"#334de6\""),
+        "{svg}"
+    );
+    assert!(
+        filters[1].contains("<feFlood flood-color=\"#e6801a\""),
+        "{svg}"
+    );
 }
 
 #[test]
@@ -2055,7 +2067,9 @@ fn a_painted_inner_band_takes_its_object_s_flat_transparency() {
     let cases = [(rectangle(10_000, 10_000), false, None, None)];
     let band = |doc: &Document| {
         let svg = svg_of(&package(doc, SvgOptions::default()));
-        let i = svg.find("values=\"0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ").expect("{svg}");
+        let i = svg
+            .find("values=\"0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ")
+            .expect("{svg}");
         svg[i + 38..].split(' ').next().unwrap().to_owned()
     };
     assert_eq!(band(&bake_bevel_doc(&cases)), "1");
