@@ -2,14 +2,15 @@
 id: XARA-T-0343
 type: task
 title: "Contour/blend tool follow-ups: point-mapping and remap drags, steps/distance toggle, inner width clamp, new-contour fills for open paths, handle snapping, heavy-blend confirmation"
-status: in_progress
+status: done
 priority: low
 parent: XARA-US-0070
 author: mcp
 labels: [phase-13, tools, app]
 created: 2026-10-16T00:08:37Z
-updated: 2026-10-16T15:00:32Z
+updated: 2026-10-16T16:40:47Z
 started: 2026-10-16T15:00:32Z
+closed: 2026-10-16T16:40:47Z
 ---
 
 ## Description
