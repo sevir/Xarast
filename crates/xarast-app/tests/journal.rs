@@ -108,6 +108,7 @@ enum Work {
     Type,
     Colour(u8),
     Place(u8),
+    Replace(u8),
     Nudges(u8),
     Undo,
     Redo,
@@ -128,6 +129,7 @@ fn work_strategy() -> impl Strategy<Value = Work> {
         1 => Just(Work::Type),
         1 => any::<u8>().prop_map(Work::Colour),
         1 => any::<u8>().prop_map(Work::Place),
+        1 => any::<u8>().prop_map(Work::Replace),
         1 => any::<u8>().prop_map(Work::Nudges),
         2 => Just(Work::Undo),
         1 => Just(Work::Redo),
@@ -252,6 +254,13 @@ fn work(app: &mut AppState, clock: &mut Instant, w: &Work) {
         Work::Place(seed) => {
             let _ = s.place_image(picture(*seed), None, "Place Image");
         }
+        Work::Replace(seed) => {
+            // The gallery's Replace on the first bitmap, if there is one.
+            let first = s.doc.resources.bitmaps().next().map(|(id, _)| id);
+            if let Some(id) = first {
+                let _ = s.replace_bitmap(id, picture(*seed).resource);
+            }
+        }
         Work::Nudges(i) => {
             // A keyboard nudge run: one gesture, merged into one step.
             if let Some(n) = pick(s, *i) {
@@ -329,6 +338,7 @@ const BASIC: &[Work] = &[
     Work::Type,
     Work::Colour(40),
     Work::Place(7),
+    Work::Replace(9),
     Work::Group,
     Work::Nudges(2),
     Work::Undo,
@@ -356,6 +366,7 @@ fn a_crash_after_n_operations_recovers_the_live_digest() {
     assert!(lines.contains("\"op\":\"redo\""));
     assert!(lines.contains("\"merged\":true"), "the nudge run merges");
     assert!(lines.contains("\"op\":\"tables\""), "the placed bitmap");
+    assert!(lines.contains("replace_bitmap"), "the replace is an action");
     crash(app, &store);
 
     let mut next = recover(&store);

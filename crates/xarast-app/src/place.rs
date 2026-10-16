@@ -171,7 +171,12 @@ fn doc_format(f: ImageFormat) -> Option<xarast_doc::ImageFormat> {
 }
 
 /// Straight RGBA8 as a PNG, with its resolution in `pHYs` when it has one.
-fn encode_png(width: u32, height: u32, rgba: &[u8], dpi: Option<u32>) -> Result<Vec<u8>, String> {
+pub(crate) fn encode_png(
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+    dpi: Option<u32>,
+) -> Result<Vec<u8>, String> {
     let header = xarast_io::png::PngHeader {
         width,
         height,

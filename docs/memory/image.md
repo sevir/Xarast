@@ -417,7 +417,24 @@ decisions 29 and 42); what matters on this side:
   or PNM converted to PNG at placement **loses its profile** (the
   `xarast-io` encoder writes an `sRGB` chunk and no `iCCP`). T10.8.2 —
   profiles as document resources under `resources/profiles/` — is open
-  (XARA-T-0291). Replace-bitmap (T10.7.6) is XARA-T-0290.
+  (XARA-T-0291).
+- **Replace and Save a copy (T10.7.6, XARA-T-0290)**: Replace decodes the
+  chosen file with `place::image_from_file` — the same decode, limits and
+  storage rule as an import (so a WebP or TIFF is stored as a PNG and a
+  PNG/JPEG/GIF keeps its bytes) — and swaps the whole `BitmapResource`
+  behind the id (`ReplaceBitmap`, `app-core.md` "Replace and Save a
+  copy"). The new file's name becomes the bitmap's name; size, dpi and
+  format are the new file's, the placements' parallelograms and the fills'
+  axes are **not** adjusted to the new aspect (the image is stretched to
+  the same box; a "keep the aspect" option is a possible follow-up). Save a copy writes
+  the stored original **verbatim** when its format is PNG, JPEG, GIF or
+  BMP (no re-encode, so no generation loss and any embedded ICC profile
+  survives); a bitmap with no original, or whose "original" is a `.xar`
+  compressed DIB (`ImageFormat::Unknown`, not a file), is written as a PNG
+  of the walker's decoded base level (`DecodedImages::image_for`, the same
+  pixels the thumbnail shows; `pHYs` from the bitmap's dpi). Dead end:
+  none yet; open: a very large replacement file is decoded inline on the
+  interface thread (an import goes to the background above 1 MiB).
 
 ### Pixel memory budget (XARA-US-0053, 2026-09-24)
 
@@ -658,7 +675,7 @@ job each:
   `reduce_level` would shorten the wait for the exact picture; nothing
   blocks on it.
 - Bitmap gallery (XARA-US-0055): thumbnails on disk and the thumbnail
-  budget (XARA-T-0289); Replace and Save a copy (XARA-T-0290); ICC
+  budget (XARA-T-0289); ICC
   profiles as resources and through the placement PNG conversion
   (XARA-T-0291). (One decode dispatch for the walker and the
   thumbnailer: done, XARA-T-0293.)

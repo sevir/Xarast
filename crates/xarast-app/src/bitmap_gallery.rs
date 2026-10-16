@@ -172,6 +172,13 @@ pub enum BitmapGalleryOp {
     Place(BitmapId),
     /// Delete a bitmap nothing uses; refused with a notice otherwise.
     Delete(BitmapId),
+    /// Replace the bitmap with an image file chosen through the Import
+    /// chooser: every placement, fill and transparency that uses it
+    /// follows (XARA-T-0290). Asks the platform; `AppState` answers it.
+    Replace(BitmapId),
+    /// Write a copy of the bitmap under a name chosen through the save
+    /// chooser (XARA-T-0290). Asks the platform; `AppState` answers it.
+    SaveCopy(BitmapId),
     /// A bitmap was picked up.
     DragBegin(BitmapId),
     /// The pointer moved during the drag.
@@ -414,6 +421,9 @@ pub(crate) fn run(session: &mut Session, op: BitmapGalleryOp) -> Result<Changed,
                 Err(_) => Changed::empty(),
             },
         ),
+        // Application-level: `AppState::apply` takes these before a
+        // session sees them (they need the platform's choosers).
+        BitmapGalleryOp::Replace(_) | BitmapGalleryOp::SaveCopy(_) => Ok(Changed::empty()),
         BitmapGalleryOp::DragBegin(id) => {
             if session.doc.resources.bitmap(id).is_none() {
                 return Ok(Changed::empty());
@@ -458,6 +468,74 @@ pub(crate) fn run(session: &mut Session, op: BitmapGalleryOp) -> Result<Changed,
             Changed::empty()
         }),
     }
+}
+
+// ──────────────────────── replace and save a copy ────────────────────────
+
+/// What the save chooser offers for a bitmap's copy (XARA-T-0290).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CopyPlan {
+    /// The file name offered, with its extension.
+    pub file_name: String,
+    /// The extension of what will be written, without the dot.
+    pub extension: &'static str,
+    /// The filter's name ("PNG (*.png)").
+    pub filter: String,
+}
+
+/// The extension and filter name of the stored original when it is a file
+/// format as it is; `None` for a bitmap with no original, or one whose
+/// bytes are not a file (a `.xar` compressed DIB).
+fn original_kind(res: &BitmapResource) -> Option<(&'static str, &'static str)> {
+    use xarast_doc::ImageFormat as F;
+    match res.original.as_ref()?.format {
+        F::Png => Some(("png", "PNG")),
+        F::Jpeg => Some(("jpg", "JPEG")),
+        F::Gif => Some(("gif", "GIF")),
+        F::Bmp => Some(("bmp", "BMP")),
+        F::Unknown => None,
+    }
+}
+
+/// What Save a copy offers for `res`: the stored original's own format
+/// when it has one, else a PNG of the native pixels; the name is the
+/// bitmap's with that extension.
+#[must_use]
+pub fn copy_plan(res: &BitmapResource) -> CopyPlan {
+    let (extension, kind) = original_kind(res).unwrap_or(("png", "PNG"));
+    let stem = std::path::Path::new(res.name.as_ref())
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .map(|s| s.replace(['/', '\\', '\0'], "_"))
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "bitmap".to_owned());
+    CopyPlan {
+        file_name: format!("{stem}.{extension}"),
+        extension,
+        filter: format!("{kind} (*.{extension})"),
+    }
+}
+
+/// The bytes Save a copy writes: the stored original verbatim when the
+/// bitmap has one in a file format (no re-encoding, so a JPEG loses
+/// nothing), else a PNG of its decoded pixels.
+///
+/// # Errors
+///
+/// Why the pixels could not be decoded or encoded.
+pub fn copy_bytes(res: &BitmapResource, images: &DecodedImages) -> Result<Arc<[u8]>, String> {
+    if original_kind(res).is_some()
+        && let Some(o) = &res.original
+    {
+        return Ok(Arc::clone(&o.bytes));
+    }
+    let image = images
+        .image_for(res, PixelBudget::global())
+        .ok_or_else(|| "the bitmap has no pixels to write".to_owned())?;
+    let base = image.level(0);
+    let dpi = (res.info.dpi_x > 0).then_some(res.info.dpi_x);
+    let png = crate::place::encode_png(image.width(), image.height(), &base.data, dpi)?;
+    Ok(Arc::from(png))
 }
 
 // ─────────────────────────────── thumbnails ───────────────────────────────

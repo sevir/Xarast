@@ -733,6 +733,7 @@ Numbered after phase 9's decisions because the colour bar landed later.
 | `Intent::ImportImage` (drop), `Intent::PasteImage` (clipboard picture), `Session::place_image`, `place` module (decode once, store, natural size, `bitmap_pixels`) | `place.rs`, `app.rs`, `session.rs`, `intent.rs` | done (T10.3.8) |
 | Shell: image files in a drop are placed at the drop point; Paste falls back to the clipboard's picture | `xarast-shell/src/viewer.rs` | done |
 | Bitmap gallery model: entries (uses, memory, colour space), thumbnails off-thread, Place, Delete unused, drag → bitmap fill or placement (`Intent::BitmapGallery`) | `bitmap_gallery.rs`; `xarast-doc` `bitmap_usage`, `remove_unused_bitmap`, `bitmap_key` | done (XARA-US-0055, T10.7.1–T10.7.3) |
+| Gallery Replace (Import chooser for one file → `ReplaceBitmap`, one undo step, users follow) and Save a copy (original bytes or a PNG of the pixels through the portal save chooser): `BitmapGalleryOp::{Replace, SaveCopy}`, `PlatformRequest::{ShowReplaceBitmapDialog, ShowSaveCopyDialog}` | `app.rs`, `bitmap_gallery.rs`, `walker.rs`; `xarast-doc` `bitmap_place.rs` | done (XARA-T-0290, T10.7.6) |
 | File › Import… (`AppCommand::Import`, `Intent::ShowImportDialog`), background imports with progress and cancel (`import.rs`, `Intent::CancelImports`), file-list paste (`place::image_paths_in_text`) | `import.rs`, `place.rs`, `app.rs`, `command.rs` | done (T10.7.4, T10.7.5) |
 
 Tests: `tests/bitmap_fill.rs` (6: handle positions and arms; an edge drag

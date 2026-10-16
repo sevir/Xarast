@@ -738,6 +738,20 @@ Two things Phase 3 was asked to check against the corpus, **now answered**
   pair did nothing (there was no stop to hold the family). It now writes
   the implied pair (0 at black, 255 at white) in the new family.
 
+## Replacing a bitmap resource (XARA-T-0290, 2026-10-16)
+
+`Action::ReplaceBitmap { id, new: Arc<BitmapResource> }` /
+`Tx::replace_bitmap` / command `ReplaceBitmap`: the whole resource behind
+a `BitmapId` swaps, inverse = the resource as it was. Invariants: the id
+stays valid for every reference (nothing in the tree changes); only the
+nodes that name the id get a new content revision (not
+`touch_resources`, which would move every node's scope — see
+`app-core.md` "Replace and Save a copy"); the deduplication index follows
+but `tables_rev` does not move (the journal records the action, not a
+table). If the new content equals another bitmap's, both keep their ids
+and `bitmap_key` of the later one falls back to hashing (the gallery does
+this already). Journalled as `Act::ReplaceBitmap`.
+
 ## The operation journal's model half (XARA-T-0217, F6.6, 2026-10-16)
 
 Module `journal` (`mod.rs`, `base.rs`, `blob.rs`, `ndjson.rs`); the I/O

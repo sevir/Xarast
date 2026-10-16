@@ -966,6 +966,73 @@ placer (XARA-T-0259, 2026-09-24, ext4, load ≈ 3): ProbeX16 UI thread
   stops a running export (else closes); `Close` cancels and closes.
 - Session ignores the four new intents (they are `AppState`'s).
 
+### Replace and Save a copy in the bitmap gallery (XARA-T-0290, 2026-10-16)
+
+- **`ReplaceBitmap` (`xarast-doc/src/bitmap_place.rs`)** is a `Command`
+  over a new `Action::ReplaceBitmap { id, new: Arc<BitmapResource> }`
+  (`Tx::replace_bitmap`): the whole resource (name, info, pixels,
+  original, procedural, transparent index) goes behind the same
+  `BitmapId`; the inverse carries the resource as it was, so undo and
+  redo are digest-exact. It is **in the history**, unlike insertion
+  (XARA-T-0283). `SetResource` (pixels only, used by nothing in the app
+  today) is a different action and stays.
+- **Damage without a diff of its own.** `apply` does **not** call
+  `touch_resources` (that moves `resources_rev`, which seeds the
+  walker's scope fold, so every node's content hash would change and the
+  scene diff would repaint the document). It `touch`es and
+  `note_change`s only the nodes `resources::uses_bitmap` names — bitmap
+  objects and fill/transparency attributes naming the id — one pass over
+  the arena. The walk then rebuilds the scene (as for every edit) and
+  `xarast_render::scene_damage` compares images by content, so the damage
+  is the users' extents: `tests/bitmap_replace.rs`
+  `a_replace_repaints_only_the_objects_using_the_bitmap` checks no
+  rectangle touches an unrelated bitmap and that repainting the damage
+  alone equals a full render. `swap_bitmap` keeps `bitmap_by_hash`
+  coherent (the old content's entry goes when it named the id; the new
+  content's is added unless another bitmap already has it) and does not
+  bump `tables_rev`.
+- **Journal.** `journal::Act::ReplaceBitmap { id, new }` (id is the
+  slotmap key — the table is identical in base and replay, `Op::Tables`
+  precedes any insertion). `BitmapResource` already serialises through
+  `journal::blob`, so pixels and original of 4 KiB or more are blobs and
+  the line carries only the SHA-256 (`tests/journal.rs`
+  `a_replace_is_journalled_and_replays_with_its_undo`, plus
+  `JOp::ReplaceBitmap` in the proptest; app-side `Work::Replace` in the
+  crash tests).
+- **The walker had to learn that an id's resource can change.**
+  `SceneWalker::images` was keyed by `BitmapId` and never revisited.
+  `register_images` now remembers the resource each id was registered
+  from (`image_src`: `decoded::resource_of`, the pointers of pixels and
+  original + size) and, on a mismatch, `invalidate_bitmap`s: the image
+  slot is kept (`stale_slots`) and refilled in place so `ImageId`s stay
+  stable, the failure is forgotten, and every photo-derived image and
+  proxy of that master is parked. This also covers undo (the old
+  resource's pointers come back).
+- **Flow (`AppState`).** `BitmapGalleryOp::Replace(id)` /
+  `SaveCopy(id)` are taken in `AppState::apply` (a session never sees
+  them; `bitmap_gallery::run` ignores them). Replace remembers
+  `(document, id)` in `replacing` and queues
+  `PlatformRequest::ShowReplaceBitmapDialog` (the Import chooser, one
+  file, `replace_request` in the shell); the answer is
+  `Intent::ReplaceBitmapWith(path)` → `Session::replace_bitmap` ("Replace
+  Bitmap"). A file that is not an image gives the "Could not replace the
+  bitmap" notice and changes nothing; an answer with no pending replace
+  is ignored. Save a copy queues `PlatformRequest::ShowSaveCopyDialog`
+  (title, `stem.ext`, document directory, filter "PNG (*.png)", the
+  extension — the export dialog's `ShowExportFileDialog` pattern) and
+  the answer `Intent::SaveBitmapCopyTo(path)` writes
+  `bitmap_gallery::copy_bytes` with `xarast_format::write_atomic`; a
+  name with no extension gets the plan's. Cancelling either chooser sends
+  nothing (no `…Closed` intent: the pending id is simply overwritten by
+  the next request). A copy is not an edit: no history step, no
+  modification.
+- **Tests**: `xarast-doc` `tests/replace_bitmap.rs` (6: one step and
+  exact undo/redo, geometry of objects/fills/transparencies unchanged,
+  only users touched and `resources_rev` unmoved, dedup index, missing
+  bitmap refused, `Tx` method), the undo-round-trip table (+1 case),
+  journal (+2); app `tests/bitmap_replace.rs` (7); `xarast-ui`
+  `tests/bitmap_gallery.rs` (+1); shell viewer test (+1).
+
 ## Invariants that must not be broken
 
 1. **No UI toolkit, no windowing, no `unsafe`.** `#![forbid(unsafe_code)]`

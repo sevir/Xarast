@@ -140,6 +140,14 @@ pub struct SceneWalker {
     /// after the release walks it at the session's quality again.
     draft_ramps: bool,
     images: HashMap<BitmapId, ImageId>,
+    /// The resource each registered (or failed) bitmap was registered
+    /// from: when the document puts another one behind the same id (the
+    /// gallery's Replace, `Action::ReplaceBitmap`), the image is made
+    /// again.
+    image_src: HashMap<BitmapId, crate::decoded::ResourceId>,
+    /// Registry slots of bitmaps being made again, kept so that their
+    /// image id stays the same.
+    stale_slots: HashMap<BitmapId, ImageId>,
     /// Bitmaps whose decode failed: the negative cache, so that a bad
     /// bitmap costs one decode per walker, not one per frame.
     failed: HashSet<BitmapId>,
@@ -399,6 +407,8 @@ impl SceneWalker {
     pub fn reset(&mut self) {
         self.resolver = Resolver::new();
         self.images.clear();
+        self.image_src.clear();
+        self.stale_slots.clear();
         self.failed.clear();
         self.derived.clear();
         self.derived_failed.clear();
@@ -1084,6 +1094,13 @@ impl SceneWalker {
         let mut todo: Vec<(BitmapId, &xarast_doc::BitmapResource)> = Vec::new();
         let mut found: Vec<(BitmapId, Option<ImageRef>)> = Vec::new();
         for (id, res) in doc.resources.bitmaps() {
+            if self
+                .image_src
+                .get(&id)
+                .is_some_and(|src| *src != crate::decoded::resource_of(res))
+            {
+                self.invalidate_bitmap(id);
+            }
             if self.images.contains_key(&id) || self.failed.contains(&id) {
                 continue;
             }
@@ -1113,15 +1130,65 @@ impl SceneWalker {
             .collect();
         all.sort_by_key(|(id, _)| order.get(id).copied().unwrap_or(usize::MAX));
         for (id, decoded) in all {
+            if let Some(res) = doc.resources.bitmap(id) {
+                self.image_src.insert(id, crate::decoded::resource_of(res));
+            }
+            let stale = self.stale_slots.remove(&id);
             match decoded {
                 Some(image) => {
-                    let rid = self.resolver.images.insert(image);
+                    let rid = match stale {
+                        Some(slot) => {
+                            self.resolver.images.replace(slot, image);
+                            slot
+                        }
+                        None => self.resolver.images.insert(image),
+                    };
                     self.images.insert(id, rid);
                 }
                 None => {
                     self.failed.insert(id);
+                    if let Some(slot) = stale {
+                        self.park_slot(slot);
+                    }
                 }
             }
+        }
+    }
+
+    /// Parks a registry slot: it holds the placeholder and is reused
+    /// before the registry grows.
+    fn park_slot(&mut self, slot: ImageId) {
+        let placeholder = self
+            .placeholder
+            .get_or_insert_with(|| ImageRef::new(1, 1, vec![0; 4]))
+            .clone();
+        self.resolver.images.replace(slot, placeholder);
+        self.derived_free.push(slot);
+    }
+
+    /// Forgets everything made from bitmap `id`'s previous resource: its
+    /// image (the slot is kept for the new one), the failure, and every
+    /// photo-adjusted or proxy image derived from it.
+    fn invalidate_bitmap(&mut self, id: BitmapId) {
+        if let Some(slot) = self.images.remove(&id) {
+            self.stale_slots.insert(id, slot);
+        }
+        self.image_src.remove(&id);
+        self.failed.remove(&id);
+        self.derived_failed.retain(|k| k.0 != id);
+        let dead: Vec<(BitmapId, [u8; 32])> =
+            self.derived.keys().filter(|k| k.0 == id).copied().collect();
+        for k in dead {
+            if let Some(slot) = self.derived.remove(&k) {
+                self.park_slot(slot);
+            }
+        }
+        let (gone, kept): (Vec<Proxy>, Vec<Proxy>) = std::mem::take(&mut self.proxies)
+            .into_iter()
+            .partition(|p| p.key.0 == id);
+        self.proxies = kept;
+        for p in gone {
+            self.park_slot(p.slot);
         }
     }
 

@@ -135,6 +135,33 @@ fn every_row_is_named_and_place_and_delete_raise_their_operations() {
 }
 
 #[test]
+fn replace_and_save_a_copy_raise_their_operations_for_the_chosen_bitmap() {
+    let m = model();
+    let commands = RefCell::new(Vec::new());
+    let mut h = harness(&m, &commands);
+    let entries = &m.bitmap_gallery.as_ref().unwrap().entries;
+    // Nothing is chosen: both are off and raise nothing.
+    h.get_by_label("Replace the chosen bitmap").click();
+    h.get_by_label("Save a copy of the chosen bitmap").click();
+    h.run();
+    assert!(gallery_ops(&commands).is_empty());
+    // A used bitmap can be replaced (every use follows) and copied.
+    h.get_by_label_contains("Bitmap Beach:").click();
+    h.run();
+    h.get_by_label("Replace the chosen bitmap").click();
+    h.run();
+    h.get_by_label("Save a copy of the chosen bitmap").click();
+    h.run();
+    assert_eq!(
+        gallery_ops(&commands),
+        [
+            BitmapGalleryOp::Replace(entries[0].id),
+            BitmapGalleryOp::SaveCopy(entries[0].id)
+        ]
+    );
+}
+
+#[test]
 fn the_filter_hides_the_rows_that_do_not_match() {
     let m = model();
     let commands = RefCell::new(Vec::new());

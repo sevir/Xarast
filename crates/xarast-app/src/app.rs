@@ -250,6 +250,10 @@ pub struct AppState {
     /// The document the save dialog is choosing a name for, and what waits
     /// on that save.
     naming: Option<(DocumentId, Option<PendingAction>)>,
+    /// The bitmap the gallery's Replace is choosing a file for.
+    replacing: Option<(DocumentId, xarast_doc::BitmapId)>,
+    /// The bitmap the gallery's Save a copy is choosing a name for.
+    copying: Option<(DocumentId, xarast_doc::BitmapId)>,
     /// An action waiting for running saves to finish.
     waiting: Option<PendingAction>,
     /// Documents the user chose to discard for the pending action.
@@ -496,6 +500,103 @@ impl AppState {
             self.notice = Some(p.label());
         }
         Ok(Changed::UI)
+    }
+
+    /// The gallery's Replace: remembers the bitmap and asks the platform
+    /// for one image file (XARA-T-0290).
+    fn ask_to_replace(&mut self, id: xarast_doc::BitmapId) -> Changed {
+        let Some(s) = self.active() else {
+            return Changed::empty();
+        };
+        if s.doc.resources.bitmap(id).is_none() {
+            return Changed::empty();
+        }
+        self.replacing = Some((s.id, id));
+        self.requests.push(PlatformRequest::ShowReplaceBitmapDialog);
+        Changed::empty()
+    }
+
+    /// The Import chooser answered for a Replace: the file takes the
+    /// bitmap's place as one undo step. A file that is not an image is
+    /// reported and changes nothing.
+    fn replace_bitmap_from(&mut self, path: &Path) -> Changed {
+        let Some((doc, id)) = self.replacing.take() else {
+            return Changed::empty();
+        };
+        let img = match crate::place::image_from_file(path) {
+            Ok(i) => i,
+            Err(crate::place::PlaceError::Cancelled) => return Changed::empty(),
+            Err(e) => return self.paste_notice(&format!("Could not replace the bitmap: {e}")),
+        };
+        let Some(s) = self.docs.get_mut(doc) else {
+            return Changed::empty();
+        };
+        match s.replace_bitmap(id, img.resource) {
+            Ok(c) => c,
+            Err(e) => self.paste_notice(&format!("Could not replace the bitmap: {e}")),
+        }
+    }
+
+    /// The gallery's Save a copy: asks the platform for a name, offering
+    /// the bitmap's (XARA-T-0290).
+    fn ask_for_copy_name(&mut self, id: xarast_doc::BitmapId) -> Changed {
+        let Some(s) = self.active() else {
+            return Changed::empty();
+        };
+        let Some(res) = s.doc.resources.bitmap(id) else {
+            return Changed::empty();
+        };
+        let plan = crate::bitmap_gallery::copy_plan(res);
+        let directory = s
+            .path
+            .as_deref()
+            .and_then(Path::parent)
+            .filter(|d| !d.as_os_str().is_empty())
+            .map(Path::to_path_buf);
+        self.copying = Some((s.id, id));
+        self.requests.push(PlatformRequest::ShowSaveCopyDialog {
+            title: "Save a copy".to_owned(),
+            file_name: plan.file_name,
+            directory,
+            filter: plan.filter,
+            extensions: vec![plan.extension],
+        });
+        Changed::empty()
+    }
+
+    /// The save chooser answered for a copy: writes the bytes
+    /// ([`crate::bitmap_gallery::copy_bytes`]) atomically. A name without
+    /// an extension gets the plan's. Reports the outcome in the notice.
+    fn save_bitmap_copy(&mut self, path: &Path) -> Changed {
+        let Some((doc, id)) = self.copying.take() else {
+            return Changed::empty();
+        };
+        let Some(s) = self.docs.get(doc) else {
+            return Changed::empty();
+        };
+        let Some(res) = s.doc.resources.bitmap(id) else {
+            return Changed::empty();
+        };
+        let plan = crate::bitmap_gallery::copy_plan(res);
+        let bytes = match crate::bitmap_gallery::copy_bytes(res, s.decoded_images()) {
+            Ok(b) => b,
+            Err(e) => return self.paste_notice(&format!("Could not save a copy: {e}")),
+        };
+        let target = if path.extension().is_some() {
+            path.to_path_buf()
+        } else {
+            let mut o = path.as_os_str().to_owned();
+            o.push(".");
+            o.push(plan.extension);
+            PathBuf::from(o)
+        };
+        match xarast_format::write_atomic(&target, |w| {
+            std::io::Write::write_all(w, &bytes)?;
+            Ok(())
+        }) {
+            Ok(_) => self.paste_notice(&format!("Saved a copy to {}", target.display())),
+            Err(e) => self.paste_notice(&format!("Could not save a copy: {e}")),
+        }
     }
 
     /// Imports the image files a pasted text names (a file manager's
@@ -1035,6 +1136,14 @@ impl AppState {
                 }
                 Ok(Changed::empty())
             }
+            Intent::BitmapGallery(crate::bitmap_gallery::BitmapGalleryOp::Replace(id)) => {
+                Ok(self.ask_to_replace(id))
+            }
+            Intent::BitmapGallery(crate::bitmap_gallery::BitmapGalleryOp::SaveCopy(id)) => {
+                Ok(self.ask_for_copy_name(id))
+            }
+            Intent::ReplaceBitmapWith(path) => Ok(self.replace_bitmap_from(&path)),
+            Intent::SaveBitmapCopyTo(path) => Ok(self.save_bitmap_copy(&path)),
             Intent::CancelImports => {
                 self.pending_imports.clear();
                 Ok(if self.imports.cancel_all() > 0 {

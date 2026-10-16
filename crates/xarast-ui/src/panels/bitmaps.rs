@@ -337,6 +337,26 @@ impl BitmapGallery {
             {
                 out.push(UiCommand::BitmapGallery(BitmapGalleryOp::Place(e.id)));
             }
+            let replace = ui
+                .add_enabled(chosen.is_some(), egui::Button::new("Replace\u{2026}"))
+                .on_hover_text("Replace the chosen bitmap with an image file; every use follows")
+                .on_disabled_hover_text("Choose a bitmap first");
+            a11y::set_label(ui.ctx(), replace.id, "Replace the chosen bitmap");
+            if replace.clicked()
+                && let Some(e) = chosen
+            {
+                out.push(UiCommand::BitmapGallery(BitmapGalleryOp::Replace(e.id)));
+            }
+            let copy = ui
+                .add_enabled(chosen.is_some(), egui::Button::new("Save a copy\u{2026}"))
+                .on_hover_text("Write a copy of the chosen bitmap to a file")
+                .on_disabled_hover_text("Choose a bitmap first");
+            a11y::set_label(ui.ctx(), copy.id, "Save a copy of the chosen bitmap");
+            if copy.clicked()
+                && let Some(e) = chosen
+            {
+                out.push(UiCommand::BitmapGallery(BitmapGalleryOp::SaveCopy(e.id)));
+            }
             let deletable = chosen.is_some_and(GalleryEntry::deletable);
             let why = match chosen {
                 Some(e) if e.uses > 0 => "Objects use this bitmap: delete them first",

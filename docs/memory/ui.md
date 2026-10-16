@@ -430,6 +430,16 @@ Full note: [`tools.md`](tools.md). What the interface side owns:
   name, and `details()` — size, depth, dpi, format, colour space, stored
   and decoded bytes, uses. Each row is one `click_and_drag` response named
   "Bitmap NAME: details" with its list position; double click = Place.
+- **Replace… and Save a copy…** (XARA-T-0290): two more buttons beside
+  Place/Delete, accessible names "Replace the chosen bitmap" and "Save a
+  copy of the chosen bitmap", both disabled until a row is chosen and
+  **not** gated on `uses` (a used bitmap is exactly what Replace is
+  for). They raise `BitmapGalleryOp::Replace(id)` / `SaveCopy(id)`; the
+  choosers are the shell's (`replace_dialog`, `copy_dialog` in
+  `viewer.rs`, answered by `replace_answer` / `copy_answer`; the Replace
+  one is the Import chooser with `multiple: false` and the title
+  "Replace bitmap"). Test: `tests/bitmap_gallery.rs`
+  `replace_and_save_a_copy_raise_their_operations_for_the_chosen_bitmap`.
 - **Drag** (`bitmaps::drive_drag`): the colour drag's plumbing again —
   the owner and a cancelled flag in egui temp memory under their own id,
   `Esc` → `DragCancel`, release → `DragDrop` unless cancelled, the

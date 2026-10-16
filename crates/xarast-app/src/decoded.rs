@@ -316,10 +316,10 @@ impl DecodedImages {
 
 /// A resource's identity: the addresses of its pixels and original, and
 /// its declared size.
-type ResourceId = (usize, usize, u32, u32);
+pub(crate) type ResourceId = (usize, usize, u32, u32);
 
 /// A resource's identity as [`Key::resource`] spells it.
-fn resource_of(res: &BitmapResource) -> ResourceId {
+pub(crate) fn resource_of(res: &BitmapResource) -> ResourceId {
     (
         Arc::as_ptr(&res.pixels) as usize,
         res.original.as_ref().map_or(0, |o| Arc::as_ptr(o) as usize),

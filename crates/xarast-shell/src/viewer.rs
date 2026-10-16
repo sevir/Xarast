@@ -143,6 +143,11 @@ pub struct Viewer {
     open_dialog: Option<PortalRequestId>,
     /// The File › Import… chooser on screen, if one is (T10.7.4).
     import_dialog: Option<PortalRequestId>,
+    /// The bitmap gallery's Replace chooser on screen, if one is
+    /// (XARA-T-0290).
+    replace_dialog: Option<PortalRequestId>,
+    /// The bitmap gallery's Save a copy chooser on screen, if one is.
+    copy_dialog: Option<PortalRequestId>,
     /// The active document changed: the window title is owed.
     title_stale: bool,
     /// The save chooser on screen, if one is.
@@ -223,6 +228,8 @@ impl Viewer {
             requests: Vec::new(),
             open_dialog: None,
             import_dialog: None,
+            replace_dialog: None,
+            copy_dialog: None,
             title_stale: false,
             save_dialog: None,
             export_dialog: None,
@@ -433,6 +440,32 @@ impl Viewer {
                     if self.import_dialog.is_none() {
                         let id = ctx.portal().open_files(import_request(ctx.parent_window()));
                         self.import_dialog = Some(id);
+                    }
+                }
+                PlatformRequest::ShowReplaceBitmapDialog => {
+                    if self.replace_dialog.is_none() {
+                        let id = ctx
+                            .portal()
+                            .open_files(replace_request(ctx.parent_window()));
+                        self.replace_dialog = Some(id);
+                    }
+                }
+                PlatformRequest::ShowSaveCopyDialog {
+                    title,
+                    file_name,
+                    directory,
+                    filter,
+                    extensions,
+                } => {
+                    if self.copy_dialog.is_none() {
+                        let id = ctx.portal().save_file(SaveFileRequest {
+                            title,
+                            filters: vec![FileFilter::new(filter, &extensions)],
+                            file_name: Some(file_name),
+                            directory,
+                            parent: ctx.parent_window(),
+                        });
+                        self.copy_dialog = Some(id);
                     }
                 }
                 PlatformRequest::ShowSaveDialog {
@@ -730,6 +763,67 @@ impl Viewer {
             _ => {}
         }
         true
+    }
+
+    /// Takes the answer to the bitmap gallery's Replace chooser: the one
+    /// file chosen takes the bitmap's place. Returns false for an answer to
+    /// something else.
+    fn replace_answer(&mut self, event: &PortalEvent) -> bool {
+        let request = match event {
+            PortalEvent::FilesChosen { request, .. }
+            | PortalEvent::Cancelled { request }
+            | PortalEvent::Failed { request, .. } => *request,
+            _ => return false,
+        };
+        if self.replace_dialog != Some(request) {
+            return false;
+        }
+        self.replace_dialog = None;
+        match event {
+            PortalEvent::FilesChosen { paths, .. } => {
+                if let Some(path) = paths.first() {
+                    self.apply(vec![Intent::ReplaceBitmapWith(path.clone())]);
+                }
+            }
+            PortalEvent::Failed { reason, .. } => self.chooser_failed(reason),
+            _ => {}
+        }
+        true
+    }
+
+    /// Takes the answer to the bitmap gallery's Save a copy chooser.
+    /// Returns false for an answer to something else.
+    fn copy_answer(&mut self, event: &PortalEvent) -> bool {
+        let request = match event {
+            PortalEvent::SaveChosen { request, .. }
+            | PortalEvent::Cancelled { request }
+            | PortalEvent::Failed { request, .. } => *request,
+            _ => return false,
+        };
+        if self.copy_dialog != Some(request) {
+            return false;
+        }
+        self.copy_dialog = None;
+        match event {
+            PortalEvent::SaveChosen { path, .. } => {
+                self.apply(vec![Intent::SaveBitmapCopyTo(path.clone())]);
+            }
+            PortalEvent::Failed { reason, .. } => self.chooser_failed(reason),
+            _ => {}
+        }
+        true
+    }
+
+    /// Says that a file chooser could not be shown.
+    fn chooser_failed(&mut self, reason: &str) {
+        let message = format!("Could not show the file chooser: {reason}");
+        tracing::warn!("{message}");
+        self.app.diagnostics.push(xarast_app::DiagnosticEntry {
+            severity: xarast_app::Severity::Error,
+            message: message.clone(),
+            document: None,
+        });
+        self.message = Some(message);
     }
 
     /// Takes the answer to the open dialog. Returns false for an answer to
@@ -1382,6 +1476,15 @@ fn import_request(parent: Option<String>) -> OpenFileRequest {
     }
 }
 
+/// The bitmap gallery's Replace: the Import chooser, for one file.
+fn replace_request(parent: Option<String>) -> OpenFileRequest {
+    OpenFileRequest {
+        title: "Replace bitmap".to_owned(),
+        multiple: false,
+        ..import_request(parent)
+    }
+}
+
 fn zoom_target(t: xarast_ui::model::ZoomTarget) -> xarast_app::ZoomTarget {
     use xarast_app::ZoomTarget as A;
     use xarast_ui::model::ZoomTarget as U;
@@ -1467,6 +1570,8 @@ impl Viewer {
             }
             ShellEvent::Portal(answer) if self.portal_answer(answer) => redraw = true,
             ShellEvent::Portal(answer) if self.import_answer(answer) => redraw = true,
+            ShellEvent::Portal(answer) if self.replace_answer(answer) => redraw = true,
+            ShellEvent::Portal(answer) if self.copy_answer(answer) => redraw = true,
             ShellEvent::Portal(answer) if self.save_answer(answer) => redraw = true,
             ShellEvent::Portal(answer) if self.export_answer(answer) => redraw = true,
             ShellEvent::CloseRequested => {
@@ -4488,6 +4593,82 @@ mod tests {
         assert_eq!(bitmaps(&v).len(), 2);
         assert!(v.to_open.is_empty(), "nothing is opened as a document");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_gallerys_replace_and_save_a_copy_use_their_own_choosers() {
+        use xarast_app::bitmap_gallery::BitmapGalleryOp;
+        let (mut v, _) = viewer_with_square();
+        let (dir, png) = png_file("replace", 96, 48);
+        let img = xarast_app::place::image_from_file(&png).unwrap();
+        let id = v
+            .app
+            .active_mut()
+            .unwrap()
+            .doc
+            .resources
+            .insert_bitmap(img.resource);
+        // Replace: the Import chooser, for one file.
+        let r = replace_request(Some("wayland:x".to_owned()));
+        assert!(!r.multiple, "one file");
+        assert_eq!(r.title, "Replace bitmap");
+        assert!(r.filters[0].extensions.iter().any(|e| e == "png"));
+        v.apply(vec![Intent::BitmapGallery(BitmapGalleryOp::Replace(id))]);
+        assert_eq!(v.requests, [PlatformRequest::ShowReplaceBitmapDialog]);
+        let (_, answers) = with_ctx(|ctx| v.perform_requests(ctx));
+        assert!(v.replace_dialog.is_some() && v.import_dialog.is_none());
+        // An answer to another chooser is not taken.
+        assert!(!v.replace_answer(&PortalEvent::Cancelled {
+            request: PortalRequestId(1_000),
+        }));
+        for a in answers {
+            v.handle(&ShellEvent::Portal(a));
+        }
+        assert!(
+            v.replace_dialog.is_none(),
+            "the offline portal fails at once"
+        );
+        // The chosen file takes the bitmap's place.
+        let (dir2, other) = png_file("replace-with", 32, 32);
+        v.apply(vec![Intent::BitmapGallery(BitmapGalleryOp::Replace(id))]);
+        v.requests.clear();
+        v.replace_dialog = Some(PortalRequestId(11));
+        assert!(v.handle(&ShellEvent::Portal(PortalEvent::FilesChosen {
+            request: PortalRequestId(11),
+            paths: vec![other],
+        })));
+        let s = v.app.active().unwrap();
+        assert_eq!(s.undo_label(), Some("Replace Bitmap"));
+        assert_eq!(s.doc.resources.bitmap(id).unwrap().info.width, 32);
+        // Save a copy: a save chooser filtered to the bitmap's format.
+        v.apply(vec![Intent::BitmapGallery(BitmapGalleryOp::SaveCopy(id))]);
+        let [
+            PlatformRequest::ShowSaveCopyDialog {
+                file_name,
+                extensions,
+                ..
+            },
+        ] = v.requests.as_slice()
+        else {
+            panic!("{:?}", v.requests);
+        };
+        assert_eq!(file_name, "dropped.png");
+        assert_eq!(extensions, &["png"]);
+        v.requests.clear();
+        v.copy_dialog = Some(PortalRequestId(12));
+        let target = dir.join("copy.png");
+        assert!(v.handle(&ShellEvent::Portal(PortalEvent::SaveChosen {
+            request: PortalRequestId(12),
+            path: target.clone(),
+        })));
+        assert!(v.copy_dialog.is_none());
+        let stored = v.app.active().unwrap().doc.resources.bitmap(id).unwrap();
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            stored.original.as_ref().unwrap().bytes.as_ref()
+        );
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(dir2);
     }
 
     #[test]

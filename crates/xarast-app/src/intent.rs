@@ -367,6 +367,13 @@ pub enum Intent {
     /// The export file chooser was dismissed or failed: the dialog goes
     /// back to its fields.
     ExportFileDialogClosed,
+    /// The file the Import chooser came back with for the bitmap gallery's
+    /// Replace ([`PlatformRequest::ShowReplaceBitmapDialog`]): it takes the
+    /// place of the bitmap the gallery asked about.
+    ReplaceBitmapWith(std::path::PathBuf),
+    /// The name the save chooser came back with for the bitmap gallery's
+    /// Save a copy ([`PlatformRequest::ShowSaveCopyDialog`]).
+    SaveBitmapCopyTo(std::path::PathBuf),
 }
 
 /// Something only the platform layer can do, queued by
@@ -403,6 +410,25 @@ pub enum PlatformRequest {
         /// The filter's name ("PNG (*.png)").
         filter: String,
         /// The extensions the format answers to, without the dot.
+        extensions: Vec<&'static str>,
+    },
+    /// Show the Import chooser for **one** image: the bitmap gallery's
+    /// Replace. The file chosen comes back as
+    /// [`Intent::ReplaceBitmapWith`]; cancelling sends nothing.
+    ShowReplaceBitmapDialog,
+    /// Show a file chooser for a bitmap's copy: the gallery's Save a copy.
+    /// The name comes back as [`Intent::SaveBitmapCopyTo`]; cancelling
+    /// sends nothing.
+    ShowSaveCopyDialog {
+        /// The dialog title ("Save a copy").
+        title: String,
+        /// The file name to offer, with the bitmap's extension.
+        file_name: String,
+        /// Where to start, when the document has a directory.
+        directory: Option<std::path::PathBuf>,
+        /// The filter's name ("PNG (*.png)").
+        filter: String,
+        /// The extensions the filter answers to, without the dot.
         extensions: Vec<&'static str>,
     },
     /// Put this text on the system clipboard: a copy's SVG flavour.

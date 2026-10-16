@@ -1873,7 +1873,9 @@ impl Session {
             | Intent::ShowExportDialog
             | Intent::ExportDialog(_)
             | Intent::ExportTo(_)
-            | Intent::ExportFileDialogClosed => {}
+            | Intent::ExportFileDialogClosed
+            | Intent::ReplaceBitmapWith(_)
+            | Intent::SaveBitmapCopyTo(_) => {}
         }
         Ok(self.finish_apply(changed))
     }
@@ -2081,6 +2083,31 @@ impl Session {
         self.edit
             .active_layer()
             .or_else(|| self.doc.active_layer(self.doc.active_spread()))
+    }
+
+    /// Replaces the resource behind bitmap `id` with `resource` (the bitmap
+    /// gallery's Replace, XARA-T-0290): one undo step, "Replace Bitmap".
+    /// Every placement, fill and transparency using the bitmap keeps its
+    /// geometry and shows the new image. Nothing happens for an unknown
+    /// bitmap.
+    ///
+    /// # Errors
+    ///
+    /// When the command is refused.
+    pub fn replace_bitmap(
+        &mut self,
+        id: xarast_doc::BitmapId,
+        resource: xarast_doc::BitmapResource,
+    ) -> Result<Changed, SessionError> {
+        if self.doc.resources.bitmap(id).is_none() {
+            return Ok(Changed::empty());
+        }
+        let changed = self.cancel_gesture();
+        self.dispatch(&xarast_doc::ReplaceBitmap {
+            image: id,
+            with: resource,
+        })?;
+        Ok(changed | Changed::DOCUMENT | Changed::UI)
     }
 
     /// Places a bitmap the document already holds as a new object at its
