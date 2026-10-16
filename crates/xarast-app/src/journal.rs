@@ -275,7 +275,10 @@ impl std::fmt::Debug for JournalWriter {
 
 struct Worker {
     path: PathBuf,
-    file: File,
+    /// `None` until the thread has written the first header (a new
+    /// journal is created on this thread, so that its `fsync` never
+    /// waits on the interface thread), or after a rotation failed.
+    file: Option<File>,
     header: Header,
     /// The entries in the file, as written: what a rotation keeps.
     lines: Vec<(u64, String)>,
@@ -332,7 +335,11 @@ impl Worker {
                     continue;
                 }
             };
-            if let Err(e) = self.file.write_all(line.as_bytes()) {
+            let written = match &mut self.file {
+                Some(f) => f.write_all(line.as_bytes()),
+                None => Err(std::io::Error::other("no journal file")),
+            };
+            if let Err(e) = written {
                 self.break_at(seq, format!("writing entry {seq}: {e}"));
                 continue;
             }
@@ -344,7 +351,11 @@ impl Worker {
 
     fn sync(&mut self) {
         if self.unsynced.take().is_some() {
-            if let Err(e) = self.file.sync_data() {
+            let synced = match &self.file {
+                Some(f) => f.sync_data(),
+                None => Err(std::io::Error::other("no journal file")),
+            };
+            if let Err(e) = synced {
                 self.break_at(self.last_written, format!("fsync: {e}"));
                 return;
             }
@@ -371,7 +382,7 @@ impl Worker {
         };
         match write_file(&self.path, &header, &kept) {
             Ok(f) => {
-                self.file = f;
+                self.file = Some(f);
                 self.header = header;
                 self.lines = kept;
                 // An entry that could not be written is fine once a base
@@ -391,6 +402,12 @@ impl Worker {
     }
 
     fn run(mut self, rx: &mpsc::Receiver<Msg>) {
+        if self.file.is_none() {
+            match write_file(&self.path, &self.header, &self.lines) {
+                Ok(f) => self.file = Some(f),
+                Err(e) => self.break_at(self.last_written + 1, format!("creating: {e}")),
+            }
+        }
         loop {
             let msg = match self.unsynced {
                 Some(since) => {
@@ -444,11 +461,11 @@ impl JournalWriter {
             stream: stream.to_owned(),
             base,
         };
-        let path = entry.join(JOURNAL);
-        let file = write_file(&path, &header, &[])?;
+        // The file itself is written by the writer thread: creating it
+        // means an `fsync`, and this runs on the interface thread.
         Ok(JournalWriter::spawn(
-            path,
-            file,
+            entry.join(JOURNAL),
+            None,
             header,
             Vec::new(),
             base,
@@ -497,13 +514,18 @@ impl JournalWriter {
         }
         let file = write_file(&path, &header, &lines)?;
         Ok(JournalWriter::spawn(
-            path, file, header, lines, through, blobs,
+            path,
+            Some(file),
+            header,
+            lines,
+            through,
+            blobs,
         ))
     }
 
     fn spawn(
         path: PathBuf,
-        file: File,
+        file: Option<File>,
         header: Header,
         lines: Vec<(u64, String)>,
         last: u64,

@@ -32,7 +32,7 @@ application's layout; the render round trip is exact for 59/59 again and
 | W3 SVG write | F3.1–F3.8, F3.11 done; F3.9 all eight passes done (4–5: XARA-T-0101, round 3); F3.10 geometry baking of conical, diamond, 3/4-colour fills done (XARA-US-0043), feather filters done (`effect`, XARA-T-0317), other filter/raster baking and `BakeProvider` open (XARA-T-0102) | `svg/` (`num`, `pathdata`, `frame`, `xml`, `defs`, `paint`, `bake`, `effect`, `style`, `emit`), `save.rs` |
 | W4 SVG read + preservation | F4.1–F4.6, F4.8–F4.10 done; F4.7 marking done, deletion accounting open (XARA-T-0113); XARA-T-0105 (localise + normal form) and T-0107 (passes 4–5) done | `svg/read/` (`dom`, `parse`, `style`, `build/{ink,paint,root}`, `normal`), `open.rs` |
 | W5 resources | F5.1–F5.4, F5.6 done; F5.8 contract + validation done (no provider implementation) | `resource.rs`, `policy.rs`, `thumbnail.rs` |
-| W6 durability | F6.1 (`write_atomic`, `.bak` = F6.2) and F6.3 (`DocumentLock`) done; F6.4 lock UX + signals, F6.5 autosave and F6.7 recovery done **in the app** (`xarast-app` `locks`/`autosave`, XARA-US-0084); F6.8 repair and F6.9 partial XML done (XARA-T-0088, below); F6.6 journal open | `durability/`, `repair.rs`, `partial.rs` |
+| W6 durability | F6.1 (`write_atomic`, `.bak` = F6.2) and F6.3 (`DocumentLock`) done; F6.4 lock UX + signals, F6.5 autosave and F6.7 recovery done **in the app** (`xarast-app` `locks`/`autosave`, XARA-US-0084); F6.8 repair and F6.9 partial XML done (XARA-T-0088, below); F6.6 journal done in `xarast-doc`/`xarast-app` (XARA-T-0217) | `durability/`, `repair.rs`, `partial.rs` |
 
 Public entry points: `XarastReader::{open, open_with}`, `PackageWriter`,
 `ResourceIndex`, `Manifest`, `sniff`/`sniff_bytes`, `write_atomic[_with]`,
@@ -1525,8 +1525,10 @@ the file means", not crashes; each input is now a unit test in
 - ~~Doc model has no per-node foreign-baggage container~~ — done,
   XARA-T-0089 (`docs/memory/document-model.md` decision 32).
 - ~~F6.4 lock UX + signals, F6.5 autosave, F6.7 recovery scan~~ — done in
-  `xarast-app` (XARA-US-0084, `app-core.md` "Saving"). Open: F6.6 journal
-  (needs a serialisable command form). F6.8 and F6.9 are done
+  `xarast-app` (XARA-US-0084, `app-core.md` "Saving"). F6.6, the journal,
+  is done in `xarast-doc` (`journal`) and `xarast-app` (`journal`),
+  XARA-T-0217: `app-core.md` "Operation journal", `document-model.md`
+  "The operation journal's model half". F6.8 and F6.9 are done
   (XARA-T-0088, section "Repair and partial recovery").
 - **Thumbnails (F5.8) are written** (XARA-T-0082): `SaveOptions::thumbnail`
   carries the PNG; the application renders it (`xarast_app::thumbnail`)

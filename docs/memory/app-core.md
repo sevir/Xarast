@@ -660,6 +660,104 @@ writes there; a `.xar` origin asks for a name), re-records the holder,
 takes the origin's lock (held → read-only) and keeps the entry until a
 save or close.
 
+**Operation journal (XARA-T-0217, F6.6).** Module `journal`; the model
+half (what an entry is, why transactions and not commands, tags, the
+base, barriers) is `document-model.md` "The operation journal's model
+half". An autosave entry now holds, besides `snapshot.xarast`/`holder`/
+`origin`: `base.json.gz` (an exact copy of the document the journal is
+replayed onto: gzip level 1 JSON), `journal.ndjson` (header + one line
+per entry) and `blobs/<sha256>` (payloads ≥ 4 KiB that lines and bases
+refer to).
+
+- **Starting.** The first change since a document was clean makes
+  `tick` take an autosave **at once** (no idle/interval wait, not held
+  back by a gesture): `autosave_job` creates the `JournalHandle`
+  (writer thread + `journal.ndjson` with base 0), `restart_journal`
+  starts the bus's recorder at the document as it is and the job gets
+  `with_journal_base`. So the first operation is in the base and every
+  later one in the journal. `tests/save.rs`
+  `autosave_waits_for_idle_and_interval` was changed for this: only the
+  *second* snapshot waits for idle and interval.
+- **Recording.** `Session::after_mutation` → `flush_journal` (sync the
+  resource tables, take the bus's entries, number them, send them).
+  `JournalHandle` numbers on the interface thread so an autosave knows
+  exactly which `seq` its base holds (`last_seq` at the snapshot,
+  after the pending entries were sent). The gallery's bitmap delete
+  and the colour editor's held redo branch flush too; `tick` and
+  `sync_journals` flush every session as a safety net.
+- **Writing.** `JournalWriter` (thread `xarast-journal`): serialises
+  each entry (blobs to `blobs/` through `write_atomic` before the line
+  that names them), `write`s it, and `fsync`s (`sync_data`) when
+  `FSYNC_WINDOW` (100 ms ≤ the 250 ms of §10.3) has passed since the
+  first unsynced line — everything that arrived meanwhile shares it.
+  Never on the interface thread. An entry it cannot write (NaN, a line
+  over 64 MiB, an I/O error) marks it broken from that `seq`; `tick`
+  (`journal_health`) then records a barrier and takes a base at once.
+  A rotation to a base that holds the broken entry clears it.
+- **Rotating.** Each autosave's job writes the base (from the same
+  snapshot, before the package: a crash between them leaves a base
+  newer than the package, never older), and `autosaved` sends
+  `rotate(seq, blob keys)`: the writer rewrites the file atomically with
+  the header at the new base and only the entries after it, and deletes
+  blob files neither the base nor a kept line names. The journal never
+  outgrows one autosave interval.
+- **Ending.** A real save that leaves the document clean, undo back to
+  clean and close stop the journal (`Session::stop_journal` joins the
+  writer) before the entry is removed. `emergency_shutdown` flushes,
+  writes the snapshot inline *with* a base and rotates; dropping the
+  sessions joins the writers (fsync).
+- **Recovery** (`recover_all` → `journal::recover`): read the base,
+  read the journal (`ndjson::read`), replay the entries after the
+  base's `seq` through `xarast_doc::journal::replay` into a fresh
+  `CommandBus` — the recovered session keeps that history, so the
+  replayed operations can be undone — stopping at a barrier, a refused
+  entry, a torn/corrupt line or a `seq` gap (an Info diagnostic says
+  where and how many were replayed). A journal of another stream or a
+  header base newer than the base's is not replayed. The session then
+  continues the same journal (`JournalHandle::resume`: the file is cut
+  to the replayed prefix, numbering goes on) and the bus resumes
+  recording with every replayed step counted as local. No readable base
+  → the snapshot package, as before. `AutosaveStore::scan` offers an
+  entry with a base or a snapshot; its time is the latest write of
+  snapshot, base and journal.
+- **Tests** (`tests/journal.rs`, 10): a crash after 17 mixed operations
+  (shapes, move, shadow, text create + typing burst, palette colour,
+  placed bitmap, group, merged nudge run, undo, redo, duplicate,
+  rotate) recovers digest-equal, can be undone, and survives a second
+  crash; rotation spans; torn last line (recovers the state before it,
+  continues, recovers again); seq gap; undo past the base (barrier, new
+  base at once); damaged base → snapshot; a real save deletes it all; a
+  property test over random sequences with autosaves interleaved; and a
+  real crash — the test binary re-runs itself as a child that edits,
+  syncs and `abort()`s, and the parent recovers the child's last
+  digest.
+- **Numbers** (`examples/journal_probe.rs`, release, 2026-10-16, load
+  ≈ 20 on 24 cores — earlier runs at load 300 were 10–50× slower and
+  meaningless). Per command on the interface thread, 2 000 one-object
+  nudges: Groucho2 (1 873 nodes) 1.0 → 1.4 µs; 20000GradFilled
+  (120 006) 0.6 → 2.9 µs; ProbeX16 (518 618, the first object is a
+  group of almost everything) 20.9 → 21.2 ms, within run-to-run noise
+  (two journal-off runs: 20.9 and 21.3 ms). Entries ≈ 225 B; the writer
+  drains 2 000 of them 3–12 ms after the last. Base alone on the
+  autosave thread: 49 ms / 116 ms / 483 ms; base vs snapshot size:
+  278 KiB vs 1 036 KiB, 6.3 MiB vs 1.0 MiB, 27.8 MiB vs 15.5 MiB (the
+  base is JSON, gzip level 1; the package is SVG). The first base costs
+  the interface thread the snapshot (5 / 15 / 68 ms), as any autosave.
+  Recovery: 2 001 entries replay in 10 ms / 166 ms; on ProbeX16 2 000
+  whole-group nudges take 68 s to replay — replay re-applies each
+  transaction, so its cost is the live cost (≈ 20 ms × 2 000 + undo
+  bookkeeping); the autosave interval bounds it in practice.
+- **Follow-ups.** (1) The base is written in full at every autosave;
+  for ProbeX16 ~0.5 s and 28 MiB beside the 16 MiB package. A binary
+  encoding (postcard) or writing only the base and dropping the package
+  for the recovery path would halve it; not done (the package is what
+  `research/06 §10.2` requires). (2) `JournalHandle::resume` failing at
+  recovery falls back to a fresh journal at base 0: until the next base
+  is on disk, a second crash recovers the old base without the replayed
+  operations. (3) Closing or saving joins the writer thread (its last
+  `fsync`) on the interface thread; detaching it races the entry's
+  removal (a late blob write recreates the directory).
+
 **Crashes (XARA-US-0064, phase 12 §F).** Module `crash`; the shell
 half is `ui.md` shell decision 43.
 

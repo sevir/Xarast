@@ -79,6 +79,12 @@ fn main() {
 
         // Journal off: no base yet, so nothing records.
         let off = nudges(&mut app);
+        if std::env::var_os("PROBE_TWICE").is_some() {
+            println!(
+                "  (off again: {:.1} µs)",
+                nudges(&mut app).as_secs_f64() * 1e6
+            );
+        }
         let all_off = move_all(&mut app);
         // What the base alone costs the autosave thread.
         {
