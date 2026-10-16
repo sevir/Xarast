@@ -21,6 +21,7 @@ revisions) is in [`document-model.md`](document-model.md) decisions 7, 19,
 | Rectangle, Ellipse (draw, Ctrl square/circle, Shift from centre, radius handle, W/H/Radius infobar) | `shapes.rs` | done |
 | Push, Zoom | `tools.rs` | done |
 | Shape editor (F4): node/handle select, marquee, move, reshape, add/delete point, line/curve, smooth/cusp, close, break, join, X/Y, even-odd | `node_edit.rs` | done (US-0034, T6.1–T6.7) |
+| Selector nudges, flips, copy and transform, Skew field, bump buttons; path-point nudges and Tab/Home/End cycling; `ToolKey` context keys | `selector.rs`, `node_edit.rs`, `command.rs`, `session.rs` | done (XARA-T-0170, XARA-T-0186; decisions 105–113) |
 | Pen (Shift+F5): click corner, drag smooth, continue an end, close, Enter/Esc | `pen.rs` | done (T6.8) |
 | Freehand (F3): every sample, chunked incremental fit, smoothing slider, Shift rub-out, closed = filled | `freehand.rs` | done (T6.9, T6.10) |
 | `SetPath`/`CreatePath`/`ConvertToPaths`/`SetWindingRule`, `PathEdit` labels | `ops.rs` | done |
@@ -1446,6 +1447,125 @@ all twelve are shown as they are. Choosing the appended entry is a no-op
 `transp_mode_label` is exhaustive over the twelve. Test:
 `tests/fill_tool.rs::the_transparency_selector_carries_all_twelve_families`.
 
+## Phase 7 leftovers: selector extras and path nudges (XARA-T-0170, XARA-T-0186)
+
+Flip (T4.6), copy and transform (T4.7), the Skew field and bump buttons
+(T4.9), the object nudges (T4.10), the path-point nudges and point
+cycling (T6.11). Tests: `crates/xarast-app/tests/selector_extras.rs`
+(13), `tests/path_nudge.rs` (7), `command.rs`
+`context_keys_clash_only_with_what_they_override`.
+
+### Facts from the original (paraphrased; `Kernel/opnudge.{h,cpp}`, `Kernel/pathndge.cpp`, `tools/beztool.cpp`, `tools/selinfo.cpp`, `tools/selector.cpp`, `tools/opflip.cpp`, `tools/opshear.cpp`, `Kernel/transop.cpp`, `Kernel/cutop.cpp`, `wxOil/xrc/STANDARD_HOTKEYS.res`)
+
+- **Keys** (`STANDARD_HOTKEYS.res:113-137`): the 24 nudges are the four
+  arrows × {none 1, Ctrl 5, Shift 10, Ctrl+Shift ⅕, Alt 1 px, Alt+Shift
+  10 px}. The original binds **no** global Home, End or plain Tab;
+  Ctrl+Tab / Ctrl+Shift+Tab are next/previous document. Its zoom-in key
+  is **Ctrl**+NumPad +; plain NumPad + is free outside a drag.
+- **Unit**: one nudge is `NudgeStep` millipoints, default **2835** (1 mm;
+  `opnudge.cpp:145`); documents carry their own (`TAG_DOCUMENTNUDGE` 4114,
+  set on load and on document switch, `document.cpp:1743`). A pixel step
+  is the view's scaled pixel width.
+- **Object nudge** (`OpNudge`) is a translation of the selection with
+  fills transformed, lines not scaled. It refuses a nudge that would take
+  the selection off the pasteboard ("out of bounds" warning). It **merges
+  with the previous op when that was a nudge of the same selection**
+  (`PerformMergeProcessing`); undo label "Nudge".
+- **Path nudge** (`OpPathNudge`, aliased onto the nudge keys while the
+  Bézier tool is active, `beztool.cpp:453+`): every selected endpoint
+  moves with **both its adjacent control points, always** (not only when
+  smooth), and nothing is re-smoothed; when no point is selected the
+  selected **paths** move as objects. Consecutive path nudges merge.
+- **Point cycling** (`beztool.cpp:1077-1108`, `:2968-3350`): Tab moves
+  each selected path's point-selection pattern one endpoint on, the last
+  wrapping to the first (a closed subpath's closing endpoint is skipped);
+  Shift+Tab one back. Home shifts the pattern back until the first point
+  is selected, End on until the last is; what falls off is dropped. A
+  path with no selected point gets its first point (Tab, Home) or last
+  (Shift+Tab, End). Home/End only without modifiers. The view scrolls to
+  show the last point selected.
+- **Bump buttons** (`selinfo.cpp:1289-1346`, `:1467-1560`): X, Y, W, H
+  step by ± the nudge step; Angle by ±1° clamped to ±360; Shear by ±1°
+  clamped to ±89. The value is written to the field and committed on
+  button **up**, as Enter in the field would be.
+- **Typed angle and shear** (`selinfo.cpp:1700-1745`): an angle of a turn
+  or more is brought under one turn by an integer modulus keeping its
+  sign; a shear is clamped to ±89°. Both apply about the rotation centre
+  (`GetUserParams` sets `CentreOfTrans = dcRotateCentre`); the shear
+  field shears horizontally (`DoShearImmediate` uses blob 7 unless a
+  side blob was last used). `ShearBy = tan(angle)`, matrix
+  `x' = x + ShearBy·(y − cy)` (`opshear.cpp:193-219`, `:395-416`).
+- **Flip** (`selector.cpp:4366`, `opflip.cpp:159-225`): "Flip
+  horizontally" mirrors x about the rotation centre, "Flip vertically"
+  mirrors y; immediate, one op each.
+- **Copy and transform during a drag** (`transop.cpp:154-168`,
+  `:1379-1425`, `:1560-1585`, `:2347-2430`): NumPad + or a click of
+  another mouse button while dragging runs the "click while dragging"
+  preference, default **3 = drop a copy**: an `OpCopyAndTransform` of the
+  selection at the drag's current matrix is made at once (keeping the
+  originals selected), and the drag is flagged to **abort at its end**,
+  so the originals do not move. Values ≤ 1 toggle "leave copy" instead
+  (copy left at the start, originals transformed). NumPad / toggles line
+  scaling and NumPad − fill transforming mid-drag. None of this works
+  with select-inside.
+
+### Decisions (ours)
+
+105. **Per-tool nudge families, not a global op.** The object nudge is the
+     selector's `Tool::nudge`, the path nudge the shape editor's, the fill
+     nudge the fill tools' (decision 79), the wall-shadow nudge the
+     shadow tool's. Other tools keep the arrows for panning: the original
+     nudges the selection in every tool, which we may adopt later, but
+     panning with the arrows was a deliberate shell decision.
+106. **Nudge unit per session**: `Session::{nudge_unit, set_nudge_unit}`,
+     default `NUDGE_UNIT_MP` (2834.6 mp, rounds to the original's 2835);
+     the bump buttons use it too. Keeping the document's own nudge
+     (tag 4114) needs a document property and a `.xarast` field: open in
+     XARA-T-0308. Pixel steps are one device pixel at the current zoom.
+107. **Undo labels**: an object nudge run is "Move" (the matrix label;
+     the original says "Nudge"), a path nudge run "Move Points" (the
+     existing `SetPath`/`Move` coalescing), a translated path with no
+     point selected "Move". A run ends at any intent other than a nudge,
+     an infobar bump, or pointer/modifier/resize traffic. The
+     pasteboard bounds check is **not** done (we have no pasteboard
+     limit).
+108. **Path nudges do not re-smooth** (the original's behaviour) whereas a
+     drag does (`resmooth_around`): a nudge and a drag of the same offset
+     can differ on auto-smoothed handles. Deliberate.
+109. **Context keys** (`command.rs` `ToolKey`): the arrows, Tab, Shift+Tab,
+     Home, End and NumPad + are read before the command table when the
+     tool in force claims them (`Session::{takes_nudge, claims_action}`,
+     drag in flight for NumPad +). Only `Home` (Fit page) and NumPad +
+     (Zoom in) share a key with the table, and `ToolKey::overrides`
+     names exactly those; `context_keys_clash_only_with_what_they_override`
+     enforces it. The point actions have no table shortcut (they would
+     clash with Fit page); `AppCommand::Action(..)` still runs them.
+110. **Copy and transform = the original's default "drop a copy".** The
+     selector records each drop's matrix during the drag (outlines in
+     the overlay, nothing emitted) and on release emits one
+     `EditCommand::CopyAndTransform` — one undo step for the whole drag,
+     where the original makes one per drop. Copies go right above their
+     original (each later drop above the earlier); the originals stay
+     selected and untouched; line widths scale only for a scale drag with
+     "scale lines" on. `Esc` drops everything. Not done: the "leave
+     copy" preference, NumPad / and NumPad − mid-drag toggles.
+111. **Skew field**: the horizontal skew applied through the tool since
+     the selection was made (like Angle), about the rotation centre,
+     clamped ±89°. Typing θ applies `tan θ − tan θ_shown` so successive
+     edits compose exactly; a top/bottom-edge skew drag updates it too.
+     A typed angle is reduced `% 360` (keeping the fraction, unlike the
+     original's integer modulus).
+112. **Bumps are an intent, not UI arithmetic**: `InfobarItem::Bump` draws
+     "−"/"+" after a field; `Intent::InfobarBump { field, up }` makes the
+     session read the field's shown value, step it (nudge unit or 1°) and
+     apply it as an `InfobarEdit`, so any tool's Measure/Angle field can
+     get bumps by adding the item. A run of bumps is one undo step (it
+     shares the nudge run). The original's ±360 clamp on Angle bumps is
+     covered by the `% 360` reduction.
+113. **Point cycling** is pure selection (`node_edit::cycle_selection`): no
+     undo step, digest unchanged. Not done: scrolling the view to show
+     the newly selected point.
+
 ## Provisional values (observe in the VM before trusting)
 
 - Segment grab = 4 + 3 device px; freehand chunk 96 samples; freehand
@@ -1453,8 +1573,9 @@ all twelve are shown as they are. Choosing the appended entry is a no-op
 - Drag threshold 4 device px; double click 500 ms / 6 px; pick tolerance
   3 device px; handle grab 6 device px; auto-scroll band 16 px, step ≤ 24
   px/frame; constrain angle 45°.
-- Nudge unit 1 mm (`NUDGE_UNIT_MP`) until the document's own nudge size
-  (tag 4114) is kept.
+- Nudge unit 1 mm (`NUDGE_UNIT_MP`, the original's default 2835 mp)
+  until the document's own nudge size (tag 4114) is kept
+  (`Session::set_nudge_unit` exists for it).
 
 ## Invariants that must not be broken
 
@@ -1585,11 +1706,16 @@ all twelve are shown as they are. Choosing the appended entry is a no-op
       the original's Angle field shows, the default of "scale lines".
 - [ ] Undo of a large group move (thousands of nodes) costs ~1.5 ms: the
       per-node `Transform` inverse; a subtree-level action would fix it.
-- [ ] Nudges, snapping (W4 T4.10, W8), flip and copy-and-transform (T4.6,
-      T4.7), bump buttons, UI to set the current attributes (phase 8).
+- [x] Nudges (T4.10), flip (T4.6), copy-and-transform (T4.7), the Skew
+      field and bump buttons (T4.9) — XARA-T-0170, decisions 105–112.
+      Open: the document nudge size (tag 4114, XARA-T-0308), the
+      pasteboard bounds check, nudging in tools other than the selector,
+      the "leave copy" preference and the NumPad / and − drag toggles, UI
+      to set the current attributes (phase 8).
 - [x] Double click on a path → shape editor.
-- [ ] Path-point nudges (T6.11, needs the W4 nudge family), Tab/Home/End
-      point cycling, mid-drag snapping of nodes (W8).
+- [x] Path-point nudges (T6.11) and Tab/Shift+Tab/Home/End point
+      cycling — XARA-T-0186, decisions 108, 109, 113. Open: scrolling to
+      the cycled point, mid-drag snapping of nodes (W8).
 - [ ] Freehand: Alt straight segments, joining to a selected path's end,
       refitting the last stroke when the smoothing changes (retro fit),
       pressure. Pen: re-editing the start point's handle.

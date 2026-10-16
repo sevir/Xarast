@@ -207,6 +207,23 @@ Full note: [`tools.md`](tools.md). What the interface side owns:
   `arrow_nudge` sends `Intent::Nudge` — Ctrl ×5, Shift ×10, Ctrl+Shift ⅕,
   Alt one pixel, Alt+Shift ten — and does **not** pan; with no handle
   selected the arrows pan as before. A run of nudges is one undo step.
+- **Context keys before shortcuts** (XARA-T-0170, XARA-T-0186; `tools.md`
+  decision 109): after the arrow nudge and the momentary switches, the
+  viewer's `tool_key` asks the session whether the tool in force claims
+  the key — Tab / Shift+Tab / Home / End go to the shape editor as
+  `Intent::ToolAction(NextPoint|PreviousPoint|FirstPoint|LastPoint)`
+  while it has a selected path (else Home fits the page as before), and
+  NumPad + during a drag is `Intent::DropCopy` (else it zooms in). Only
+  without Ctrl and Alt. The arrows nudge the selection in the selector
+  and the points (or paths) in the shape editor. The keys are listed in
+  `xarast_app::ToolKey`; `chord_key` maps every `ChordKey` (now with
+  `End`, `Tab`, `Arrow`) to the shell's `Key`.
+- **Bump buttons** (T4.9): `InfobarItem::Bump` draws a small "-" and "+"
+  button after the field (tooltips and accessible names "Decrease …" /
+  "Increase …" from the field description) and raises
+  `UiCommand::InfobarBump` → `Intent::InfobarBump`; the core works out
+  the step. The selector shows them after X, Y, W, H, Angle and the new
+  Skew field, and "Flip horizontally" / "Flip vertically" command buttons.
 - **Status line and cursors** (T8.4.6): the status bar shows
   `Session::tool_status()` after a colour/bitmap drag's text and before the
   viewer's own notices; over a handle the cursor is the move cross, over an
