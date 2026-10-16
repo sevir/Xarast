@@ -738,6 +738,114 @@ Two things Phase 3 was asked to check against the corpus, **now answered**
   pair did nothing (there was no stop to hold the family). It now writes
   the implied pair (0 at black, 255 at white) in the new family.
 
+## The operation journal's model half (XARA-T-0217, F6.6, 2026-10-16)
+
+Module `journal` (`mod.rs`, `base.rs`, `blob.rs`, `ndjson.rs`); the I/O
+and the application side are `app-core.md` "Operation journal".
+
+- **Level: transactions, not commands.** An entry (`journal::Op::Tx`)
+  is what a committed `Tx` did — its `Action`s and node creations, its
+  label, its coalescing key and whether the live history merged it —
+  not the `EditCommand` that asked for it. Why: (1) exactness — a
+  command's effect depends on fonts (text layout), regeneration code
+  that changes between versions, and session state (current
+  attributes, selection); the actions do not; (2) coverage — ten
+  `Action` variants plus `create` cover every one of the 40+ `Command`
+  impls in two crates, present and future, through one hook
+  (`CommandBus::dispatch`); (3) replay goes through the same `Tx` and
+  `History`, so undo/redo after a recovery work. Cost: entries are
+  bigger than commands; the clone happens on the interface thread.
+- **Nodes are named by `Tag`**, never `NodeId`. Tags are unique per
+  document, survive `restore` and the base, and `Step::Create` records
+  the tag the live node got; replay forces it (`Tx::create_tagged`,
+  refusing a tag in use or 0). `next_tag` divergence is harmless
+  (every journalled tag is forced; the digest excludes tags).
+- **Recording** lives in `Tx` (`begin_recording`, `commit_recorded`):
+  `act_costing` converts each action before applying it (`act_of`; an
+  unknown node loses the record → a barrier), `create` clones the
+  payload. `Tx::transform` records **one** `Act::TransformTree` instead
+  of one `Transform` per node (replay expands it over the same subtree's
+  preorder) — before this a nudge of ProbeX16's top group was an 11 MB
+  line. The retained cost (`bytes`) is recorded and charged on replay.
+- **The bus's `Recorder`** counts the undo steps a replay of the journal
+  would have (`past`, `future`, `held`). An undo with `past == 0` or a
+  redo with `future == 0` would reach a step the base already holds:
+  it records `Op::Barrier` and suspends the recorder until
+  `start_journal` (a new base). A commit that merged into a pre-base
+  step records `merged: true` and does not count; replay
+  (`History::commit_as`) merges exactly where the live history did, or
+  pushes a step of its own when there is nothing to merge into.
+  `hold_redo`/`restore_held_redo`/`release_held_redo`/`discard_redo`/
+  `clear_history` are journalled **only through the bus methods** — a
+  caller using `history_mut()` directly bypasses the journal (only tests
+  do now; `colour_editor` was moved to the bus methods).
+- **Resource tables outside transactions** (`insert_bitmap` before a
+  place, `import_bitmaps` before a paste, the gallery's
+  `remove_unused_bitmap`, dashes, arrows, fonts) bump
+  `DocumentResources::tables_rev`; the recorder emits `Op::Tables` (the
+  whole bitmap/dash/arrow/font tables, keys and all) before the next
+  journalled operation or on `sync_journal`. Whole tables, because
+  slotmap keys cannot be chosen on insert and a deserialised slotmap's
+  free list is in a different order than the live one's: replaying an
+  insert could hand out a different `BitmapId`. The colour table needs
+  nothing: it only changes through `Action::SetPalette`, which carries
+  the whole table.
+- **The base** (`journal::base`): a `.xarast` round trip is equivalent,
+  not identical — measured over the corpus, 58 of 59 documents come back
+  with a different canonical digest after their first round trip, and
+  all 59 are fixed points after it (attributes are hoisted and
+  regrouped). A journal names nodes, so it is replayed onto an exact
+  copy instead: `Base` serialises a `Snapshot` (preorder, parent index,
+  tag, flags minus `DETACHED`/`MARKED`, kind, foreign baggage; colours
+  and tables with their keys; defaults; meta), `BaseDoc::into_document`
+  rebuilds it (refusing a parent after its child, a repeated tag, tag 0
+  off the root).
+- **Serde everywhere** (commit 7d3b83f): every `NodeKind` payload,
+  `AttrValue`, fills, live parameters, text types derive
+  `Serialize`/`Deserialize`. Hand-written: `Path` (verbs as letters,
+  points as one flat millipoint array, structural checks only — extent
+  and subpath rules are *not* checked so that any live path replays),
+  `ColourTable` (keys + the name index as it stands: a repeated name's
+  winner is not derivable), `DefaultAttrs` through `set` per value.
+  Large `Arc<[u8]>` (pixels, encoded originals, font data, opaque and
+  effect payloads) go through `journal::blob`: under 4 KiB inline hex,
+  otherwise a SHA-256 reference into the `BlobStore` installed with
+  `with_blobs` (thread-local; checked against the key on the way in).
+  `serde_json` has `float_roundtrip`; NaN/infinity serialise as `null`
+  and do not read back, so such an entry is refused at write time and
+  becomes a barrier.
+- **Lines** (`journal::ndjson`): header
+  `{"journal":"xarast-journal/1","stream":…,"base":S,"sum":…}`, entries
+  `{"seq":N,"ts":"…Z","op":"tx","payload":{…},"sum":"8 hex"}` (`Op` is
+  adjacently tagged so the line reads as `research/06 §10.3` spells it;
+  `sum` = first 4 bytes of SHA-256 of the line before `,"sum"`).
+  `read` never panics, stops at the first torn (no newline), corrupt
+  (sum, JSON, unknown op) or out-of-sequence line, and reports
+  `sound_len` (where a continuing writer truncates).
+- **Tests**: `tests/journal.rs` (a property test of 96 cases × ≤ 80
+  operations — edits, undo, redo, gestures, held redo, bitmap inserts and
+  sweeps, rebases — through JSON onto a base read back from JSON:
+  digest-equal, and undoing the local steps walks the same states; a
+  fixed sequence that must produce merged, tables and blob lines; the
+  barrier; hostile bases/entries are errors), `ndjson` tests (torn,
+  flipped byte, gap, first entry not following the base, junk headers,
+  NaN, timestamps, two property tests over hostile and damaged bytes),
+  `blob` tests. Fuzz target `fuzz_journal_read` (5 min, 3.4 M runs,
+  6 473 edges, no finding).
+- **Invariants.** (1) Every change to a document goes through
+  `Tx::act_costing` or `Tx::create`, or bumps `tables_rev` — a new `Tx`
+  helper that writes `self.doc` directly is invisible to the journal and
+  recovery silently diverges. (2) Nothing in a `NodeKind` payload may
+  hold a `NodeId` (it would be serialised raw and mean nothing after a
+  recovery); cross-references are tags. (3) A new `History` operation
+  that changes `past`/`future`/the held branch needs a bus wrapper that
+  records it and keeps the `Recorder` counts in step.
+- **Dead ends.** Replaying onto the reopened `.xarast` snapshot with a
+  NodeId → preorder-position map: the structure differs after a first
+  round trip (attribute hoisting), so attribute nodes have no
+  counterpart. Recording one `Transform` per node of a moved subtree:
+  11 MB per nudge on ProbeX16, 63 s to drain 2 000 of them.
+
 ## Invariants that must not be broken
 
 The twelve from `research/02 §10.16`, each with a matching `Invariant` variant

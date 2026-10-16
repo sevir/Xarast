@@ -130,6 +130,7 @@ scale factor and calls `Intent::SetDpi`.
 | `save` | `SaveJob` (snapshot → restore → thumbnail ∥ SVG → atomic write), `SaveWorker` (thread per job, waker), `SaveKind`, `SaveOutcome` |
 | `locks` | `HeldLock` (a `DocumentLock` in a process registry), `LockMode`, `release_all` for signals |
 | `autosave` | `AutosaveStore` (entries under `$XDG_STATE_HOME/xarast/autosave/<id>/`), `AutosavePolicy`, `Recoverable`, `scan` |
+| `journal` | The operation journal on disk (F6.6, XARA-T-0217): `JournalWriter` (thread, fsync batching, rotation), `JournalHandle` (a session's, numbers entries), `Blobs`, `write_base`, `recover`, `Recovered`, `latest_write` |
 | `crash` | Crash reports (`install_panic_hook`, `CrashReport`, `redact`, `scrub_quoted`, the log ring, `set_context`), `expect_panics`, `FatalWatch` + `run_guarded`, `force_panic_point`, the sentinel (`begin_session`, `Sentinel`, `StartupCheck`, `SafeMode`, `CrashNotice`) — XARA-US-0064 |
 | `prompt` | `Prompt`, `PromptChoice`, `PromptAnswer`, `ChoiceRole`: the questions the core asks |
 | `thumbnail` | `CpuThumbnails` (the `ThumbnailProvider`), `thumbnail_png` |
@@ -646,8 +647,8 @@ snapshot so another process never mistakes a live entry for a crash),
 `origin` (raw path bytes). Deleted on a real save that leaves the
 document clean, on undo back to clean, on close and on quit.
 `emergency_shutdown()` (signals) writes a fresh snapshot inline and
-closes everything **keeping** the entries. **No journal**: the model has
-no serialisable command form (F6.6 open).
+closes everything **keeping** the entries. The operation journal
+(XARA-T-0217) lives in the same entry: see "Operation journal" below.
 
 **Recovery.** `with_autosave` scans: an entry is offered when its holder
 is dead or from another boot/host and its snapshot is strictly newer
