@@ -55,7 +55,7 @@ below).
 | `png::with_icc_profile` (`sRGB` → `iCCP`) | `crates/xarast-io/src/png.rs` |
 | `xarast-cli fixtures` (colour sheet, features, synthetic) | `crates/xarast-cli/src/fixtures.rs` |
 | `cargo xtask export-check` (SVG/PDF vs PNG, `qpdf --check`) + limits files | `xtask/src/export_check.rs`, `xtask/export-limits-{fixtures,corpus}.txt` |
-| CI: job `export` (two machines) + `reproducible`; nightly `export-corpus.yml` | `.github/workflows/` |
+| CI: job `export` (two machines) + `reproducible`; manual-only `export-corpus.yml` | `.github/workflows/` |
 
 The whole 59-file corpus exports to all three formats with **zero errors**,
 at 96 and at 300 dpi, and two runs are byte-identical for every file and

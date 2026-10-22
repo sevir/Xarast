@@ -23,12 +23,12 @@ macOS in phase 14). Specification in
   (ubuntu-24.04 and 22.04; installs `poppler-utils`, `ghostscript`,
   `qpdf`) and `reproducible` (the two machines' export bytes must match);
   the `check` job installs `poppler-utils` so PDF render tests run. The
-  nightly `export-corpus.yml` checks out the fork's corpus directories
+  manual-only `export-corpus.yml` checks out the fork's corpus directories
   (`CORPUS_TOKEN` secret if private). Details in `export.md`.
 - **Performance gates (XARA-US-0061).** `ci.yml` job `perf`
   (ubuntu-24.04, per push) builds `xarast-cli` + `xtask` in release and runs
-  `xtask perf --tier pr`; the nightly `perf-nightly.yml` (04:30 UTC, after
-  fuzz and export-corpus) runs `--tier nightly` with the corpus checked out
+  `xtask perf --tier pr`; the manual-only `perf-nightly.yml`
+  (`workflow_dispatch`, no schedule since 2026-10-22) runs `--tier nightly` with the corpus checked out
   the same way as `export-corpus.yml`. Both upload the results JSON
   (`perf-pr-<sha>`, `perf-nightly-<sha>-<run>`, 90 days) as the per-commit
   history. No apt packages, no GPU, no new Rust dependency (`serde_json`

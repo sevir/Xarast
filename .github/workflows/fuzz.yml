@@ -1,13 +1,10 @@
 name: Fuzz
 
-# Every cargo-fuzz target in fuzz/, for a bounded time, every night. A
-# crash, a panic, an out-of-memory or a timeout fails the job and uploads
-# the reproducer. See fuzz/README.md for what each target asserts.
+# Every cargo-fuzz target in fuzz/, for a bounded time, on demand
+# (workflow_dispatch). A crash, a panic, an out-of-memory or a timeout
+# fails the job and uploads the reproducer. See fuzz/README.md for what each target asserts.
 
 on:
-  schedule:
-    # 02:30 UTC, after the day's pushes have settled.
-    - cron: "30 2 * * *"
   workflow_dispatch:
     inputs:
       seconds:

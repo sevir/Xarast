@@ -59,8 +59,8 @@ memory bandwidth with the busy cores.
 JSON object per process); `cargo xtask perf [--tier pr|nightly]` runs the
 scenarios of every gate in `xtask/perf-budgets.txt` and fails on a breach.
 CI: job `perf` of `ci.yml` (pr tier, every push, ubuntu-24.04) and
-`perf-nightly.yml` (nightly tier = every gate, 04:30 UTC, with the
-corpus). Both upload the results JSON; that is the per-commit history
+`perf-nightly.yml` (nightly tier = every gate, with the corpus; manual
+`workflow_dispatch` only, no schedule since 2026-10-22). Both upload the results JSON; that is the per-commit history
 until a dashboard exists.
 
 ```text

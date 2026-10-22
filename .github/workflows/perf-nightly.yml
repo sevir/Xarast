@@ -7,18 +7,15 @@ name: Performance nightly
 # (ProbeX16 open-to-first-paint and save, Spitfire's first open). The
 # per-push tier is the `perf` job of ci.yml. Headless, CPU only.
 #
-# The results JSON of every night is kept as an artefact: that is the
-# per-commit history (A7) until a dashboard reads it.
+# Run on demand (workflow_dispatch); no schedule. The results JSON of
+# every run is kept as an artefact: that is the per-commit history (A7)
+# until a dashboard reads it.
 #
 # The corpus is never copied into this repository (CLAUDE.md): it is read
 # from the fork of the original, as export-corpus.yml does. When that
 # repository is private, set the CORPUS_TOKEN secret.
 
 on:
-  schedule:
-    # 04:30 UTC, after the fuzz (02:30) and corpus export (03:30) runs, so
-    # that the gates do not share the night's busiest hour.
-    - cron: "30 4 * * *"
   workflow_dispatch:
 
 env:

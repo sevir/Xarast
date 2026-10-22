@@ -1,9 +1,10 @@
 name: Export corpus
 
-# Phase 11 W11.6 over the real 59-file .xar corpus, every night: the corpus
-# tests of the workspace (XARAST_XAR_CORPUS), then every file exported to
-# PNG, SVG and PDF at 72 dpi over the paper and checked with
-# `cargo xtask export-check` against xtask/export-limits-corpus.txt
+# Phase 11 W11.6 over the real 59-file .xar corpus, on demand
+# (workflow_dispatch): the corpus tests of the workspace
+# (XARAST_XAR_CORPUS), then every file exported to PNG, SVG and PDF at
+# 72 dpi over the paper and checked with `cargo xtask export-check`
+# against xtask/export-limits-corpus.txt
 # (resvg for SVG; Poppler and Ghostscript for PDF; qpdf --check).
 #
 # The corpus is never copied into this repository (CLAUDE.md): it is read
@@ -12,9 +13,6 @@ name: Export corpus
 # can read it.
 
 on:
-  schedule:
-    # 03:30 UTC, after the fuzz run.
-    - cron: "30 3 * * *"
   workflow_dispatch:
 
 env:

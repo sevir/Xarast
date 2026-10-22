@@ -51,9 +51,11 @@ to see every crate's errors in one run.
 
 The other per-push jobs are `export` and `reproducible` (the fixture
 export, see `export.md`), `perf` (`xtask perf --tier pr`, see `perf.md`)
-and `licences`. `fuzz.yml`, `export-corpus.yml` and `perf-nightly.yml` run on a schedule.
-GitHub only schedules workflows that are on the default branch (`main`),
-so none of them run until the branch is merged.
+and `licences`. `fuzz.yml`, `export-corpus.yml` and `perf-nightly.yml`
+are manual only (`workflow_dispatch`, run from the Actions tab or
+`gh workflow run`): the maintainer removed their daily cron on 2026-10-22
+because the daily failure notifications were noise. Do not re-add a
+`schedule:` trigger; CI runs only on push, pull request and release.
 
 ## Pause state (2026-10-16)
 
